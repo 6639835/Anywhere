@@ -58,6 +58,7 @@ actor NowhereConnection {
 
     private var backlogChunks: [Data] = []
     private static let maxChunkBytes = 512 << 10
+    private var preparedStream: NowherePreparedQUICStream?
 
     init(
         session: NowhereSession,
@@ -100,11 +101,20 @@ actor NowhereConnection {
 
     // MARK: - Open
 
-    func open() async throws {
+    func prepare() async throws {
         let begin = phase.withLock { Phase.transition(&$0, to: .opening) }
         guard begin else { throw AnywhereError.proxy(.nowhere, .streamClosed) }
         do {
-            try await performOpen()
+            let prepared = try await session.prepareTCPStream(for: self)
+            let adopted = phase.withLock {
+                Phase.transition(&$0, to: .open(sid: prepared.id, ready: false, credited: 0))
+            }
+            guard adopted else {
+                session.shutdownStream(prepared.id)
+                session.releaseTCPStream(prepared.id, credited: 0)
+                throw AnywhereError.proxy(.nowhere, .streamClosed)
+            }
+            preparedStream = prepared
         } catch {
             if let released = closeLifecycle() {
                 session.shutdownStream(released.sid)
@@ -114,23 +124,34 @@ actor NowhereConnection {
         }
     }
 
-    private func performOpen() async throws {
+    func commit() async throws {
+        do {
+            try await performCommit()
+        } catch {
+            if let released = closeLifecycle() {
+                session.shutdownStream(released.sid)
+                session.releaseTCPStream(released.sid, credited: released.credited)
+            }
+            throw error
+        }
+    }
+
+    private func performCommit() async throws {
         let frame = try NowhereProtocol.encodeFlowRequest(
             header: flowHeader,
             target: flowHeader.carriesTarget ? destination : nil,
             initialData: flowHeader.role == .attach ? nil : initialData
         )
-        let sid = try await session.openTCPStream(
-            for: self,
-            request: frame,
-            earlyDataAttempt: initialData?.isEmpty == false ? attempt : nil
-        )
-        let adopted = phase.withLock { Phase.transition(&$0, to: .open(sid: sid, ready: false, credited: 0)) }
-        guard adopted else {
-            session.shutdownStream(sid)
-            session.releaseTCPStream(sid, credited: 0)
-            throw AnywhereError.proxy(.nowhere, .streamClosed)
+        guard let prepared = preparedStream else {
+            throw AnywhereError.proxy(.nowhere, .notReady)
         }
+        preparedStream = nil
+        try await session.commitPreparedStream(
+            prepared,
+            request: frame,
+            fin: false,
+            attempt: attempt
+        )
 
         if flowHeader.role == .open {
             pendingData = Data()

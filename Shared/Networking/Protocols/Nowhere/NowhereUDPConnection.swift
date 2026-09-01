@@ -54,6 +54,7 @@ actor NowhereUDPConnection {
     // MARK: Termination
 
     private let termination = TerminationLatch()
+    private var preparedStream: NowherePreparedQUICStream?
 
     init(
         session: NowhereSession,
@@ -78,7 +79,7 @@ actor NowhereUDPConnection {
 
     // MARK: - Open
 
-    func open() async throws {
+    func prepare() async throws {
         let begin = lifecycle.withLock { $0.transition(to: .opening) }
         guard begin else { throw AnywhereError.proxy(.nowhere, .streamClosed) }
         do {
@@ -92,21 +93,41 @@ actor NowhereUDPConnection {
                 session.releaseUDPSession(flowHeader.flowID)
                 throw AnywhereError.proxy(.nowhere, .streamClosed)
             }
+            let prepared = try await session.prepareUDPControlStream(for: self)
+            let streamAdopted = lifecycle.withLock { state in
+                guard case .opening = state.phase else { return false }
+                state.controlStreamID = prepared.id
+                return true
+            }
+            guard streamAdopted else {
+                session.shutdownStream(prepared.id)
+                session.releaseUDPControlStream(prepared.id)
+                throw AnywhereError.proxy(.nowhere, .streamClosed)
+            }
+            preparedStream = prepared
+        } catch {
+            fail(error)
+            throw error
+        }
+    }
+
+    func commit(attempt: NowhereFlowOpenAttempt? = nil) async throws {
+        do {
             let request = try NowhereProtocol.encodeFlowRequest(
                 header: flowHeader,
                 target: flowHeader.carriesTarget ? destination : nil
             )
-            let sid = try await session.openUDPControlStream(for: self, request: request)
-            let streamAdopted = lifecycle.withLock { state in
-                guard case .opening = state.phase else { return false }
-                state.controlStreamID = sid
-                return true
+            guard let prepared = preparedStream else {
+                throw AnywhereError.proxy(.nowhere, .notReady)
             }
-            guard streamAdopted else {
-                session.shutdownStream(sid)
-                session.releaseUDPControlStream(sid)
-                throw AnywhereError.proxy(.nowhere, .streamClosed)
-            }
+            preparedStream = nil
+            try await session.commitPreparedStream(
+                prepared,
+                request: request,
+                fin: true,
+                attempt: attempt
+            )
+            let sid = prepared.id
 
             if expectsResult {
                 var buffer = Data()
@@ -253,6 +274,13 @@ actor NowhereUDPConnection {
 
     nonisolated func cancel() {
         terminate(error: nil, sendAdvisory: true)
+    }
+
+    nonisolated func abort() {
+        terminate(
+            error: AnywhereError.proxy(.nowhere, .streamClosed),
+            sendAdvisory: false
+        )
     }
 
     // MARK: - Teardown
