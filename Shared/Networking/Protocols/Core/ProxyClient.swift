@@ -43,6 +43,14 @@ nonisolated final class ProxyClient: Sendable {
     func setChainTunnel(_ tunnel: ProxyConnection?) {
         state.withLock { $0.tunnel = tunnel }
     }
+
+    func takeChainTunnel() -> ProxyConnection? {
+        state.withLock { state in
+            let tunnel = state.tunnel
+            state.tunnel = nil
+            return tunnel
+        }
+    }
     let parentChain: [ProxyConfiguration]
 
     let isDefaultProxy: Bool
@@ -181,19 +189,13 @@ nonisolated final class ProxyClient: Sendable {
             )
         }
 
-        if configuration.outboundProtocol == .nowhere,
-           configuration.nowhereMultiplex {
+        if configuration.outboundProtocol == .nowhere {
             return try await connectWithCommand(
                 command: command,
                 destinationHost: destinationHost,
                 destinationPort: destinationPort,
                 initialData: initialData
             )
-        }
-
-        if configuration.outboundProtocol == .nowhere,
-           configuration.nowhereUplink != configuration.nowhereDownlink {
-            throw AnywhereError.proxy(.nowhere, .protocolViolation(detail: "Asymmetric Nowhere carriers do not support proxy chains"))
         }
 
         if isQUICTransport {
