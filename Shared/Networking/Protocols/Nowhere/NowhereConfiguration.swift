@@ -55,8 +55,13 @@ nonisolated struct NowhereRoutePlan: Equatable, Sendable {
 nonisolated enum NowhereRoutePlanner {
     static let primaryPreparationTimeout: Duration = .seconds(1)
 
-    static func seed(from sessionID: Data) -> UInt64 {
-        precondition(sessionID.count == 16)
+    static func seed(from sessionID: Data) throws -> UInt64 {
+        guard sessionID.count == 16 else {
+            throw AnywhereError.proxy(
+                .nowhere,
+                .protocolViolation(detail: "Invalid Nowhere session ID")
+            )
+        }
         let low = littleEndianUInt64(sessionID, offset: 0)
         let high = littleEndianUInt64(sessionID, offset: 8)
         return low ^ high.rotatedLeft(by: 32)

@@ -179,6 +179,7 @@ nonisolated extension ProxyClient {
         retriesLeft: Int
     ) async throws -> ProxyConnection {
         var retriesLeft = retriesLeft
+        let routeSeed = try NowhereRoutePlanner.seed(from: policy.sessionID)
         let initialLease = try NowhereTransportIdentityRegistry.shared.leaseFlowID(
             for: identityKey,
             sessionID: policy.sessionID
@@ -186,7 +187,7 @@ nonisolated extension ProxyClient {
         let plan = NowhereRoutePlanner.plan(
             uplink: policy.uplink,
             downlink: policy.downlink,
-            seed: NowhereRoutePlanner.seed(from: policy.sessionID),
+            seed: routeSeed,
             flowID: initialLease.flowID
         )
         var nextLease: NowhereFlowIDLease? = initialLease
