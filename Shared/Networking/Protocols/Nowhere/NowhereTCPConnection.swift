@@ -37,7 +37,6 @@ actor NowhereTCPConnection: ProxyConnection, NowhereTerminationObservable {
         var monitorTask: Task<Void, Never>?
         var flowKind: NowhereProtocol.FlowKind?
         var flowRole: NowhereProtocol.FlowRole?
-        var pendingAuth: Data?
     }
 
     private let configuration: NowhereConfiguration
@@ -81,7 +80,17 @@ actor NowhereTCPConnection: ProxyConnection, NowhereTerminationObservable {
         startUplinkMonitorIfNeeded()
     }
 
-    func prepareFresh(flowHeader: NowhereProtocol.FlowHeader) async throws {
+    func openFresh(
+        destination: NowhereProtocol.Target,
+        flowHeader: NowhereProtocol.FlowHeader,
+        initialData: Data? = nil,
+        attempt: NowhereFlowOpenAttempt? = nil
+    ) async throws {
+        let request = try NowhereProtocol.encodeFlowRequest(
+            header: flowHeader,
+            target: flowHeader.carriesTarget ? destination : nil,
+            initialData: flowHeader.role == .attach ? nil : initialData
+        )
         guard lifecycle.withLock({ $0.transition(to: .opening) }) else {
             throw AnywhereError.proxy(.nowhere, .notReady)
         }
@@ -134,7 +143,6 @@ actor NowhereTCPConnection: ProxyConnection, NowhereTerminationObservable {
                 state.tlsClient = nil
                 state.transport = transport
                 state.tlsVersion = TLSVersion(rawValue: record.tlsVersion)
-                state.pendingAuth = auth
                 return true
             }
             guard adoptedTransport else {
@@ -142,41 +150,13 @@ actor NowhereTCPConnection: ProxyConnection, NowhereTerminationObservable {
                 throw terminalError()
             }
 
-        } catch {
-            let resolved = terminalError(fallback: error)
-            fail(resolved)
-            throw resolved
-        }
-    }
-
-    func commitFresh(
-        destination: NowhereProtocol.Target,
-        flowHeader: NowhereProtocol.FlowHeader,
-        initialData: Data? = nil,
-        attempt: NowhereFlowOpenAttempt? = nil
-    ) async throws {
-        let request = try NowhereProtocol.encodeFlowRequest(
-            header: flowHeader,
-            target: flowHeader.carriesTarget ? destination : nil,
-            initialData: flowHeader.role == .attach ? nil : initialData
-        )
-        do {
-            let prepared = try lifecycle.withLock { state -> (any ByteTransport, Data) in
-                guard state.phase == .opening,
-                      let transport = state.transport,
-                      let auth = state.pendingAuth else {
-                    throw AnywhereError.proxy(.nowhere, .notReady)
-                }
-                state.pendingAuth = nil
-                return (transport, auth)
-            }
-            var bootstrap = prepared.1
+            var bootstrap = auth
             bootstrap.append(request)
-            attempt?.markCommitStarted()
-            try await prepared.0.send(bootstrap)
+            if initialData?.isEmpty == false { attempt?.markEarlyDataWriteStarted() }
+            try await transport.send(bootstrap)
 
             if flowHeader.role != .open {
-                pendingData = try await receiveFlowResult(from: prepared.0)
+                pendingData = try await receiveFlowResult(from: transport)
             }
 
             guard lifecycle.withLock({ $0.transition(to: .ready) }) else {
@@ -323,7 +303,6 @@ actor NowhereTCPConnection: ProxyConnection, NowhereTerminationObservable {
             state.tlsClient = nil
             state.transport = nil
             state.monitorTask = nil
-            state.pendingAuth = nil
             return resources
         }
         guard let resources else { return }

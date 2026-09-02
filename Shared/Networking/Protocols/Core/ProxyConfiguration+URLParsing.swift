@@ -67,7 +67,7 @@ nonisolated extension ProxyConfiguration {
                 }
                 return value
             }
-            return .udp
+            return .tcp
         }
         let uplink = try carrier(rawUp, name: "up")
         let downlink = try carrier(rawDown, name: "down")
@@ -76,7 +76,7 @@ nonisolated extension ProxyConfiguration {
         case nil, "0":
             multiplex = false
         case "1":
-            multiplex = uplink.canUseTCP || downlink.canUseTCP
+            multiplex = uplink == .tcp || downlink == .tcp
         default:
             throw AnywhereError.parse(.invalidURL("Invalid Nowhere mux value"))
         }

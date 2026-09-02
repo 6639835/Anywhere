@@ -255,11 +255,6 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
             case (.udp, .udp):  tag = "UDP"
             case (.tcp, .udp):  tag = "↑ TCP ↓ UDP"
             case (.udp, .tcp):  tag = "↑ UDP ↓ TCP"
-            case (.mix, .mix):  tag = "MIX"
-            case (.mix, .tcp):  tag = "↑ MIX ↓ TCP"
-            case (.mix, .udp):  tag = "↑ MIX ↓ UDP"
-            case (.tcp, .mix):  tag = "↑ TCP ↓ MIX"
-            case (.udp, .mix):  tag = "↑ UDP ↓ MIX"
             }
         case .vless:
             switch xrayTransportLayer {
@@ -332,7 +327,7 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
 
     var nowhereMultiplex: Bool {
         if case .nowhere(_, let uplink, let downlink, let multiplex, _) = outbound {
-            return multiplex && (uplink.canUseTCP || downlink.canUseTCP)
+            return multiplex && (uplink == .tcp || downlink == .tcp)
         }
         return false
     }
@@ -371,8 +366,6 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
                 if downstreamCommand == .tcp { return .tcp }
                 if downstreamCommand == .udp { return .tcp }
                 return nil
-            case .mix:
-                return .tcp
             }
         }
         return outboundProtocol.upstreamCommand(for: downstreamCommand)
@@ -468,8 +461,8 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
             let alpn = alpnString.flatMap { $0.isEmpty ? nil : [$0] }
             let rawUp = try container.decodeIfPresent(String.self, forKey: .up)
             let rawDown = try container.decodeIfPresent(String.self, forKey: .down)
-            let uplink = rawUp.flatMap(NowhereNetwork.init(rawValue:)) ?? .udp
-            let downlink = rawDown.flatMap(NowhereNetwork.init(rawValue:)) ?? .udp
+            let uplink = rawUp.flatMap(NowhereNetwork.init(rawValue:)) ?? .tcp
+            let downlink = rawDown.flatMap(NowhereNetwork.init(rawValue:)) ?? .tcp
             if let rawUp, !rawUp.isEmpty, NowhereNetwork(rawValue: rawUp) == nil {
                 throw DecodingError.dataCorruptedError(
                     forKey: .up, in: container, debugDescription: "Invalid Nowhere up value"
@@ -500,7 +493,7 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
                 key: try container.decodeIfPresent(String.self, forKey: .nowhereKey) ?? "",
                 uplink: uplink,
                 downlink: downlink,
-                multiplex: (uplink.canUseTCP || downlink.canUseTCP) && decodedMultiplex,
+                multiplex: (uplink == .tcp || downlink == .tcp) && decodedMultiplex,
                 securityLayer: .tls(TLSConfiguration(
                     serverName: (explicitSNI?.isEmpty == false && explicitSNI != "none" ? explicitSNI : nil)
                         ?? serverAddress,
@@ -645,7 +638,7 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
             try container.encode(key, forKey: .nowhereKey)
             try container.encode(uplink.rawValue, forKey: .up)
             try container.encode(downlink.rawValue, forKey: .down)
-            try container.encode((uplink.canUseTCP || downlink.canUseTCP) && multiplex, forKey: .mux)
+            try container.encode((uplink == .tcp || downlink == .tcp) && multiplex, forKey: .mux)
             try container.encode(tls.serverName, forKey: .nowhereSNI)
             if let alpn = tls.alpn?.first, !alpn.isEmpty {
                 try container.encode(alpn, forKey: .nowhereALPN)

@@ -8,39 +8,12 @@
 import Foundation
 import Synchronization
 
-nonisolated enum NowhereSharedTaskWaiter {
-    static func value<T: Sendable>(of task: Task<T, Error>) async throws -> T {
-        let resultInbox = AsyncInbox<Result<T, Error>>()
-        let observer = Task {
-            let result: Result<T, Error>
-            do {
-                result = .success(try await task.value)
-            } catch {
-                result = .failure(error)
-            }
-            resultInbox.yield(result)
-            resultInbox.finish()
-        }
-        defer { observer.cancel() }
-
-        guard let result = try await resultInbox.next() else {
-            throw CancellationError()
-        }
-        return try result.get()
-    }
-}
-
 nonisolated final class NowhereMultiplexerRegistry: Sendable {
     static let shared = NowhereMultiplexerRegistry()
 
     private struct Key: Hashable {
         let configurationID: UUID
-        let proxyHost: String
-        let proxyPort: UInt16
-        let key: String
-        let sessionID: Data
-        let tls: TLSConfiguration
-        let alpn: String
+        let configuration: NowhereConfiguration
         let connectHost: String
         let chain: [ProxyConfiguration]
     }
@@ -72,12 +45,7 @@ nonisolated final class NowhereMultiplexerRegistry: Sendable {
     ) async throws -> NowhereMultiplexerStream {
         let key = Key(
             configurationID: configurationID,
-            proxyHost: configuration.proxyHost,
-            proxyPort: configuration.proxyPort,
-            key: configuration.key,
-            sessionID: configuration.sessionID,
-            tls: configuration.tls,
-            alpn: configuration.alpn,
+            configuration: configuration,
             connectHost: connectHost,
             chain: chain
         )
@@ -265,7 +233,23 @@ nonisolated private final class NowhereMultiplexerPool: Sendable {
     }
 
     private func waitForBuild(_ pending: PendingBuild) async throws -> NowhereMultiplexer {
-        try await NowhereSharedTaskWaiter.value(of: pending.task)
+        let resultInbox = AsyncInbox<Result<NowhereMultiplexer, Error>>()
+        let observer = Task {
+            let result: Result<NowhereMultiplexer, Error>
+            do {
+                result = .success(try await pending.task.value)
+            } catch {
+                result = .failure(error)
+            }
+            resultInbox.yield(result)
+            resultInbox.finish()
+        }
+        defer { observer.cancel() }
+
+        guard let result = try await resultInbox.next() else {
+            throw CancellationError()
+        }
+        return try result.get()
     }
 
     private func adopt(

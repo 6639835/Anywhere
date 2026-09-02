@@ -19,8 +19,8 @@ struct ProxyEditorView: View {
     @State private var serverPort = ""
     
     @State private var nowhereKey = ""
-    @State private var nowhereUplink: NowhereNetwork = .udp
-    @State private var nowhereDownlink: NowhereNetwork = .udp
+    @State private var nowhereUplink: NowhereNetwork = .tcp
+    @State private var nowhereDownlink: NowhereNetwork = .tcp
     @State private var nowhereMultiplex = false
     @State private var nowhereSNI = ""
     @State private var nowhereALPN = ""
@@ -459,22 +459,19 @@ struct ProxyEditorView: View {
                 Picker(selection: $nowhereUplink) {
                     Text(verbatim: "TCP").tag(NowhereNetwork.tcp)
                     Text(verbatim: "UDP").tag(NowhereNetwork.udp)
-                    Text(verbatim: "MIX").tag(NowhereNetwork.mix)
                 } label: {
                     TextWithColorfulIcon(title: "Upload", systemName: "arrow.up.circle.fill", foregroundStyle: .white, backgroundStyle: .blue.gradient)
                 }
                 Picker(selection: $nowhereDownlink) {
                     Text(verbatim: "TCP").tag(NowhereNetwork.tcp)
                     Text(verbatim: "UDP").tag(NowhereNetwork.udp)
-                    Text(verbatim: "MIX").tag(NowhereNetwork.mix)
                 } label: {
                     TextWithColorfulIcon(title: "Download", systemName: "arrow.down.circle.fill", foregroundStyle: .white, backgroundStyle: .blue.gradient)
                 }
-                if nowhereUplink.canUseTCP || nowhereDownlink.canUseTCP {
-                    Toggle(isOn: $nowhereMultiplex) {
-                        TextWithColorfulIcon(title: "Multiplex", systemName: "rectangle.split.3x1.fill", foregroundStyle: .white, backgroundStyle: .teal.gradient)
-                    }
+                Toggle(isOn: nowhereUplink == .tcp || nowhereDownlink == .tcp ? $nowhereMultiplex : .constant(true)) {
+                    TextWithColorfulIcon(title: "Multiplex", systemName: "rectangle.split.3x1.fill", foregroundStyle: .white, backgroundStyle: .teal.gradient)
                 }
+                .disabled(nowhereUplink == .udp && nowhereDownlink == .udp)
             }
         } else if isVLESS {
             Section {
@@ -1001,7 +998,7 @@ struct ProxyEditorView: View {
             nowhereKey = key
             nowhereUplink = uplink
             nowhereDownlink = downlink
-            nowhereMultiplex = (uplink.canUseTCP || downlink.canUseTCP) && multiplex
+            nowhereMultiplex = (uplink == .tcp || downlink == .tcp) && multiplex
             nowhereSNI = tls.serverName
             nowhereALPN = tls.alpn?.first ?? ""
         }
@@ -1284,7 +1281,7 @@ struct ProxyEditorView: View {
                 key: nowhereKey,
                 uplink: nowhereUplink,
                 downlink: nowhereDownlink,
-                multiplex: (nowhereUplink.canUseTCP || nowhereDownlink.canUseTCP) && nowhereMultiplex,
+                multiplex: (nowhereUplink == .tcp || nowhereDownlink == .tcp) && nowhereMultiplex,
                 securityLayer: .tls(TLSConfiguration(serverName: sni, alpn: alpn))
             )
         case .vless:
