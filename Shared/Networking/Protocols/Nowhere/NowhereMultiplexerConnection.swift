@@ -66,8 +66,9 @@ nonisolated final class NowhereMultiplexerConnection: ProxyConnection, NowhereTe
             target: flowHeader.carriesTarget ? destination : nil,
             initialData: flowHeader.role == .attach ? nil : initialData
         )
+        if initialData?.isEmpty == false { attempt?.markEarlyDataWriteStarted() }
+
         do {
-            attempt?.markCommitStarted()
             try await stream.sendRaw(request)
             if flowHeader.role == .open {
                 guard becomeReady(pending: Data()) else {

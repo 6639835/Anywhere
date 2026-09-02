@@ -76,7 +76,7 @@ nonisolated extension ProxyConfiguration {
         case nil, "0":
             multiplex = false
         case "1":
-            multiplex = uplink.canUseTCP || downlink.canUseTCP
+            multiplex = uplink == .tcp || downlink == .tcp
         default:
             throw AnywhereError.parse(.invalidURL("Invalid Nowhere mux value"))
         }

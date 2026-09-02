@@ -70,16 +70,16 @@ nonisolated enum NowhereProtocol {
         let role: FlowRole
         let flowID: UInt32
         let kind: FlowKind
-        let uplink: NowhereCarrier
-        let downlink: NowhereCarrier
+        let uplink: NowhereNetwork
+        let downlink: NowhereNetwork
         let hops: UInt8
 
         init(
             role: FlowRole,
             flowID: UInt32,
             kind: FlowKind,
-            uplink: NowhereCarrier,
-            downlink: NowhereCarrier,
+            uplink: NowhereNetwork,
+            downlink: NowhereNetwork,
             hops: UInt8 = 0
         ) {
             self.role = role
@@ -92,7 +92,7 @@ nonisolated enum NowhereProtocol {
 
         var carriesTarget: Bool { role != .attach }
 
-        func validate(on carrier: NowhereCarrier? = nil) throws {
+        func validate(on carrier: NowhereNetwork? = nil) throws {
             guard hops <= maxPortalHops else {
                 throw AnywhereError.proxy(.nowhere, .connectionClosed(detail: "Hop budget exceeds \(maxPortalHops)"))
             }

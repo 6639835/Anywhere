@@ -8,8 +8,6 @@
 import Foundation
 import Synchronization
 
-nonisolated private let nowhereRouteLogger = AnywhereLogger(category: "NowhereRoute")
-
 nonisolated private enum NowhereLogicalFailureContext {
     case quicSession
     case tcpCarrier
@@ -19,56 +17,6 @@ nonisolated private enum NowhereLogicalFailureContext {
 nonisolated private struct NowhereLogicalOpenError: Error {
     let underlying: Error
     let context: NowhereLogicalFailureContext
-}
-
-nonisolated private struct NowhereLogicalPolicy: Sendable {
-    let proxyHost: String
-    let proxyPort: UInt16
-    let key: String
-    let uplink: NowhereNetwork
-    let downlink: NowhereNetwork
-    let multiplex: Bool
-    let sessionID: Data
-    let tls: TLSConfiguration
-
-    func resolved(_ route: NowhereResolvedRoute) throws -> NowhereConfiguration {
-        try NowhereConfiguration(
-            proxyHost: proxyHost,
-            proxyPort: proxyPort,
-            key: key,
-            uplink: route.uplink,
-            downlink: route.downlink,
-            multiplex: multiplex,
-            sessionID: sessionID,
-            tls: tls
-        )
-    }
-}
-
-nonisolated private struct NowherePreparedHalf: Sendable {
-    let connection: ProxyConnection
-    let commit: @Sendable () async throws -> Void
-
-    func cancel() { connection.abort() }
-}
-
-nonisolated private struct NowherePreparedRoute: Sendable {
-    let uplink: NowherePreparedHalf
-    let downlink: NowherePreparedHalf?
-    let kind: NowhereProtocol.FlowKind
-    let mode: NowhereTCPRelayMode
-
-    func cancel() {
-        uplink.cancel()
-        downlink?.cancel()
-    }
-}
-
-nonisolated private struct NowherePreparedSelection: Sendable {
-    let prepared: NowherePreparedRoute
-    let lease: NowhereFlowIDLease
-    let attempt: NowhereFlowOpenAttempt
-    let route: NowhereResolvedRoute
 }
 
 nonisolated private final class NowhereLeasedConnection: ProxyConnection {
@@ -131,7 +79,7 @@ nonisolated extension ProxyClient {
         guard let tls = securityLayer.tlsConfiguration else {
             throw AnywhereError.proxy(.nowhere, .protocolViolation(detail: "Nowhere TLS configuration not set"))
         }
-        let effectiveMultiplex = multiplex && (uplink.canUseTCP || downlink.canUseTCP)
+        let effectiveMultiplex = multiplex && (uplink == .tcp || downlink == .tcp)
         let identityKey = NowhereTransportIdentityKey(
             configurationID: configuration.id,
             proxyHost: configuration.serverAddress,
@@ -143,7 +91,7 @@ nonisolated extension ProxyClient {
             tls: tls
         )
         let sessionID = try NowhereTransportIdentityRegistry.shared.identity(for: identityKey)
-        let policy = NowhereLogicalPolicy(
+        let nwConfig = try NowhereConfiguration(
             proxyHost: configuration.serverAddress,
             proxyPort: configuration.serverPort,
             key: key,
@@ -155,11 +103,20 @@ nonisolated extension ProxyClient {
         )
 
         let destination = try NowhereProtocol.Target(host: destinationHost, port: destinationPort)
-        let retries = tunnel == nil || configuration.chain?.isEmpty == false || !parentChain.isEmpty ? 1 : 0
+
+        let asymmetric = uplink != downlink
+        if asymmetric, !nwConfig.multiplex,
+           tunnel != nil || configuration.chain?.isEmpty == false {
+            throw AnywhereError.proxy(.nowhere, .protocolViolation(detail: "Asymmetric Nowhere carriers do not support proxy chains"))
+        }
+
+        let configuredChainCanRebuildQUIC = configuration.chain?.isEmpty == false
+            && (uplink == .udp && downlink == .udp || nwConfig.multiplex)
+        let retries = tunnel == nil || configuredChainCanRebuildQUIC ? 1 : 0
         let deadline = ContinuousClock.now.advanced(by: .seconds(30))
 
         return try await connectLogicalNowhere(
-            policy: policy,
+            nwConfig: nwConfig,
             command: command,
             destination: destination,
             initialData: command == .tcp ? initialData : nil,
@@ -170,7 +127,7 @@ nonisolated extension ProxyClient {
     }
 
     private func connectLogicalNowhere(
-        policy: NowhereLogicalPolicy,
+        nwConfig: NowhereConfiguration,
         command: ProxyCommand,
         destination: NowhereProtocol.Target,
         initialData: Data?,
@@ -179,92 +136,56 @@ nonisolated extension ProxyClient {
         retriesLeft: Int
     ) async throws -> ProxyConnection {
         var retriesLeft = retriesLeft
-        let routeSeed = try NowhereRoutePlanner.seed(from: policy.sessionID)
-        let initialLease = try NowhereTransportIdentityRegistry.shared.leaseFlowID(
-            for: identityKey,
-            sessionID: policy.sessionID
-        )
-        let plan = NowhereRoutePlanner.plan(
-            uplink: policy.uplink,
-            downlink: policy.downlink,
-            seed: routeSeed,
-            flowID: initialLease.flowID
-        )
-        var nextLease: NowhereFlowIDLease? = initialLease
-        var lockedRoute: NowhereResolvedRoute?
-        var inheritedTunnel = takeChainTunnel()
-
         while true {
-            let selection: NowherePreparedSelection
-            var activeSelection: NowherePreparedSelection?
-            let inheritedForAttempt = inheritedTunnel
-            inheritedTunnel = nil
-            do {
-                if let lockedRoute {
-                    let lease: NowhereFlowIDLease
-                    if let pending = nextLease {
-                        lease = pending
-                    } else {
-                        lease = try NowhereTransportIdentityRegistry.shared.leaseFlowID(
-                            for: identityKey,
-                            sessionID: policy.sessionID
-                        )
-                    }
-                    nextLease = nil
-                    selection = try await prepareNowhereSelection(
-                        policy: policy,
-                        route: lockedRoute,
-                        lease: lease,
-                        command: command,
-                        destination: destination,
-                        initialData: initialData,
-                        inheritedTunnel: inheritedForAttempt,
-                        deadline: deadline,
-                        preparationLimit: nil
-                    )
-                } else {
-                    guard let lease = nextLease else {
-                        throw AnywhereError.proxy(.nowhere, .streamClosed)
-                    }
-                    nextLease = nil
-                    selection = try await prepareInitialNowhereSelection(
-                        policy: policy,
-                        plan: plan,
-                        lease: lease,
-                        identityKey: identityKey,
-                        command: command,
-                        destination: destination,
-                        initialData: initialData,
-                        inheritedTunnel: inheritedForAttempt,
-                        deadline: deadline
-                    )
-                    lockedRoute = selection.route
-                }
-                activeSelection = selection
+            let flowLease = try NowhereTransportIdentityRegistry.shared.leaseFlowID(
+                for: identityKey,
+                sessionID: nwConfig.sessionID
+            )
+            let flowID = flowLease.flowID
 
+            let attempt = NowhereFlowOpenAttempt()
+            do {
                 let remaining = ContinuousClock.now.duration(to: deadline)
-                guard remaining > .zero else { throw AnywhereError.proxy(.nowhere, .openTimeout) }
+                guard remaining > .zero else {
+                    throw AnywhereError.proxy(.nowhere, .openTimeout)
+                }
                 let connection = try await withDialDeadline(
                     remaining,
-                    onExpiry: { selection.attempt.cancel() },
+                    onExpiry: { attempt.cancel() },
                     error: { AnywhereError.proxy(.nowhere, .openTimeout) },
                     discardingLateResult: { $0.cancel() }
-                ) {
-                    try await Self.commitPreparedNowhereRoute(selection.prepared)
+                ) { [weak self] in
+                    guard let self else { throw AnywhereError.transport(.terminated) }
+                    if nwConfig.uplink != nwConfig.downlink {
+                        return try await self.connectAsymmetricNowhere(
+                            nwConfig: nwConfig,
+                            command: command,
+                            destination: destination,
+                            initialData: initialData,
+                            flowID: flowID,
+                            attempt: attempt
+                        )
+                    }
+                    return try await self.connectDuplexNowhere(
+                        nwConfig: nwConfig,
+                        command: command,
+                        destination: destination,
+                        initialData: initialData,
+                        flowID: flowID,
+                        attempt: attempt
+                    )
                 }
-                return NowhereLeasedConnection(inner: connection, lease: selection.lease)
+                return NowhereLeasedConnection(inner: connection, lease: flowLease)
             } catch {
-                activeSelection?.attempt.cancel()
-                activeSelection?.lease.release()
+                attempt.cancel()
+                flowLease.release()
                 let explicitReplacement: Bool = {
                     guard case AnywhereError.proxy(.nowhere, .flowRejected(let code)) = Self.underlyingLogicalNowhereFailure(error),
                           code == NowhereProtocol.FlowRejectCode.sessionReplaced.rawValue else { return false }
                     return true
                 }()
-                let replaySafe = explicitReplacement || activeSelection?.attempt.hasCommitted != true
+                let replaySafe = !attempt.hasStartedEarlyDataWrite || explicitReplacement
                 if retriesLeft > 0, replaySafe, Self.isRetryableLogicalNowhereFailure(error) {
-                    let route = lockedRoute ?? plan.primary
-                    let nwConfig = try policy.resolved(route)
                     if explicitReplacement, nwConfig.multiplex {
                         NowhereMultiplexerRegistry.shared.invalidate(
                             configurationID: configuration.id
@@ -278,160 +199,10 @@ nonisolated extension ProxyClient {
                         NowhereClient.invalidateSharedSession(for: nwConfig)
                     }
                     retriesLeft -= 1
-                    nextLease = nil
                     continue
                 }
                 throw Self.underlyingLogicalNowhereFailure(error)
             }
-        }
-    }
-
-    private func prepareInitialNowhereSelection(
-        policy: NowhereLogicalPolicy,
-        plan: NowhereRoutePlan,
-        lease: NowhereFlowIDLease,
-        identityKey: NowhereTransportIdentityKey,
-        command: ProxyCommand,
-        destination: NowhereProtocol.Target,
-        initialData: Data?,
-        inheritedTunnel: ProxyConnection?,
-        deadline: ContinuousClock.Instant
-    ) async throws -> NowherePreparedSelection {
-        do {
-            return try await prepareNowhereSelection(
-                policy: policy,
-                route: plan.primary,
-                lease: lease,
-                command: command,
-                destination: destination,
-                initialData: initialData,
-                inheritedTunnel: inheritedTunnel,
-                deadline: deadline,
-                preparationLimit: plan.fallback == nil
-                    ? nil
-                    : NowhereRoutePlanner.primaryPreparationTimeout
-            )
-        } catch {
-            guard let fallback = plan.fallback else { throw error }
-            nowhereRouteLogger.warning(
-                "[Nowhere] event=carrier_fallback primary=\(plan.primary.label) "
-                    + "fallback=\(fallback.label) reason=\(String(describing: error))"
-            )
-            let fallbackLease = try NowhereTransportIdentityRegistry.shared.leaseFlowID(
-                for: identityKey,
-                sessionID: policy.sessionID
-            )
-            do {
-                return try await prepareNowhereSelection(
-                    policy: policy,
-                    route: fallback,
-                    lease: fallbackLease,
-                    command: command,
-                    destination: destination,
-                    initialData: initialData,
-                    inheritedTunnel: nil,
-                    deadline: deadline,
-                    preparationLimit: nil
-                )
-            } catch let fallbackError {
-                throw AnywhereError.proxy(.nowhere, .connectionClosed(
-                    detail: "Route \(plan.primary.label) failed before commit: \(error); "
-                        + "fallback \(fallback.label) failed before commit: \(fallbackError)"
-                ))
-            }
-        }
-    }
-
-    private func prepareNowhereSelection(
-        policy: NowhereLogicalPolicy,
-        route: NowhereResolvedRoute,
-        lease: NowhereFlowIDLease,
-        command: ProxyCommand,
-        destination: NowhereProtocol.Target,
-        initialData: Data?,
-        inheritedTunnel: ProxyConnection?,
-        deadline: ContinuousClock.Instant,
-        preparationLimit: Duration?
-    ) async throws -> NowherePreparedSelection {
-        let attempt = NowhereFlowOpenAttempt()
-        let nwConfig = try policy.resolved(route)
-        let remaining = ContinuousClock.now.duration(to: deadline)
-        guard remaining > .zero else {
-            lease.release()
-            inheritedTunnel?.cancel()
-            throw AnywhereError.proxy(.nowhere, .openTimeout)
-        }
-        let budget = preparationLimit.map { min($0, remaining) } ?? remaining
-        do {
-            let prepared = try await withDialDeadline(
-                budget,
-                onExpiry: {
-                    attempt.cancel()
-                    inheritedTunnel?.cancel()
-                },
-                error: { AnywhereError.proxy(.nowhere, .openTimeout) },
-                discardingLateResult: { $0.cancel() }
-            ) { [weak self] in
-                guard let self else { throw AnywhereError.transport(.terminated) }
-                return try await self.prepareNowhereRoute(
-                    nwConfig: nwConfig,
-                    command: command,
-                    destination: destination,
-                    initialData: initialData,
-                    flowID: lease.flowID,
-                    attempt: attempt,
-                    inheritedTunnel: inheritedTunnel
-                )
-            }
-            return NowherePreparedSelection(
-                prepared: prepared,
-                lease: lease,
-                attempt: attempt,
-                route: route
-            )
-        } catch {
-            attempt.cancel()
-            inheritedTunnel?.cancel()
-            lease.release()
-            throw error
-        }
-    }
-
-    private static func commitPreparedNowhereRoute(
-        _ prepared: NowherePreparedRoute
-    ) async throws -> ProxyConnection {
-        do {
-            if let downlink = prepared.downlink {
-                try await withThrowingTaskGroup(of: Void.self) { group in
-                    group.addTask { try await prepared.uplink.commit() }
-                    group.addTask { try await downlink.commit() }
-                    try await group.waitForAll()
-                }
-                if let udp = prepared.uplink.connection as? NowhereUDPConnection {
-                    udp.activatePairedFlow()
-                }
-                return NowhereDirectionalConnection(
-                    uplink: logicalNowhereConnection(prepared.uplink.connection, mode: prepared.mode),
-                    downlink: logicalNowhereConnection(downlink.connection, mode: prepared.mode),
-                    kind: prepared.kind
-                )
-            }
-            try await prepared.uplink.commit()
-            let logical = logicalNowhereConnection(prepared.uplink.connection, mode: prepared.mode)
-            return NowhereDirectionalConnection(uplink: logical, downlink: logical, kind: prepared.kind)
-        } catch {
-            prepared.cancel()
-            throw error
-        }
-    }
-
-    private static func logicalNowhereConnection(
-        _ connection: ProxyConnection,
-        mode: NowhereTCPRelayMode
-    ) -> ProxyConnection {
-        switch mode {
-        case .tcp: connection
-        case .udp: NowhereTCPUDPConnection(inner: connection)
         }
     }
 
@@ -463,8 +234,8 @@ nonisolated extension ProxyClient {
 
     static func shouldInvalidateAsymmetricQUICSession(
         error: Error,
-        uplink: NowhereCarrier,
-        downlink: NowhereCarrier
+        uplink: NowhereNetwork,
+        downlink: NowhereNetwork
     ) -> Bool {
         guard uplink != downlink,
               (uplink == .udp || downlink == .udp),
@@ -473,6 +244,238 @@ nonisolated extension ProxyClient {
             return false
         }
         return true
+    }
+
+    private func connectDuplexNowhere(
+        nwConfig: NowhereConfiguration,
+        command: ProxyCommand,
+        destination: NowhereProtocol.Target,
+        initialData: Data?,
+        flowID: UInt32,
+        attempt: NowhereFlowOpenAttempt
+    ) async throws -> ProxyConnection {
+        guard let (kind, mode) = Self.flowKindAndMode(command) else {
+            throw AnywhereError.routing(.dropped)
+        }
+        let header = NowhereProtocol.FlowHeader(
+            role: .duplex,
+            flowID: flowID,
+            kind: kind,
+            uplink: nwConfig.uplink,
+            downlink: nwConfig.downlink
+        )
+
+        if nwConfig.uplink == .tcp {
+            if nwConfig.multiplex {
+                let inheritedTunnel = tunnel
+                if inheritedTunnel != nil { setChainTunnel(nil) }
+                let chain = inheritedTunnel == nil ? configuredNowhereChain : nil
+                do {
+                    let connection = try await openNowhereMultiplexerHalf(
+                        nwConfig: nwConfig,
+                        destination: destination,
+                        flowHeader: header,
+                        initialData: initialData,
+                        attempt: attempt,
+                        providedTunnel: inheritedTunnel,
+                        chain: chain
+                    )
+                    let logical: ProxyConnection = mode == .tcp
+                        ? connection
+                        : NowhereTCPUDPConnection(inner: connection)
+                    return NowhereDirectionalConnection(
+                        uplink: logical,
+                        downlink: logical,
+                        kind: kind
+                    )
+                } catch {
+                    inheritedTunnel?.cancel()
+                    throw Self.logicalNowhereFailure(error, context: .tcpCarrier)
+                }
+            }
+
+            let connection = NowhereTCPConnection(
+                configuration: nwConfig,
+                connectHost: directDialHost,
+                tunnel: tunnel
+            )
+            guard !isCancelled else {
+                setChainTunnel(nil)
+                connection.cancel()
+                throw AnywhereError.transport(.terminated)
+            }
+            guard attempt.bind(connection) else {
+                connection.cancel()
+                throw AnywhereError.proxy(.nowhere, .streamClosed)
+            }
+            setChainTunnel(nil)
+            do {
+                try await connection.openFresh(
+                    destination: destination,
+                    flowHeader: header,
+                    initialData: initialData,
+                    attempt: attempt
+                )
+            } catch {
+                connection.cancel()
+                throw Self.logicalNowhereFailure(error, context: .tcpCarrier)
+            }
+            let logical: ProxyConnection = mode == .tcp
+                ? connection
+                : NowhereTCPUDPConnection(inner: connection)
+            return NowhereDirectionalConnection(
+                uplink: logical,
+                downlink: logical,
+                kind: kind
+            )
+        }
+
+        if let chainTunnel = tunnel {
+            let transport = ProxyConnectionDatagramTransport(connection: chainTunnel)
+            setChainTunnel(nil)
+            let client = NowhereClient.chained(configuration: nwConfig, transport: transport)
+            return try await dispatchNowhere(
+                client: client,
+                header: header,
+                attempt: attempt,
+                destination: destination,
+                initialData: initialData
+            )
+        }
+
+        if let chain = configuration.chain, !chain.isEmpty {
+            return try await connectPooledChainedNowhere(
+                nwConfig: nwConfig,
+                chain: chain,
+                header: header,
+                attempt: attempt,
+                destination: destination,
+                initialData: initialData
+            )
+        }
+
+        let client = try NowhereClient.shared(for: nwConfig)
+        return try await dispatchNowhere(
+            client: client,
+            header: header,
+            attempt: attempt,
+            destination: destination,
+            initialData: initialData
+        )
+    }
+
+    private func connectAsymmetricNowhere(
+        nwConfig: NowhereConfiguration,
+        command: ProxyCommand,
+        destination: NowhereProtocol.Target,
+        initialData: Data?,
+        flowID: UInt32,
+        attempt: NowhereFlowOpenAttempt
+    ) async throws -> ProxyConnection {
+        guard let (kind, mode) = Self.flowKindAndMode(command) else {
+            throw AnywhereError.routing(.dropped)
+        }
+        let open = NowhereProtocol.FlowHeader(
+            role: .open, flowID: flowID, kind: kind,
+            uplink: nwConfig.uplink, downlink: nwConfig.downlink
+        )
+        let attach = NowhereProtocol.FlowHeader(
+            role: .attach, flowID: flowID, kind: kind,
+            uplink: nwConfig.uplink, downlink: nwConfig.downlink
+        )
+
+        let inheritedUplinkTunnel = tunnel
+        if inheritedUplinkTunnel != nil { setChainTunnel(nil) }
+        let rebuiltChain: [ProxyConfiguration]?
+        if inheritedUplinkTunnel != nil {
+            guard !parentChain.isEmpty else {
+                inheritedUplinkTunnel?.cancel()
+                throw AnywhereError.proxy(
+                    .nowhere,
+                    .protocolViolation(detail: "Mixed Nowhere Multiplexer needs a rebuildable parent chain for its second carrier")
+                )
+            }
+            rebuiltChain = parentChain
+        } else {
+            rebuiltChain = configuredNowhereChain
+        }
+        if let rebuiltChain {
+            let carriersToRebuild: [NowhereNetwork] = inheritedUplinkTunnel == nil
+                ? [nwConfig.uplink, nwConfig.downlink]
+                : [nwConfig.downlink]
+            do {
+                for carrier in carriersToRebuild {
+                    let deliver: ProxyCommand = carrier == .tcp ? .tcp : .udp
+                    _ = try Self.computeChainHopCommands(
+                        chain: rebuiltChain,
+                        lastDeliver: deliver
+                    ).get()
+                }
+            } catch {
+                inheritedUplinkTunnel?.cancel()
+                throw error
+            }
+        }
+
+        return try await withThrowingTaskGroup(of: (isUplink: Bool, connection: ProxyConnection).self) { group in
+            group.addTask {
+                do {
+                    let connection = try await self.openAsymmetricHalf(
+                        nwConfig: nwConfig, destination: destination, mode: mode,
+                        header: open, carrier: nwConfig.uplink, attempt: attempt,
+                        initialData: initialData,
+                        providedTunnel: inheritedUplinkTunnel,
+                        chain: inheritedUplinkTunnel == nil ? rebuiltChain : nil
+                    )
+                    return (true, connection)
+                } catch {
+                    throw Self.logicalNowhereFailure(
+                        error, context: nwConfig.uplink == .udp ? .quicSession : .tcpCarrier
+                    )
+                }
+            }
+            group.addTask {
+                do {
+                    let connection = try await self.openAsymmetricHalf(
+                        nwConfig: nwConfig, destination: destination, mode: mode,
+                        header: attach, carrier: nwConfig.downlink, attempt: attempt,
+                        initialData: nil,
+                        providedTunnel: nil,
+                        chain: rebuiltChain
+                    )
+                    return (false, connection)
+                } catch {
+                    throw Self.logicalNowhereFailure(
+                        error, context: nwConfig.downlink == .udp ? .quicSession : .tcpCarrier
+                    )
+                }
+            }
+
+            var uplink: ProxyConnection?
+            var downlink: ProxyConnection?
+            do {
+                for try await result in group {
+                    if result.isUplink { uplink = result.connection }
+                    else { downlink = result.connection }
+                }
+            } catch {
+                attempt.cancel()
+                inheritedUplinkTunnel?.cancel()
+                group.cancelAll()
+                throw error
+            }
+            guard let uplink, let downlink else {
+                throw AnywhereError.proxy(.nowhere, .streamClosed)
+            }
+            if let activatable = uplink as? NowhereUDPConnection {
+                activatable.activatePairedFlow()
+            }
+            return NowhereDirectionalConnection(
+                uplink: uplink,
+                downlink: downlink,
+                kind: kind
+            )
+        }
     }
 
     private static func flowKindAndMode(
@@ -484,255 +487,141 @@ nonisolated extension ProxyClient {
         }
     }
 
-    private func prepareNowhereRoute(
+    private func openAsymmetricHalf(
         nwConfig: NowhereConfiguration,
-        command: ProxyCommand,
         destination: NowhereProtocol.Target,
-        initialData: Data?,
-        flowID: UInt32,
+        mode: NowhereTCPRelayMode,
+        header: NowhereProtocol.FlowHeader,
+        carrier: NowhereNetwork,
         attempt: NowhereFlowOpenAttempt,
-        inheritedTunnel: ProxyConnection?
-    ) async throws -> NowherePreparedRoute {
-        guard let (kind, mode) = Self.flowKindAndMode(command) else {
-            throw AnywhereError.routing(.dropped)
-        }
-
-        let rebuildChain: [ProxyConfiguration]? = parentChain.isEmpty
-            ? configuredNowhereChain
-            : parentChain
-        let inheritedMatchesUplink = inheritedTunnel.map {
-            let carrierMatches = nwConfig.uplink == .udp
-                ? $0.deliversDatagrams
-                : !$0.deliversDatagrams
-            let canReuse = nwConfig.uplink != .udp || parentChain.isEmpty
-            return carrierMatches && canReuse
-        } ?? false
-        let providedUplink = inheritedMatchesUplink ? inheritedTunnel : nil
-        if inheritedTunnel != nil, !inheritedMatchesUplink {
-            inheritedTunnel?.cancel()
-        }
-
-        if inheritedTunnel != nil, rebuildChain == nil {
-            guard providedUplink != nil, nwConfig.uplink == nwConfig.downlink else {
-                throw AnywhereError.proxy(
-                    .nowhere,
-                    .protocolViolation(detail: "Selected MIX carrier needs a rebuildable parent chain")
-                )
-            }
-        }
-
-        if nwConfig.uplink == nwConfig.downlink {
-            let header = NowhereProtocol.FlowHeader(
-                role: .duplex,
-                flowID: flowID,
-                kind: kind,
-                uplink: nwConfig.uplink,
-                downlink: nwConfig.downlink
-            )
-            let prepared = try await prepareNowhereHalf(
-                nwConfig: nwConfig,
-                destination: destination,
-                header: header,
-                carrier: nwConfig.uplink,
-                attempt: attempt,
-                initialData: initialData,
-                providedTunnel: providedUplink,
-                chain: providedUplink == nil ? rebuildChain : nil
-            )
-            return NowherePreparedRoute(uplink: prepared, downlink: nil, kind: kind, mode: mode)
-        }
-
-        let open = NowhereProtocol.FlowHeader(
-            role: .open,
-            flowID: flowID,
-            kind: kind,
-            uplink: nwConfig.uplink,
-            downlink: nwConfig.downlink
-        )
-        let attach = NowhereProtocol.FlowHeader(
-            role: .attach,
-            flowID: flowID,
-            kind: kind,
-            uplink: nwConfig.uplink,
-            downlink: nwConfig.downlink
-        )
-
-        return try await withThrowingTaskGroup(of: (Bool, NowherePreparedHalf).self) { group in
-            group.addTask {
-                let half = try await self.prepareNowhereHalf(
+        initialData: Data?,
+        providedTunnel: ProxyConnection?,
+        chain: [ProxyConfiguration]?
+    ) async throws -> ProxyConnection {
+        if carrier == .tcp {
+            if nwConfig.multiplex {
+                let connection = try await openNowhereMultiplexerHalf(
                     nwConfig: nwConfig,
                     destination: destination,
-                    header: open,
-                    carrier: nwConfig.uplink,
-                    attempt: attempt,
+                    flowHeader: header,
                     initialData: initialData,
-                    providedTunnel: providedUplink,
-                    chain: providedUplink == nil ? rebuildChain : nil
-                )
-                return (true, half)
-            }
-            group.addTask {
-                let half = try await self.prepareNowhereHalf(
-                    nwConfig: nwConfig,
-                    destination: destination,
-                    header: attach,
-                    carrier: nwConfig.downlink,
                     attempt: attempt,
-                    initialData: nil,
-                    providedTunnel: nil,
-                    chain: rebuildChain
+                    providedTunnel: providedTunnel,
+                    chain: chain
                 )
-                return (false, half)
+                switch mode {
+                case .tcp:
+                    return connection
+                case .udp:
+                    return NowhereTCPUDPConnection(inner: connection)
+                }
             }
 
-            var uplink: NowherePreparedHalf?
-            var downlink: NowherePreparedHalf?
-            do {
-                for try await (isUplink, half) in group {
-                    if isUplink { uplink = half } else { downlink = half }
-                }
-            } catch {
-                attempt.cancel()
-                group.cancelAll()
-                throw error
+            let connection = NowhereTCPConnection(
+                configuration: nwConfig,
+                connectHost: directDialHost,
+                tunnel: nil
+            )
+            guard !isCancelled else {
+                connection.cancel()
+                throw AnywhereError.transport(.terminated)
             }
-            guard let uplink, let downlink else {
-                attempt.cancel()
+            guard attempt.bind(connection) else {
+                connection.cancel()
                 throw AnywhereError.proxy(.nowhere, .streamClosed)
             }
-            return NowherePreparedRoute(
-                uplink: uplink,
-                downlink: downlink,
-                kind: kind,
-                mode: mode
+            do {
+                try await connection.openFresh(
+                    destination: destination,
+                    flowHeader: header,
+                    initialData: initialData,
+                    attempt: attempt
+                )
+            } catch {
+                connection.cancel()
+                throw error
+            }
+            switch mode {
+            case .tcp:
+                return connection
+            case .udp:
+                return NowhereTCPUDPConnection(inner: connection)
+            }
+        }
+
+        let client: NowhereClient
+        if let providedTunnel {
+            client = NowhereClient.chained(
+                configuration: nwConfig,
+                transport: ProxyConnectionDatagramTransport(connection: providedTunnel)
+            )
+        } else if let chain, !chain.isEmpty {
+            client = try await acquireChainedNowhereClient(
+                nwConfig: nwConfig,
+                chain: chain,
+                lastDeliver: .udp
+            )
+        } else {
+            client = try NowhereClient.shared(for: nwConfig)
+        }
+        if header.kind == .tcp {
+            return try await client.openTCPHalf(
+                destination: destination,
+                header: header,
+                initialData: initialData,
+                attempt: attempt
             )
         }
+        return try await client.openUDP(
+            destination: destination,
+            header: header,
+            attempt: attempt
+        )
     }
 
-    private func prepareNowhereHalf(
-        nwConfig: NowhereConfiguration,
-        destination: NowhereProtocol.Target,
+    private func dispatchNowhere(
+        client: NowhereClient,
         header: NowhereProtocol.FlowHeader,
-        carrier: NowhereCarrier,
         attempt: NowhereFlowOpenAttempt,
-        initialData: Data?,
-        providedTunnel: ProxyConnection?,
-        chain: [ProxyConfiguration]?
-    ) async throws -> NowherePreparedHalf {
+        destination: NowhereProtocol.Target,
+        initialData: Data?
+    ) async throws -> ProxyConnection {
+        let connection: ProxyConnection
         do {
-            if carrier == .tcp {
-                if nwConfig.multiplex {
-                    let connection = try await prepareNowhereMultiplexerHalf(
-                        nwConfig: nwConfig,
-                        flowHeader: header,
-                        attempt: attempt,
-                        providedTunnel: providedTunnel,
-                        chain: chain
-                    )
-                    return NowherePreparedHalf(connection: connection) {
-                        try await connection.open(
-                            destination: destination,
-                            flowHeader: header,
-                            initialData: initialData,
-                            attempt: attempt
-                        )
-                    }
-                }
-
-                let carrierTunnel: ProxyConnection?
-                if let providedTunnel {
-                    carrierTunnel = providedTunnel
-                } else if let chain, !chain.isEmpty {
-                    carrierTunnel = try await buildNowhereCarrierTunnel(chain: chain, deliver: .tcp)
-                } else {
-                    carrierTunnel = nil
-                }
-                let connection = NowhereTCPConnection(
-                    configuration: nwConfig,
-                    connectHost: directDialHost,
-                    tunnel: carrierTunnel
-                )
-                guard !isCancelled, attempt.bind(connection) else {
-                    connection.cancel()
-                    throw AnywhereError.proxy(.nowhere, .streamClosed)
-                }
-                try await connection.prepareFresh(flowHeader: header)
-                return NowherePreparedHalf(connection: connection) {
-                    try await connection.commitFresh(
-                        destination: destination,
-                        flowHeader: header,
-                        initialData: initialData,
-                        attempt: attempt
-                    )
-                }
-            }
-
-            let client: NowhereClient
-            if let providedTunnel {
-                client = NowhereClient.chained(
-                    configuration: nwConfig,
-                    transport: ProxyConnectionDatagramTransport(connection: providedTunnel)
-                )
-            } else if let chain, !chain.isEmpty {
-                client = try await acquireChainedNowhereClient(
-                    nwConfig: nwConfig,
-                    chain: chain,
-                    lastDeliver: .udp
-                )
-            } else {
-                client = try NowhereClient.shared(for: nwConfig)
-            }
-
             switch header.kind {
             case .tcp:
-                let connection = try await client.prepareTCPHalf(
+                connection = try await client.openTCPHalf(
                     destination: destination,
                     header: header,
                     initialData: initialData,
                     attempt: attempt
                 )
-                return NowherePreparedHalf(connection: connection) {
-                    try await connection.commit()
-                }
             case .udp:
-                let connection = try await client.prepareUDP(
+                connection = try await client.openUDP(
                     destination: destination,
                     header: header,
                     attempt: attempt
                 )
-                return NowherePreparedHalf(connection: connection) {
-                    try await connection.commit(attempt: attempt)
-                }
             }
         } catch {
-            throw Self.logicalNowhereFailure(
-                error,
-                context: carrier == .udp ? .quicSession : (chain == nil ? .tcpCarrier : .chainBuild)
-            )
+            throw Self.logicalNowhereFailure(error, context: .quicSession)
         }
-    }
-
-    private func buildNowhereCarrierTunnel(
-        chain: [ProxyConfiguration],
-        deliver: ProxyCommand
-    ) async throws -> ProxyConnection {
-        let commands = try Self.computeChainHopCommands(chain: chain, lastDeliver: deliver).get()
-        return try await Self.buildDetachedChainTunnel(
-            chain: chain,
-            hopCommands: commands,
-            finalDestination: (configuration.serverAddress, configuration.serverPort),
-            useResolvedAddressForDirectDial: useResolvedAddressForDirectDial,
-            track: { _ in }
+        return NowhereDirectionalConnection(
+            uplink: connection,
+            downlink: connection,
+            kind: header.kind
         )
     }
 
-    private func prepareNowhereMultiplexerHalf(
+    private func openNowhereMultiplexerHalf(
         nwConfig: NowhereConfiguration,
+        destination: NowhereProtocol.Target,
         flowHeader: NowhereProtocol.FlowHeader,
+        initialData: Data?,
         attempt: NowhereFlowOpenAttempt,
         providedTunnel: ProxyConnection?,
         chain: [ProxyConfiguration]?
-    ) async throws -> NowhereMultiplexerConnection {
+    ) async throws -> ProxyConnection {
         let stream: NowhereMultiplexerStream
         let ownedMultiplexer: NowhereMultiplexer?
 
@@ -816,7 +705,18 @@ nonisolated extension ProxyClient {
             connection.abort()
             throw AnywhereError.proxy(.nowhere, .streamClosed)
         }
-        return connection
+        do {
+            try await connection.open(
+                destination: destination,
+                flowHeader: flowHeader,
+                initialData: initialData,
+                attempt: attempt
+            )
+            return connection
+        } catch {
+            connection.abort()
+            throw error
+        }
     }
 
     private static func makeNowhereMultiplexer(
@@ -871,6 +771,33 @@ nonisolated extension ProxyClient {
             record.cancel()
             throw error
         }
+    }
+
+    private func connectPooledChainedNowhere(
+        nwConfig: NowhereConfiguration,
+        chain: [ProxyConfiguration],
+        header: NowhereProtocol.FlowHeader,
+        attempt: NowhereFlowOpenAttempt,
+        destination: NowhereProtocol.Target,
+        initialData: Data?
+    ) async throws -> ProxyConnection {
+        let client: NowhereClient
+        do {
+            client = try await acquireChainedNowhereClient(
+                nwConfig: nwConfig,
+                chain: chain,
+                lastDeliver: .udp
+            )
+        } catch {
+            throw Self.logicalNowhereFailure(error, context: .chainBuild)
+        }
+        return try await dispatchNowhere(
+            client: client,
+            header: header,
+            attempt: attempt,
+            destination: destination,
+            initialData: initialData
+        )
     }
 
     private var configuredNowhereChain: [ProxyConfiguration]? {

@@ -12,7 +12,7 @@ nonisolated final class NowhereFlowOpenAttempt: Sendable {
     private struct State {
         var cancelled = false
         var connections: [ObjectIdentifier: ProxyConnection] = [:]
-        var commitStarted = false
+        var earlyDataWriteStarted = false
     }
     private let state = Mutex(State())
 
@@ -22,15 +22,15 @@ nonisolated final class NowhereFlowOpenAttempt: Sendable {
             state.connections[ObjectIdentifier(connection)] = connection
             return true
         }
-        if !accepted { connection.abort() }
+        if !accepted { connection.cancel() }
         return accepted
     }
 
-    func markCommitStarted() {
-        state.withLock { $0.commitStarted = true }
+    func markEarlyDataWriteStarted() {
+        state.withLock { $0.earlyDataWriteStarted = true }
     }
 
-    var hasCommitted: Bool { state.withLock { $0.commitStarted } }
+    var hasStartedEarlyDataWrite: Bool { state.withLock { $0.earlyDataWriteStarted } }
 
     func cancel() {
         let connections = state.withLock { state -> [ProxyConnection] in
@@ -40,7 +40,7 @@ nonisolated final class NowhereFlowOpenAttempt: Sendable {
             state.connections.removeAll(keepingCapacity: false)
             return connections
         }
-        for connection in connections { connection.abort() }
+        for connection in connections { connection.cancel() }
     }
 }
 
@@ -49,6 +49,8 @@ nonisolated final class NowhereClient: Sendable {
         let host: String
         let port: UInt16
         let key: String
+        let uplink: NowhereNetwork
+        let downlink: NowhereNetwork
         let sni: String
         let alpn: String
         let chain: [ProxyConfiguration]
@@ -77,6 +79,8 @@ nonisolated final class NowhereClient: Sendable {
             host: configuration.proxyHost,
             port: configuration.proxyPort,
             key: configuration.key,
+            uplink: configuration.uplink,
+            downlink: configuration.downlink,
             sni: configuration.tls.serverName,
             alpn: configuration.alpn,
             chain: [],
@@ -117,6 +121,8 @@ nonisolated final class NowhereClient: Sendable {
             host: configuration.proxyHost,
             port: configuration.proxyPort,
             key: configuration.key,
+            uplink: configuration.uplink,
+            downlink: configuration.downlink,
             sni: configuration.tls.serverName,
             alpn: configuration.alpn,
             chain: chain,
@@ -143,7 +149,7 @@ nonisolated final class NowhereClient: Sendable {
         case .existing(let client):
             return client
         case .join(let task):
-            return try await NowhereSharedTaskWaiter.value(of: task)
+            return try await task.value
         }
     }
 
@@ -281,12 +287,12 @@ nonisolated final class NowhereClient: Sendable {
         }
     }
 
-    func prepareTCPHalf(
+    func openTCPHalf(
         destination: NowhereProtocol.Target,
         header: NowhereProtocol.FlowHeader,
         initialData: Data?,
         attempt: NowhereFlowOpenAttempt? = nil
-    ) async throws -> NowhereConnection {
+    ) async throws -> ProxyConnection {
         let session: NowhereSession
         do {
             session = try await acquireSession()
@@ -305,7 +311,7 @@ nonisolated final class NowhereClient: Sendable {
             throw AnywhereError.proxy(.nowhere, .streamClosed)
         }
         do {
-            try await connection.prepare()
+            try await connection.open()
             return connection
         } catch {
             connection.cancel()
@@ -316,11 +322,11 @@ nonisolated final class NowhereClient: Sendable {
         }
     }
 
-    func prepareUDP(
+    func openUDP(
         destination: NowhereProtocol.Target,
         header: NowhereProtocol.FlowHeader,
         attempt: NowhereFlowOpenAttempt? = nil
-    ) async throws -> NowhereUDPConnection {
+    ) async throws -> ProxyConnection {
         let session: NowhereSession
         do {
             session = try await acquireSession()
@@ -337,7 +343,7 @@ nonisolated final class NowhereClient: Sendable {
             throw AnywhereError.proxy(.nowhere, .streamClosed)
         }
         do {
-            try await connection.prepare()
+            try await connection.open()
             return connection
         } catch {
             connection.cancel()
@@ -426,6 +432,8 @@ nonisolated final class NowhereClient: Sendable {
         key.host == configuration.proxyHost
             && key.port == configuration.proxyPort
             && key.key == configuration.key
+            && key.uplink == configuration.uplink
+            && key.downlink == configuration.downlink
             && key.sni == configuration.tls.serverName
             && key.alpn == configuration.alpn
             && key.sessionID == configuration.sessionID
