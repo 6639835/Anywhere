@@ -136,7 +136,13 @@ class TVProxyEditorViewController: UITableViewController {
     private enum RowType {
         case text(label: String, value: String, placeholder: String, key: FieldKey, secure: Bool = false)
         case selection(label: String, value: String, options: [(display: String, value: String)], key: FieldKey, systemImage: String? = nil)
-        case toggle(label: String, isOn: Bool, key: FieldKey, systemImage: String? = nil)
+        case toggle(
+            label: String,
+            isOn: Bool,
+            key: FieldKey,
+            systemImage: String? = nil,
+            isEnabled: Bool = true
+        )
     }
 
     private enum FieldKey {
@@ -268,13 +274,12 @@ class TVProxyEditorViewController: UITableViewController {
                     key: .nowhereDownlink
                 ),
             ]
-            if nowhereUplink == .tcp || nowhereDownlink == .tcp {
-                transportRows.append(.toggle(
-                    label: String(localized: "Multiplex"),
-                    isOn: nowhereMultiplex,
-                    key: .nowhereMultiplex
-                ))
-            }
+            transportRows.append(.toggle(
+                label: String(localized: "Multiplex"),
+                isOn: nowhereUplink == .tcp || nowhereDownlink == .tcp ? nowhereMultiplex : true,
+                key: .nowhereMultiplex,
+                isEnabled: nowhereUplink == .tcp || nowhereDownlink == .tcp
+            ))
             sections.append((String(localized: "Network"), transportRows))
         } else if isVLESS {
             var transportRows: [RowType] = [
@@ -621,6 +626,8 @@ class TVProxyEditorViewController: UITableViewController {
         let cell = tableView.dequeueReusableCell(withIdentifier: "cell", for: indexPath)
         cell.accessoryType = .none
         cell.accessoryView = nil
+        cell.isUserInteractionEnabled = true
+        cell.contentView.alpha = 1
 
         switch row {
         case .text(let label, let value, let placeholder, _, let secure):
@@ -645,13 +652,15 @@ class TVProxyEditorViewController: UITableViewController {
             cell.contentConfiguration = content
             cell.accessoryType = .disclosureIndicator
 
-        case .toggle(let label, let isOn, _, let systemImage):
+        case .toggle(let label, let isOn, _, let systemImage, let isEnabled):
             var content = cell.defaultContentConfiguration()
             content.text = label
             content.image = systemImage.flatMap(UIImage.init(systemName:))
             content.secondaryText = isOn ? String(localized: "On") : String(localized: "Off")
             content.secondaryTextProperties.color = isOn ? .systemGreen : .secondaryLabel
             cell.contentConfiguration = content
+            cell.isUserInteractionEnabled = isEnabled
+            cell.contentView.alpha = isEnabled ? 1 : 0.5
 
         }
 
@@ -706,7 +715,8 @@ class TVProxyEditorViewController: UITableViewController {
             alert.addAction(UIAlertAction(title: String(localized: "Cancel"), style: .cancel))
             present(alert, animated: true)
 
-        case .toggle(_, let isOn, let key, _):
+        case .toggle(_, let isOn, let key, _, let isEnabled):
+            guard isEnabled else { return }
             updateField(key, value: isOn ? "false" : "true")
             tableView.reloadData()
             updateSaveButton()

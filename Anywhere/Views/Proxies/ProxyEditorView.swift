@@ -468,11 +468,10 @@ struct ProxyEditorView: View {
                 } label: {
                     TextWithColorfulIcon(title: "Download", systemName: "arrow.down.circle.fill", foregroundStyle: .white, backgroundStyle: .blue.gradient)
                 }
-                if nowhereUplink == .tcp || nowhereDownlink == .tcp {
-                    Toggle(isOn: $nowhereMultiplex) {
-                        TextWithColorfulIcon(title: "Multiplex", systemName: "rectangle.split.3x1.fill", foregroundStyle: .white, backgroundStyle: .teal.gradient)
-                    }
+                Toggle(isOn: nowhereUplink == .tcp || nowhereDownlink == .tcp ? $nowhereMultiplex : .constant(true)) {
+                    TextWithColorfulIcon(title: "Multiplex", systemName: "rectangle.split.3x1.fill", foregroundStyle: .white, backgroundStyle: .teal.gradient)
                 }
+                .disabled(nowhereUplink == .udp && nowhereDownlink == .udp)
             }
         } else if isVLESS {
             Section {
