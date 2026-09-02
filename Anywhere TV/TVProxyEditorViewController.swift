@@ -20,8 +20,8 @@ class TVProxyEditorViewController: UITableViewController {
     private var serverPort = ""
 
     private var nowhereKey = ""
-    private var nowhereUplink: NowhereNetwork = .udp
-    private var nowhereDownlink: NowhereNetwork = .udp
+    private var nowhereUplink: NowhereNetwork = .tcp
+    private var nowhereDownlink: NowhereNetwork = .tcp
     private var nowhereMultiplex = false
     private var nowhereSNI = ""
     private var nowhereALPN = ""

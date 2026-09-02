@@ -67,7 +67,7 @@ nonisolated extension ProxyConfiguration {
                 }
                 return value
             }
-            return .udp
+            return .tcp
         }
         let uplink = try carrier(rawUp, name: "up")
         let downlink = try carrier(rawDown, name: "down")

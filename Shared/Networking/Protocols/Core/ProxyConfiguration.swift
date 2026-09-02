@@ -461,8 +461,8 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
             let alpn = alpnString.flatMap { $0.isEmpty ? nil : [$0] }
             let rawUp = try container.decodeIfPresent(String.self, forKey: .up)
             let rawDown = try container.decodeIfPresent(String.self, forKey: .down)
-            let uplink = rawUp.flatMap(NowhereNetwork.init(rawValue:)) ?? .udp
-            let downlink = rawDown.flatMap(NowhereNetwork.init(rawValue:)) ?? .udp
+            let uplink = rawUp.flatMap(NowhereNetwork.init(rawValue:)) ?? .tcp
+            let downlink = rawDown.flatMap(NowhereNetwork.init(rawValue:)) ?? .tcp
             if let rawUp, !rawUp.isEmpty, NowhereNetwork(rawValue: rawUp) == nil {
                 throw DecodingError.dataCorruptedError(
                     forKey: .up, in: container, debugDescription: "Invalid Nowhere up value"

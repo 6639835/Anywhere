@@ -19,8 +19,8 @@ struct ProxyEditorView: View {
     @State private var serverPort = ""
     
     @State private var nowhereKey = ""
-    @State private var nowhereUplink: NowhereNetwork = .udp
-    @State private var nowhereDownlink: NowhereNetwork = .udp
+    @State private var nowhereUplink: NowhereNetwork = .tcp
+    @State private var nowhereDownlink: NowhereNetwork = .tcp
     @State private var nowhereMultiplex = false
     @State private var nowhereSNI = ""
     @State private var nowhereALPN = ""
