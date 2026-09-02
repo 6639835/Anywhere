@@ -431,7 +431,8 @@ nonisolated final class NowhereSession: Sendable {
         fin: Bool,
         earlyDataAttempt: NowhereFlowOpenAttempt? = nil,
         registerUnderLock: @escaping @Sendable (inout State, Int64) -> Void,
-        afterRegister: @escaping @Sendable (Int64) -> Void = { _ in }
+        afterRegister: @escaping @Sendable (Int64) -> Void = { _ in },
+        releaseOnWriteFailure: @Sendable (Int64) -> Void
     ) async throws -> Int64 {
         try await ensureReady()
 
@@ -488,7 +489,7 @@ nonisolated final class NowhereSession: Sendable {
             return sid
         } catch {
             quic.shutdownStream(sid, appErrorCode: NowhereProtocol.closeErrCodeOK)
-            releaseTCPStream(sid, credited: 0)
+            releaseOnWriteFailure(sid)
             throw error
         }
     }
@@ -585,14 +586,24 @@ nonisolated final class NowhereSession: Sendable {
             registerUnderLock: { session, sid in session.tcpStreams[sid] = connection },
             afterRegister: { [weak self] _ in
                 self?.updateIdleCloseTimer()
+            },
+            releaseOnWriteFailure: { [weak self] sid in
+                self?.releaseTCPStream(sid, credited: 0)
             }
         )
     }
 
     func openUDPControlStream(for connection: NowhereUDPConnection, request: Data) async throws -> Int64 {
-        try await openStream(request: request, fin: true) { session, sid in
-            session.udpControlStreams[sid] = connection
-        }
+        try await openStream(
+            request: request,
+            fin: true,
+            registerUnderLock: { session, sid in
+                session.udpControlStreams[sid] = connection
+            },
+            releaseOnWriteFailure: { [weak self] sid in
+                self?.releaseUDPControlStream(sid)
+            }
+        )
     }
 
     func writeStream(_ sid: Int64, data: Data, fin: Bool = false) async throws {
