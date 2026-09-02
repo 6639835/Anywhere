@@ -54,7 +54,7 @@ extension ProxyConfiguration {
         let encodedKey = key.addingPercentEncoding(withAllowedCharacters: usernameCharacters) ?? ""
         let fragment = name.addingPercentEncoding(withAllowedCharacters: .urlFragmentAllowed) ?? name
         var parameters: [String] = ["up=\(uplink.rawValue)", "down=\(downlink.rawValue)"]
-        if (uplink == .tcp || downlink == .tcp) && multiplex {
+        if (uplink.canUseTCP || downlink.canUseTCP) && multiplex {
             parameters.append("mux=1")
         }
         if tls.serverName != serverAddress {

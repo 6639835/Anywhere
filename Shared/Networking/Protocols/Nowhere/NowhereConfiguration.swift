@@ -12,6 +12,117 @@ import Synchronization
 nonisolated enum NowhereNetwork: String, Codable, CaseIterable, Sendable {
     case udp
     case tcp
+    case mix
+
+    var canUseTCP: Bool { self != .udp }
+    var isMixed: Bool { self == .mix }
+
+    var displayName: String {
+        switch self {
+        case .tcp: "TCP"
+        case .udp: "UDP"
+        case .mix: "MIX"
+        }
+    }
+}
+
+nonisolated enum NowhereCarrier: String, Hashable, Sendable {
+    case udp
+    case tcp
+
+    var isTCP: Bool { self == .tcp }
+}
+
+nonisolated struct NowhereResolvedRoute: Equatable, Sendable {
+    let uplink: NowhereCarrier
+    let downlink: NowhereCarrier
+
+    var label: String {
+        switch (uplink, downlink) {
+        case (.tcp, .tcp): "TT"
+        case (.tcp, .udp): "TQ"
+        case (.udp, .tcp): "QT"
+        case (.udp, .udp): "QQ"
+        }
+    }
+}
+
+nonisolated struct NowhereRoutePlan: Equatable, Sendable {
+    let primary: NowhereResolvedRoute
+    let fallback: NowhereResolvedRoute?
+}
+
+nonisolated enum NowhereRoutePlanner {
+    static let primaryPreparationTimeout: Duration = .seconds(1)
+
+    static func seed(from sessionID: Data) throws -> UInt64 {
+        guard sessionID.count == 16 else {
+            throw AnywhereError.proxy(
+                .nowhere,
+                .protocolViolation(detail: "Invalid Nowhere session ID")
+            )
+        }
+        let low = littleEndianUInt64(sessionID, offset: 0)
+        let high = littleEndianUInt64(sessionID, offset: 8)
+        return low ^ high.rotatedLeft(by: 32)
+    }
+
+    static func plan(
+        uplink: NowhereNetwork,
+        downlink: NowhereNetwork,
+        seed: UInt64,
+        flowID: UInt32
+    ) -> NowhereRoutePlan {
+        guard uplink.isMixed || downlink.isMixed else {
+            return NowhereRoutePlan(
+                primary: resolve(uplink: uplink, downlink: downlink, chooseUDP: false),
+                fallback: nil
+            )
+        }
+        let chooseUDP = splitMix64(seed ^ UInt64(flowID)) & 1 != 0
+        return NowhereRoutePlan(
+            primary: resolve(uplink: uplink, downlink: downlink, chooseUDP: chooseUDP),
+            fallback: resolve(uplink: uplink, downlink: downlink, chooseUDP: !chooseUDP)
+        )
+    }
+
+    static func resolve(
+        uplink: NowhereNetwork,
+        downlink: NowhereNetwork,
+        chooseUDP: Bool
+    ) -> NowhereResolvedRoute {
+        let selected: NowhereCarrier = chooseUDP ? .udp : .tcp
+        func carrier(_ policy: NowhereNetwork) -> NowhereCarrier {
+            switch policy {
+            case .tcp: .tcp
+            case .udp: .udp
+            case .mix: selected
+            }
+        }
+        return NowhereResolvedRoute(uplink: carrier(uplink), downlink: carrier(downlink))
+    }
+
+    private static func splitMix64(_ input: UInt64) -> UInt64 {
+        var value = input &+ 0x9e37_79b9_7f4a_7c15
+        value = (value ^ (value >> 30)) &* 0xbf58_476d_1ce4_e5b9
+        value = (value ^ (value >> 27)) &* 0x94d0_49bb_1331_11eb
+        return value ^ (value >> 31)
+    }
+
+    private static func littleEndianUInt64(_ data: Data, offset: Int) -> UInt64 {
+        var value: UInt64 = 0
+        for index in 0..<8 {
+            value |= UInt64(data[data.startIndex + offset + index]) << UInt64(index * 8)
+        }
+        return value
+    }
+}
+
+private nonisolated extension UInt64 {
+    func rotatedLeft(by count: UInt64) -> UInt64 {
+        let shift = count & 63
+        return (self << shift) | (self >> ((64 - shift) & 63))
+    }
 }
 
 nonisolated struct NowhereTransportIdentityKey: Hashable, Sendable {
@@ -29,8 +140,8 @@ nonisolated struct NowhereConfiguration: Hashable, Sendable {
     let proxyHost: String
     let proxyPort: UInt16
     let key: String
-    let uplink: NowhereNetwork
-    let downlink: NowhereNetwork
+    let uplink: NowhereCarrier
+    let downlink: NowhereCarrier
     let multiplex: Bool
     let sessionID: Data
     let tls: TLSConfiguration
@@ -41,8 +152,8 @@ nonisolated struct NowhereConfiguration: Hashable, Sendable {
         proxyHost: String,
         proxyPort: UInt16,
         key: String,
-        uplink: NowhereNetwork,
-        downlink: NowhereNetwork,
+        uplink: NowhereCarrier,
+        downlink: NowhereCarrier,
         multiplex: Bool,
         sessionID: Data,
         tls: TLSConfiguration
@@ -59,7 +170,7 @@ nonisolated struct NowhereConfiguration: Hashable, Sendable {
         self.key = key
         self.uplink = uplink
         self.downlink = downlink
-        self.multiplex = multiplex && (uplink == .tcp || downlink == .tcp)
+        self.multiplex = multiplex && (uplink.isTCP || downlink.isTCP)
         self.sessionID = sessionID
         self.tls = tls
         self.alpn = alpn

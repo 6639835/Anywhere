@@ -18,6 +18,11 @@ nonisolated final class NowhereQueuedDatagram: Sendable {
     }
 }
 
+nonisolated struct NowherePreparedQUICStream: Sendable {
+    let id: Int64
+    let authFrame: Data?
+}
+
 nonisolated final class NowhereUDPBudgetReservation: Sendable {
     let units: Int
     private let release: @Sendable (Int) -> Void
@@ -166,7 +171,7 @@ nonisolated final class NowhereSession: Sendable {
     func ensureReady() async throws {
         let begin: Bool = state.withLock { $0.transition(to: .connecting) }
         if begin { startConnection() }
-        try await transportTask.value
+        try await NowhereSharedTaskWaiter.value(of: transportTask)
     }
 
     private func startConnection() {
@@ -426,13 +431,10 @@ nonisolated final class NowhereSession: Sendable {
 
     // MARK: - Stream open
 
-    private func openStream(
-        request: Data,
-        fin: Bool,
-        earlyDataAttempt: NowhereFlowOpenAttempt? = nil,
+    private func prepareStream(
         registerUnderLock: @escaping @Sendable (inout State, Int64) -> Void,
         afterRegister: @escaping @Sendable (Int64) -> Void = { _ in }
-    ) async throws -> Int64 {
+    ) async throws -> NowherePreparedQUICStream {
         try await ensureReady()
 
         enum Bootstrap { case notBootstrap; case failed; case ok(sid: Int64, authFrame: Data) }
@@ -459,36 +461,42 @@ nonisolated final class NowhereSession: Sendable {
             throw AnywhereError.proxy(.nowhere, .connectionClosed(detail: "Failed to open bootstrap stream"))
         case .ok(let sid, let authFrame):
             afterRegister(sid)
-            var payload = Data(capacity: authFrame.count + request.count)
-            payload.append(authFrame)
-            payload.append(request)
-            do {
-                earlyDataAttempt?.markEarlyDataWriteStarted()
-                try await quic.writeStream(sid, data: payload, fin: fin)
-                state.withLock { $0.bootstrapSubmitted = true }
-                await quic.run { self.finishAuthenticationIfReady() }
-                return sid
-            } catch {
-                failSession(error)
-                throw error
-            }
+            return NowherePreparedQUICStream(id: sid, authFrame: authFrame)
         case .notBootstrap:
             break
         }
 
-        try await authTask.value
+        try await NowhereSharedTaskWaiter.value(of: authTask)
         guard state.withLock({ $0.phase == .ready }) else { throw AnywhereError.proxy(.nowhere, .streamClosed) }
         try Task.checkCancellation()
 
         let sid = try await openBidiStreamWhenCreditAvailable(registerUnderLock: registerUnderLock)
         afterRegister(sid)
+        return NowherePreparedQUICStream(id: sid, authFrame: nil)
+    }
+
+    func commitPreparedStream(
+        _ prepared: NowherePreparedQUICStream,
+        request: Data,
+        fin: Bool,
+        attempt: NowhereFlowOpenAttempt?
+    ) async throws {
+        var payload = Data(capacity: (prepared.authFrame?.count ?? 0) + request.count)
+        if let authFrame = prepared.authFrame { payload.append(authFrame) }
+        payload.append(request)
         do {
-            earlyDataAttempt?.markEarlyDataWriteStarted()
-            try await quic.writeStream(sid, data: request, fin: fin)
-            return sid
+            attempt?.markCommitStarted()
+            try await quic.writeStream(prepared.id, data: payload, fin: fin)
+            if prepared.authFrame != nil {
+                state.withLock { $0.bootstrapSubmitted = true }
+                await quic.run { self.finishAuthenticationIfReady() }
+            }
         } catch {
-            quic.shutdownStream(sid, appErrorCode: NowhereProtocol.closeErrCodeOK)
-            releaseTCPStream(sid, credited: 0)
+            if prepared.authFrame != nil {
+                failSession(error)
+            } else {
+                quic.shutdownStream(prepared.id, appErrorCode: NowhereProtocol.closeErrCodeOK)
+            }
             throw error
         }
     }
@@ -573,15 +581,10 @@ nonisolated final class NowhereSession: Sendable {
         continuation?.resume(throwing: CancellationError())
     }
 
-    func openTCPStream(
-        for connection: NowhereConnection,
-        request: Data,
-        earlyDataAttempt: NowhereFlowOpenAttempt?
-    ) async throws -> Int64 {
-        try await openStream(
-            request: request,
-            fin: false,
-            earlyDataAttempt: earlyDataAttempt,
+    func prepareTCPStream(
+        for connection: NowhereConnection
+    ) async throws -> NowherePreparedQUICStream {
+        try await prepareStream(
             registerUnderLock: { session, sid in session.tcpStreams[sid] = connection },
             afterRegister: { [weak self] _ in
                 self?.updateIdleCloseTimer()
@@ -589,8 +592,10 @@ nonisolated final class NowhereSession: Sendable {
         )
     }
 
-    func openUDPControlStream(for connection: NowhereUDPConnection, request: Data) async throws -> Int64 {
-        try await openStream(request: request, fin: true) { session, sid in
+    func prepareUDPControlStream(
+        for connection: NowhereUDPConnection
+    ) async throws -> NowherePreparedQUICStream {
+        try await prepareStream { session, sid in
             session.udpControlStreams[sid] = connection
         }
     }
@@ -608,20 +613,33 @@ nonisolated final class NowhereSession: Sendable {
     }
 
     func releaseTCPStream(_ sid: Int64, credited: Int) {
-        let (routeRemoved, delivered): (Bool, Int) = state.withLock { session in
-            (session.tcpStreams.removeValue(forKey: sid) != nil,
-             session.tcpDeliveredBytes.removeValue(forKey: sid) ?? 0)
+        let (routeRemoved, delivered, abandonedBootstrap): (Bool, Int, Bool) = state.withLock { session in
+            let removed = session.tcpStreams.removeValue(forKey: sid) != nil
+            let abandoned = removed && session.firstStreamID == sid
+                && session.phase == .authenticating && !session.bootstrapSubmitted
+            return (removed, session.tcpDeliveredBytes.removeValue(forKey: sid) ?? 0, abandoned)
         }
         let residual = delivered - credited
         if residual > 0 {
             quic.extendStreamOffset(sid, count: residual)
         }
         guard routeRemoved else { return }
+        if abandonedBootstrap {
+            failSession(AnywhereError.proxy(.nowhere, .streamClosed))
+            return
+        }
         updateIdleCloseTimer()
     }
 
     func releaseUDPControlStream(_ sid: Int64) {
-        state.withLock { _ = $0.udpControlStreams.removeValue(forKey: sid) }
+        let abandonedBootstrap = state.withLock { session -> Bool in
+            let removed = session.udpControlStreams.removeValue(forKey: sid) != nil
+            return removed && session.firstStreamID == sid
+                && session.phase == .authenticating && !session.bootstrapSubmitted
+        }
+        if abandonedBootstrap {
+            failSession(AnywhereError.proxy(.nowhere, .streamClosed))
+        }
     }
 
     // MARK: - UDP session API

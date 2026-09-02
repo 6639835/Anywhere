@@ -257,18 +257,18 @@ class TVProxyEditorViewController: UITableViewController {
             var transportRows: [RowType] = [
                 .selection(
                     label: String(localized: "Upload"),
-                    value: nowhereUplink.rawValue.uppercased(),
-                    options: [("TCP", "tcp"), ("UDP", "udp")],
+                    value: nowhereUplink.displayName,
+                    options: [("TCP", "tcp"), ("UDP", "udp"), ("MIX", "mix")],
                     key: .nowhereUplink
                 ),
                 .selection(
                     label: String(localized: "Download"),
-                    value: nowhereDownlink.rawValue.uppercased(),
-                    options: [("TCP", "tcp"), ("UDP", "udp")],
+                    value: nowhereDownlink.displayName,
+                    options: [("TCP", "tcp"), ("UDP", "udp"), ("MIX", "mix")],
                     key: .nowhereDownlink
                 ),
             ]
-            if nowhereUplink == .tcp || nowhereDownlink == .tcp {
+            if nowhereUplink.canUseTCP || nowhereDownlink.canUseTCP {
                 transportRows.append(.toggle(
                     label: String(localized: "Multiplex"),
                     isOn: nowhereMultiplex,
@@ -833,7 +833,7 @@ class TVProxyEditorViewController: UITableViewController {
             nowhereKey = key
             nowhereUplink = uplink
             nowhereDownlink = downlink
-            nowhereMultiplex = (uplink == .tcp || downlink == .tcp) && multiplex
+            nowhereMultiplex = (uplink.canUseTCP || downlink.canUseTCP) && multiplex
             nowhereSNI = tls.serverName
             nowhereALPN = tls.alpn?.first ?? ""
         }
@@ -1095,7 +1095,7 @@ class TVProxyEditorViewController: UITableViewController {
                 key: nowhereKey,
                 uplink: nowhereUplink,
                 downlink: nowhereDownlink,
-                multiplex: (nowhereUplink == .tcp || nowhereDownlink == .tcp) && nowhereMultiplex,
+                multiplex: (nowhereUplink.canUseTCP || nowhereDownlink.canUseTCP) && nowhereMultiplex,
                 securityLayer: .tls(TLSConfiguration(serverName: sni, alpn: alpn))
             )
         case .vless:

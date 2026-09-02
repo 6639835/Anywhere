@@ -58,19 +58,12 @@ nonisolated extension ProxyConfiguration {
             throw AnywhereError.parse(.invalidURL("Missing Nowhere key"))
         }
 
-        let rawNetwork = parameters["net"]
         let rawUp = parameters["up"]
         let rawDown = parameters["down"]
         func carrier(_ explicit: String?, name: String) throws -> NowhereNetwork {
             if let explicit {
                 guard let value = NowhereNetwork(rawValue: explicit) else {
                     throw AnywhereError.parse(.invalidURL("Invalid Nowhere \(name) value"))
-                }
-                return value
-            }
-            if let rawNetwork {
-                guard let value = NowhereNetwork(rawValue: rawNetwork) else {
-                    throw AnywhereError.parse(.invalidURL("Invalid Nowhere net value"))
                 }
                 return value
             }
@@ -83,7 +76,7 @@ nonisolated extension ProxyConfiguration {
         case nil, "0":
             multiplex = false
         case "1":
-            multiplex = uplink == .tcp || downlink == .tcp
+            multiplex = uplink.canUseTCP || downlink.canUseTCP
         default:
             throw AnywhereError.parse(.invalidURL("Invalid Nowhere mux value"))
         }
