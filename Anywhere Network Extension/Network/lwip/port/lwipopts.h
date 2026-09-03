@@ -4,13 +4,10 @@
 /* --- NO_SYS mode (bare-metal, callback-driven) --- */
 #define NO_SYS                          1
 #define SYS_LIGHTWEIGHT_PROT            0
-#define LWIP_TIMERS                     1
+#define LWIP_TIMERS                     0
 
 /* --- Core protocol support --- */
 #define LWIP_TCP                        1
-/* UDP is handled entirely in Swift (UDPPacket / TunnelStack+UDP); lwIP is built
- * TCP-only. UDP datagrams are intercepted in TunnelStack+IO before ever reaching
- * lwIP, and udp.c compiles to nothing under this flag. */
 #define LWIP_UDP                        0
 #define LWIP_IPV4                       1
 #define LWIP_IPV6                       1
@@ -26,8 +23,6 @@
 #define LWIP_AUTOIP                     0
 #define LWIP_ARP                        0
 #define LWIP_IGMP                       0
-#define LWIP_MLD6                       0
-#define LWIP_ND6                        0
 #define LWIP_IPV6_REASS                 0
 #define LWIP_IPV6_MLD                   0
 #define LWIP_IPV6_AUTOCONFIG            0
@@ -102,6 +97,7 @@
 
 /* --- IPv6 --- */
 #define LWIP_IPV6_NUM_ADDRESSES         3
+#define LWIP_IPV6_SEND_ROUTER_SOLICIT   0
 #define LWIP_IPV6_FORWARD               0
 #define LWIP_IPV6_FRAG                  0
 
@@ -114,13 +110,12 @@
 #define LWIP_NETIF_TX_SINGLE_PBUF       1
 #define LWIP_HAVE_LOOPIF                0
 #define LWIP_NETIF_LOOPBACK             0
-#define LWIP_RANDOMIZE_INITIAL_LOCAL_PORTS 1
 
-/* --- PPP (disabled, provide default for opt.h) --- */
+/* --- PPP --- */
 #define PPP_SUPPORT                     0
 #define PPP_NUM_TIMEOUTS                0
 
-/* --- Debug (disable in release) --- */
+/* --- Debug --- */
 #define LWIP_DEBUG                      0
 
 #endif /* LWIPOPTS_H */

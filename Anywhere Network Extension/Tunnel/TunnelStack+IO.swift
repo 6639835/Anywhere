@@ -111,6 +111,7 @@ extension TunnelStack {
     }
 
     func feedLwipBatch(_ packets: [Data]) {
+        guard !packets.isEmpty else { return }
         lwip_bridge_input_batch_begin()
         for packet in packets {
             packet.withUnsafeBytes { buffer in
@@ -120,23 +121,27 @@ extension TunnelStack {
         }
         lwip_bridge_input_batch_end()
         FlowGauge.publishTCPTable(Int(lwip_bridge_active_tcp_count()))
-        lwipTick?.resume()
+        if lwip_bridge_tcp_idle() == 0 {
+            lwipTick?.resume()
+        }
     }
 
     // MARK: - Timers
-
-    func startTimeoutTimer() {
-        lwipTick = lwipBridge.makeTick(
-            intervalMs: TunnelConstants.lwipTimeoutIntervalMs,
-            leewayMs: TunnelConstants.lwipTimeoutLeewayMs
+    
+    func startLwipTick() {
+        let tick = lwipBridge.makeTick(
+            intervalMs: TunnelConstants.lwipTickIntervalMs,
+            leewayMs: TunnelConstants.lwipTickLeewayMs
         ) { [weak self] in
             guard let self, self.publishedPhase.load(ordering: .relaxed).isActive else { return }
-            let idle = lwip_bridge_check_timeouts() != 0
+            lwip_bridge_tick()
             FlowGauge.publishTCPTable(Int(lwip_bridge_active_tcp_count()))
-            if idle {
+            if lwip_bridge_tcp_idle() != 0 {
                 self.assumeIsolated { $0.lwipTick?.suspend() }
             }
         }
+        tick.suspend()
+        lwipTick = tick
     }
 
     nonisolated func runUDPCleanupLoop(udpPlane: UDPPlane) async {
@@ -145,7 +150,10 @@ extension TunnelStack {
         while !Task.isCancelled {
             let remaining = interval - (MonotonicClock.now - lastRun)
             if remaining > 0 {
-                try? await Task.sleep(for: .seconds(remaining))
+                try? await Task.sleep(
+                    for: .seconds(remaining),
+                    tolerance: .milliseconds(TunnelConstants.udpCleanupLeewayMs)
+                )
                 continue
             }
             if self.publishedPhase.load(ordering: .relaxed).isActive {

@@ -141,11 +141,15 @@ int  lwip_bridge_tcp_snd_queuelen(void *pcb);
 
 /* --- Timer ---
  *
- * Services lwIP's timeout list (TCP retransmit, persist, TIME_WAIT, etc.).
- * Returns nonzero once nothing remains pending, so the caller can suspend the
- * periodic tick until fresh input re-arms it; zero while timeouts are still due.
- * Must be called on lwipQueue. */
-int lwip_bridge_check_timeouts(void);
+ * lwIP is built with LWIP_TIMERS=0: it arms no timers of its own and the
+ * bridge tick is the stack's only clock. Call lwip_bridge_tick() every
+ * LWIP_BRIDGE_TICK_INTERVAL_MS while lwip_bridge_tcp_idle() is zero. Once it
+ * turns nonzero (no TCP PCB active or in TIME_WAIT) the tick may be parked;
+ * revive it after any lwip_bridge_input batch that leaves it zero again, the
+ * only way a PCB can appear. Both must be called on lwipQueue. */
+#define LWIP_BRIDGE_TICK_INTERVAL_MS 100
+void lwip_bridge_tick(void);
+int lwip_bridge_tcp_idle(void);
 
 /* --- IP address utility --- */
 

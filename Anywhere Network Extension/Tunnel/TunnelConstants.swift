@@ -69,10 +69,10 @@ nonisolated enum TunnelConstants {
 
     // MARK: - Timer Intervals
 
-    /// lwIP tick interval (ms); must equal `TCP_TMR_INTERVAL` in `port/lwipopts.h`.
-    static let lwipTimeoutIntervalMs = 100
+    /// lwIP tick interval (ms); pinned to `TCP_TMR_INTERVAL` by a static assert in `lwip_bridge.c`.
+    static let lwipTickIntervalMs = Int(LWIP_BRIDGE_TICK_INTERVAL_MS)
     /// Leeway for the lwIP tick (ms); lets libdispatch coalesce wakeups.
-    static let lwipTimeoutLeewayMs = 10
+    static let lwipTickLeewayMs = 10
     static let udpCleanupIntervalSec = 1
     /// Leeway for the UDP cleanup reaper (ms); reaping tolerates the slack.
     static let udpCleanupLeewayMs = 250

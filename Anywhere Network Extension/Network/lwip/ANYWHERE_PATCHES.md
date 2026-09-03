@@ -422,3 +422,39 @@ now **inert** — the whole file is `#if LWIP_UDP` — and does **not** need
 re-applying. If you ever re-enable `LWIP_UDP`, you would also have to restore
 the UDP catch-all listeners and `udp_recv_cb` in `lwip_bridge.c` (removed when
 UDP moved to Swift); prefer keeping UDP in Swift.
+
+## Timers driven by the bridge (`LWIP_TIMERS = 0`)
+
+lwIP arms no timers of its own. `port/lwipopts.h` sets `LWIP_TIMERS 0`, which
+drops `sys_timeout` / `sys_check_timeouts` and the internal cyclic-timer list
+(`src/core/timeouts.c` compiles down to the `tcp_timer_needed` stub). The
+bridge's 100 ms tick is the stack's only clock:
+
+- `lwip_bridge_tick()` calls `tcp_tmr()` directly. TCP is the only compiled
+  feature with periodic work (retransmit, persist, keepalive, delayed ACK,
+  TIME_WAIT expiry). `TCP_TMR_INTERVAL` and `LWIP_BRIDGE_TICK_INTERVAL_MS` are
+  pinned together by a static assert in `lwip_bridge.c`.
+- `lwip_bridge_tcp_idle()` is lwIP's own on-demand rule (`tcpip_tcp_timer`):
+  nonzero when no PCB is active or in TIME_WAIT. `TunnelStack` starts the tick
+  parked, revives it after an input batch that leaves this zero (a PCB can only
+  appear inside `tcp_input`), and parks it again from the tick itself once it
+  turns nonzero. An idle tunnel therefore schedules no periodic lwIP work.
+
+**Why:** with `LWIP_TIMERS 1`, `sys_timeouts_init` arms every entry of
+`lwip_cyclic_timers[]` except `tcp_tmr`, and under `LWIP_IPV6` that table
+always contains `nd6_tmr` — there is no `LWIP_ND6` switch; the `LWIP_ND6_*`
+options are cache sizes. The timeout list therefore never drained, an earlier
+"park the tick when the list is empty" hint never fired, and the tick ran for
+the tunnel's whole lifetime (Android-side finding, 2026-09-03). `nd6_tmr` has
+nothing to do on this netif: the only IPv6 address is `::`, so DAD, address
+lifetimes and the neighbour caches never hold state, and its router
+solicitation failed with `ERR_RTE` every 4 s forever
+(`LWIP_IPV6_SEND_ROUTER_SOLICIT` is now 0 as well).
+
+**Consequence for upgrades:** no in-source patch is involved; keep
+`LWIP_TIMERS 0`. If a feature that needs `sys_timeout` is ever enabled (IP
+reassembly, DNS, DHCP, MLD, IPv6 autoconfiguration), switch back to
+`LWIP_TIMERS 1`, call `sys_check_timeouts()` from `lwip_bridge_tick()`, and
+either keep the TCP-PCB idle predicate (the other handlers then run only while
+TCP is active) or remove `nd6_tmr` from the cyclic table in vendored
+`timeouts.c` before trusting `sys_timeouts_sleeptime()` as the idle signal.

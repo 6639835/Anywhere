@@ -5,7 +5,6 @@
 #include "lwip/pbuf.h"
 #include "lwip/tcp.h"
 #include "lwip/priv/tcp_priv.h"
-#include "lwip/timeouts.h"
 #include "lwip/ip.h"
 #include "lwip/ip_addr.h"
 
@@ -528,13 +527,28 @@ int lwip_bridge_tcp_snd_queuelen(void *pcb) {
  *  Timer
  * ======================================================================== */
 
-int lwip_bridge_check_timeouts(void) {
-    sys_check_timeouts();
-    /* With every cyclic timer but tcp_tmr disabled at build time (see
-     * lwipopts.h), an empty timeout list means no TCP PCB is active or in
-     * TIME_WAIT — nothing to tick for. Report that so the caller can suspend the
-     * tick until fresh input revives it. */
-    return sys_timeouts_sleeptime() == SYS_TIMEOUTS_SLEEPTIME_INFINITE;
+_Static_assert(LWIP_BRIDGE_TICK_INTERVAL_MS == TCP_TMR_INTERVAL,
+               "bridge tick interval must match lwIP's TCP timer interval");
+
+void lwip_bridge_tick(void) {
+    /* LWIP_TIMERS=0: lwIP arms no timers of its own, so this tick is the
+     * stack's only clock. tcp_tmr alternates the fast timer (delayed ACK,
+     * refused data) with the slow timer (retransmit, persist, keepalive,
+     * TIME_WAIT expiry) and is the only periodic work this build has: every
+     * other cyclic handler is compiled out or, like nd6_tmr, has no state on
+     * a 0.0.0.0 / :: catch-all netif. Cheap with empty PCB lists, but the
+     * caller is expected to stop calling while lwip_bridge_tcp_idle() holds. */
+    tcp_tmr();
+}
+
+int lwip_bridge_tcp_idle(void) {
+    /* lwIP's own on-demand rule (tcp_timer_needed / tcpip_tcp_timer under
+     * LWIP_TIMERS=1): tcp_tmr has work while a PCB is active or in TIME_WAIT.
+     * PCBs enter either list only inside tcp_input (listen accept, FIN
+     * handling), i.e. from lwip_bridge_input, so the caller may park its tick
+     * when this holds and needs to revive it only after an input batch that
+     * leaves it false again. */
+    return (tcp_active_pcbs == NULL && tcp_tw_pcbs == NULL);
 }
 
 /* ========================================================================

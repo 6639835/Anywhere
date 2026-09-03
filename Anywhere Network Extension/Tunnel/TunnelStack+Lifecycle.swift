@@ -56,7 +56,7 @@ extension TunnelStack {
 
         installLwipCallbacks()
         lwip_bridge_init()
-        startTimeoutTimer()
+        startLwipTick()
 
         rootTask = Task { await self.run(packetFlow: packetFlow, udpPlane: udpPlane) }
 
@@ -312,7 +312,7 @@ extension TunnelStack {
         configureRuntime(for: configuration)
         installLwipCallbacks()
         lwip_bridge_init()
-        startTimeoutTimer()
+        startLwipTick()
         logger.debug("[TunnelStack] Restarted")
     }
 
