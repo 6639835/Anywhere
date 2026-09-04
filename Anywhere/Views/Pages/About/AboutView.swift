@@ -8,19 +8,9 @@
 import SwiftUI
 
 struct AboutView: View {
-    @Environment(AppSettings.self) private var settings
-
     var body: some View {
         NavigationStack {
             List {
-                if settings.showVoyagerCard {
-                    Section {
-                        VoyagerMemberCard()
-                            .listRowInsets(EdgeInsets())
-                            .listRowBackground(VoyagerCardBackground())
-                    }
-                }
-                
                 Section {
                     Link(destination: URL(string: "https://t.me/anywhere_official_group")!) {
                         HStack {

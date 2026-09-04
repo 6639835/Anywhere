@@ -58,6 +58,11 @@ struct HomeView: View {
     private var splitView: some View {
         NavigationSplitView(preferredCompactColumn: $preferredColumn) {
             List(selection: $selectedPage) {
+                if appSettings.showVoyagerCard {
+                    Section {
+                        voyagerMemberCard
+                    }
+                }
                 Section {
                     TextWithColorfulIconAndCustomImage(title: "Launchpad", imageName: "anywhere", foregroundStyle: .white, backgroundStyle: .anywhere.gradient)
                         .tag(Page.launchpad)
@@ -82,7 +87,6 @@ struct HomeView: View {
                     TextWithColorfulIcon(title: "MITM", systemName: "key.horizontal.fill", foregroundStyle: .white, backgroundStyle: .teal.gradient)
                         .tag(Page.mitm)
                 }
-                
                 Section {
                     TextWithColorfulIcon(title: "Trusted Certificates", systemName: "checkmark.seal.fill", foregroundStyle: .white, backgroundStyle: .green.gradient)
                         .tag(Page.trustedCertificates)
@@ -98,6 +102,7 @@ struct HomeView: View {
                 }
             }
             .navigationTitle("Anywhere")
+            .navigationBarTitleDisplayMode(.inline)
         } detail: {
             switch selectedPage {
             case .launchpad:
@@ -154,6 +159,17 @@ struct HomeView: View {
                 Image(systemName: "latch.2.case.fill")
             }
         }
+    }
+    
+    @ViewBuilder
+    private var voyagerMemberCard: some View {
+        VoyagerMemberCard()
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(
+                VoyagerCardBackground()
+                    .clipShape(RoundedRectangle(cornerRadius: 24))
+            )
+            .tag(nil as Page?)
     }
 }
 
