@@ -1429,7 +1429,7 @@ nonisolated final class SudokuHTTPMaskTransport: Sendable {
                 if opened.status == 200 {
                     return
                 }
-                if attempt > 0, [403, 404, 410].contains(opened.status) {
+                if [403, 404, 410].contains(opened.status) {
                     return
                 }
                 lastError = AnywhereError.proxy(.sudoku, .connectionClosed(detail:
@@ -1526,7 +1526,6 @@ nonisolated final class SudokuHTTPMaskTransport: Sendable {
         var retryDelayMs = 10
         while true {
             if state.withLock({ $0.phase == .closed }) { return }
-            var receivedData = false
 
             do {
                 let opened = try await Self.request(config: config, factory: factory, mode: mode, method: "GET", requestPath: paths.pullPath, body: Data())
@@ -1550,7 +1549,6 @@ nonisolated final class SudokuHTTPMaskTransport: Sendable {
                 while true {
                     let data = try await opened.readSome()
                     if data.isEmpty { break }
-                    receivedData = true
                     if mode == .poll {
                         for byte in data where byte != 0x0d {
                             if byte == 0x0a {
@@ -1582,7 +1580,7 @@ nonisolated final class SudokuHTTPMaskTransport: Sendable {
                     return
                 }
             }
-            if receivedData { retryDelayMs = 10 }
+            retryDelayMs = 10
             guard await waitForHTTPMaskRetry(delayMilliseconds: &retryDelayMs) else { return }
         }
     }
