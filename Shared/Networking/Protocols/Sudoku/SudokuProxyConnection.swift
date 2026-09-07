@@ -1580,7 +1580,6 @@ nonisolated final class SudokuHTTPMaskTransport: Sendable {
                     return
                 }
             }
-            retryDelayMs = 10
             guard await waitForHTTPMaskRetry(delayMilliseconds: &retryDelayMs) else { return }
         }
     }
