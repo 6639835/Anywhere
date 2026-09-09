@@ -55,7 +55,7 @@ class TVProxyEditorViewController: UITableViewController {
     private var vlessRealityShortId = ""
     private var vlessTLSECHEnabled = false
     private var vlessTLSECH = ""
-    private var vlessFingerprint: TLSFingerprint = .deviceDefault
+    private var vlessFingerprint: TLSFingerprint = .default
 
     // XHTTP detach: download stream dialed to a separate server, flattened into its own security + host/path (effectively a second proxy).
     private var vlessXHTTPDownloadEnabled = false
@@ -70,7 +70,7 @@ class TVProxyEditorViewController: UITableViewController {
     private var vlessXHTTPDownloadRealitySNI = ""
     private var vlessXHTTPDownloadRealityPublicKey = ""
     private var vlessXHTTPDownloadRealityShortId = ""
-    private var vlessXHTTPDownloadFingerprint: TLSFingerprint = .chrome120
+    private var vlessXHTTPDownloadFingerprint: TLSFingerprint = .default
 
     private var hysteriaPassword = ""
     private var hysteriaCC: HysteriaCongestionControl = .brutal
@@ -87,14 +87,14 @@ class TVProxyEditorViewController: UITableViewController {
     private var trojanALPN = ""
     private var trojanECHEnabled = false
     private var trojanECH = ""
-    private var trojanFingerprint: TLSFingerprint = .chrome120
+    private var trojanFingerprint: TLSFingerprint = .default
 
     private var anytlsPassword = ""
     private var anytlsSNI = ""
     private var anytlsALPN = ""
     private var anytlsECHEnabled = false
     private var anytlsECH = ""
-    private var anytlsFingerprint: TLSFingerprint = .chrome120
+    private var anytlsFingerprint: TLSFingerprint = .default
 
     private var ssPassword = ""
     private var ssMethod = "aes-128-gcm"

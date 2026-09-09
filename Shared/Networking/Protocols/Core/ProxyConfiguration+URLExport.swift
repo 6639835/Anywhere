@@ -89,7 +89,7 @@ extension ProxyConfiguration {
             if let alpn = tls.alpn, !alpn.isEmpty {
                 parameters.append("alpn=\(alpn.joined(separator: ",").addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? alpn.joined(separator: ","))")
             }
-            if tls.fingerprint != .chrome120 {
+            if tls.fingerprint != .default {
                 parameters.append("fp=\(tls.fingerprint.rawValue)")
             }
             if let ech = tls.echQueryValue {
@@ -103,7 +103,7 @@ extension ProxyConfiguration {
             if !reality.shortId.isEmpty {
                 parameters.append("sid=\(reality.shortId.hexEncodedString())")
             }
-            if reality.fingerprint != .deviceDefault {
+            if reality.fingerprint != .default {
                 parameters.append("fp=\(reality.fingerprint.rawValue)")
             }
         }
@@ -154,7 +154,7 @@ extension ProxyConfiguration {
             let joined = alpn.joined(separator: ",")
             parameters.append("alpn=\(joined.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? joined)")
         }
-        if tls.fingerprint != .chrome120 {
+        if tls.fingerprint != .default {
             parameters.append("fp=\(tls.fingerprint.rawValue)")
         }
         if let ech = tls.echQueryValue {
@@ -177,7 +177,7 @@ extension ProxyConfiguration {
             let joined = alpn.joined(separator: ",")
             parameters.append("alpn=\(joined.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? joined)")
         }
-        if tls.fingerprint != .chrome120 {
+        if tls.fingerprint != .default {
             parameters.append("fp=\(tls.fingerprint.rawValue)")
         }
         if let ech = tls.echQueryValue {

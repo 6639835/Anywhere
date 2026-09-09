@@ -500,19 +500,18 @@ nonisolated struct XHTTPConfiguration: Codable, Equatable, Hashable {
         } else if let s = json?["alpn"] as? String, !s.isEmpty {
             alpn = s.split(separator: ",").map(String.init)
         }
-        let fingerprint = (json?["fingerprint"] as? String).flatMap { TLSFingerprint(rawValue: $0) } ?? .chrome120
+        let fingerprint = (json?["fingerprint"] as? String).flatMap { TLSFingerprint(rawValue: $0) } ?? .default
         let ech = (json?["ech"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         return TLSConfiguration(serverName: serverName, alpn: alpn, echConfig: ech, fingerprint: fingerprint)
     }
-
-    /// Returns nil when the public key is missing or not a valid 32-byte key (base64url or base64).
+    
     private static func mapDownloadReality(_ json: [String: Any]?, serverAddress: String) -> RealityConfiguration? {
         guard let json, let publicKeyString = json["publicKey"] as? String, !publicKeyString.isEmpty else { return nil }
         guard let publicKey = (Data(base64URLEncoded: publicKeyString) ?? Data(base64Encoded: publicKeyString)),
               publicKey.count == 32 else { return nil }
         let serverName = (json["serverName"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? serverAddress
         let shortId = Data(hexString: (json["shortId"] as? String) ?? "") ?? Data()
-        let fp = (json["fingerprint"] as? String).flatMap { TLSFingerprint(rawValue: $0) } ?? .chrome120
+        let fp = (json["fingerprint"] as? String).flatMap { TLSFingerprint(rawValue: $0) } ?? .default
         return RealityConfiguration(serverName: serverName, publicKey: publicKey, shortId: shortId, fingerprint: fp)
     }
 

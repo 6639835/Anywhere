@@ -13,7 +13,7 @@ nonisolated struct RealityConfiguration {
     let shortId: Data               // 0-8 bytes
     let fingerprint: TLSFingerprint
 
-    init(serverName: String, publicKey: Data, shortId: Data, fingerprint: TLSFingerprint = .deviceDefault) {
+    init(serverName: String, publicKey: Data, shortId: Data, fingerprint: TLSFingerprint = .default) {
         self.serverName = serverName
         self.publicKey = publicKey
         self.shortId = shortId
@@ -38,7 +38,7 @@ nonisolated struct RealityConfiguration {
         let sidString = params["sid"] ?? ""
         let shortId = Data(hexString: sidString) ?? Data()
 
-        let fingerprint = params["fp"].flatMap { TLSFingerprint(rawValue: $0) } ?? .deviceDefault
+        let fingerprint = params["fp"].flatMap { TLSFingerprint(rawValue: $0) } ?? .default
 
         return RealityConfiguration(
             serverName: sni,
@@ -110,7 +110,7 @@ nonisolated enum TLSFingerprint: String, Codable, CaseIterable {
     
     init(from decoder: Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
-        self = TLSFingerprint(rawValue: raw) ?? .chrome120
+        self = TLSFingerprint(rawValue: raw) ?? .default
     }
 
     var displayName: String {
@@ -133,10 +133,19 @@ nonisolated enum TLSFingerprint: String, Codable, CaseIterable {
          .edge106]
     }
     
-    static var deviceDefault: TLSFingerprint {
+    static var `default`: TLSFingerprint {
         if #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) {
             return .chrome133
         }
         return .chrome120
+    }
+    
+    var withoutPostQuantum: TLSFingerprint {
+        switch self {
+        case .chrome133:  return .chrome120
+        case .firefox148: return .firefox120
+        case .safari26:   return .chrome120
+        default:          return self
+        }
     }
 }

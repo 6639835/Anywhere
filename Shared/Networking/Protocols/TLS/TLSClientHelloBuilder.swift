@@ -398,6 +398,10 @@ nonisolated struct TLSClientHelloBuilder {
         omitPQKeyShares: Bool = false,
         mlkemEncapsulationKey: Data? = nil
     ) -> (cipherSuites: Data, extensions: Data, needsPadding: Bool) {
+        let fingerprint = (omitPQKeyShares || mlkemEncapsulationKey == nil)
+            ? fingerprint.withoutPostQuantum
+            : fingerprint
+
         switch fingerprint {
         case .nonBrowser: return buildNonBrowser(serverName: serverName, publicKey: publicKey, alpn: alpn)
         case .chrome133:  return buildChrome133(random: random, serverName: serverName, publicKey: publicKey, alpn: alpn, omitPQKeyShares: omitPQKeyShares, mlkemEncapsulationKey: mlkemEncapsulationKey)
@@ -446,10 +450,10 @@ nonisolated struct TLSClientHelloBuilder {
         var extensionsData = Data()
         for e in exts { extensionsData.append(e) }
 
-        return (suites, extensionsData, false)   // no BoringSSL padding
+        return (suites, extensionsData, false)
     }
 
-    // MARK: - Chrome 133 (HelloChrome_Auto)
+    // MARK: - Chrome 133
 
     private static func buildChrome133(
         random: Data, serverName: String, publicKey: Data, alpn: [String]?, omitPQKeyShares: Bool = false, mlkemEncapsulationKey: Data? = nil
@@ -642,7 +646,7 @@ nonisolated struct TLSClientHelloBuilder {
         return (suites, extensionsData, true)
     }
 
-    // MARK: - Firefox 148 (HelloFirefox_Auto)
+    // MARK: - Firefox 148
 
     private static func buildFirefox148(
         random: Data, serverName: String, publicKey: Data, alpn: [String]?, omitPQKeyShares: Bool = false, mlkemEncapsulationKey: Data? = nil
@@ -759,7 +763,7 @@ nonisolated struct TLSClientHelloBuilder {
         return (suites, extensionsData, false)
     }
 
-    // MARK: - Safari 26.3 (HelloSafari_Auto)
+    // MARK: - Safari 26.3
 
     private static func buildSafari26(
         random: Data, serverName: String, publicKey: Data, alpn: [String]?, omitPQKeyShares: Bool = false, mlkemEncapsulationKey: Data? = nil
@@ -884,153 +888,6 @@ nonisolated struct TLSClientHelloBuilder {
         for e in exts { extensionsData.append(e) }
 
         return (suites, extensionsData, true)
-    }
-
-    // MARK: - Android 11 OkHttp
-
-    private static func buildAndroid11(
-        random: Data, serverName: String, publicKey: Data, alpn: [String]?
-    ) -> (Data, Data, Bool) {
-        let suites = cipherSuitesData([
-            0xC02B, 0xC02C,                                   // ECDHE ECDSA AES-GCM
-            0xCCA9,                                            // ECDHE ECDSA ChaCha20
-            0xC02F, 0xC030,                                   // ECDHE RSA AES-GCM
-            0xCCA8,                                            // ECDHE RSA ChaCha20
-            0xC013, 0xC014,                                   // ECDHE RSA CBC
-            0x009C, 0x009D,                                   // RSA AES-GCM
-            0x002F, 0x0035                                    // RSA AES-CBC
-        ])
-
-        let exts: [Data] = [
-            buildSNIExtension(serverName: serverName),
-            extendedMasterSecretExt(),
-            renegotiationInfoExt(),
-            supportedGroupsExt([0x001D, 0x0017, 0x0018]),    // X25519, P256, P384
-            ecPointFormatsExt(),
-            statusRequestExt(),
-            signatureAlgorithmsExt([
-                0x0403, 0x0804, 0x0401,
-                0x0503, 0x0805, 0x0501,
-                0x0806, 0x0601,
-                0x0201                                        // PKCS1-SHA1
-            ]),
-        ]
-
-        var extensionsData = Data()
-        for e in exts { extensionsData.append(e) }
-
-        return (suites, extensionsData, false) // No padding
-    }
-
-    // MARK: - QQ Browser 11.1 (HelloQQ_Auto)
-
-    private static func buildQQ11(
-        random: Data, serverName: String, publicKey: Data, alpn: [String]?
-    ) -> (Data, Data, Bool) {
-        let gCipher  = grease(random[24])
-        let gExt1    = grease(random[25])
-        let gGroup   = grease(random[26])
-        let gVersion = grease(random[28])
-        var gExt2    = grease(random[29])
-        if gExt2 == gExt1 { gExt2 = grease(random[29] &+ 1) }
-
-        let suites = cipherSuitesData([
-            gCipher,
-            0x1301, 0x1302, 0x1303,                         // TLS 1.3
-            0xC02B, 0xC02F, 0xC02C, 0xC030,                 // ECDHE AES-GCM
-            0xCCA9, 0xCCA8,                                   // ECDHE ChaCha20
-            0xC013, 0xC014,                                   // ECDHE AES-CBC
-            0x009C, 0x009D,                                   // RSA AES-GCM
-            0x002F, 0x0035                                    // RSA AES-CBC
-        ])
-
-        let protocols = alpn ?? ["h2", "http/1.1"]
-
-        let exts: [Data] = [
-            greaseExt(gExt1),
-            buildSNIExtension(serverName: serverName),
-            extendedMasterSecretExt(),
-            renegotiationInfoExt(),
-            supportedGroupsExt([gGroup, 0x001D, 0x0017, 0x0018]),
-            ecPointFormatsExt(),
-            sessionTicketExt(),
-            alpnExt(protocols),
-            statusRequestExt(),
-            signatureAlgorithmsExt([
-                0x0403, 0x0804, 0x0401,
-                0x0503, 0x0805, 0x0501,
-                0x0806, 0x0601
-            ]),
-            sctExt(),
-            keyShareExt([
-                (group: gGroup, keyData: Data([0x00])),
-                (group: 0x001D, keyData: publicKey)
-            ]),
-            pskKeyExchangeModesExt(),
-            supportedVersionsExt([gVersion, 0x0304, 0x0303, 0x0302, 0x0301]),
-            compressCertExt([0x0002]),                        // Brotli
-            applicationSettingsExt(["h2"]),
-            greaseExt(gExt2),
-        ]
-
-        var extensionsData = Data()
-        for e in exts { extensionsData.append(e) }
-
-        return (suites, extensionsData, true)
-    }
-
-    // MARK: - 360 Browser 7.5 (Hello360_Auto)
-
-    private static func build360_7(
-        random: Data, serverName: String, publicKey: Data, alpn: [String]?
-    ) -> (Data, Data, Bool) {
-        let suites = cipherSuitesData([
-            0xC00A,                                            // ECDHE_ECDSA_AES_256_CBC_SHA
-            0xC014,                                            // ECDHE_RSA_AES_256_CBC_SHA
-            0x0039,                                            // DHE_RSA_AES_256_CBC_SHA
-            0x006B,                                            // DHE_RSA_AES_256_CBC_SHA256
-            0x0035,                                            // RSA_AES_256_CBC_SHA
-            0x003D,                                            // RSA_AES_256_CBC_SHA256
-            0xC007,                                            // ECDHE_ECDSA_RC4_128_SHA
-            0xC009,                                            // ECDHE_ECDSA_AES_128_CBC_SHA
-            0xC023,                                            // ECDHE_ECDSA_AES_128_CBC_SHA256
-            0xC011,                                            // ECDHE_RSA_RC4_128_SHA
-            0xC013,                                            // ECDHE_RSA_AES_128_CBC_SHA
-            0xC027,                                            // ECDHE_RSA_AES_128_CBC_SHA256
-            0x0033,                                            // DHE_RSA_AES_128_CBC_SHA
-            0x0067,                                            // DHE_RSA_AES_128_CBC_SHA256
-            0x0032,                                            // DHE_DSS_AES_128_CBC_SHA
-            0x0005,                                            // RSA_RC4_128_SHA
-            0x0004,                                            // RSA_RC4_128_MD5
-            0x002F,                                            // RSA_AES_128_CBC_SHA
-            0x003C,                                            // RSA_AES_128_CBC_SHA256
-            0x000A                                             // RSA_3DES_EDE_CBC_SHA
-        ])
-
-        let protocols = alpn ?? ["spdy/2", "spdy/3", "spdy/3.1", "http/1.1"]
-
-        let exts: [Data] = [
-            buildSNIExtension(serverName: serverName),
-            renegotiationInfoExt(),
-            supportedGroupsExt([0x0017, 0x0018, 0x0019]),    // P256, P384, P521
-            ecPointFormatsExt(),
-            sessionTicketExt(),
-            npnExt(),
-            alpnExt(protocols),
-            fakeChannelIDOldExt(),
-            statusRequestExt(),
-            signatureAlgorithmsExt([
-                0x0401, 0x0501, 0x0201,                       // PKCS1 SHA256/384/SHA1
-                0x0403, 0x0503,                                // ECDSA P256/P384
-                0x0203,                                        // ECDSA SHA1
-                0x0402, 0x0202                                // SHA256WithDSA, SHA1WithDSA
-            ]),
-        ]
-
-        var extensionsData = Data()
-        for e in exts { extensionsData.append(e) }
-
-        return (suites, extensionsData, false) // No padding
     }
 
     // MARK: - Encrypted Client Hello (real ECH)

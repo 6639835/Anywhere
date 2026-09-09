@@ -20,6 +20,7 @@ extension TLSClient {
     func handleTLS13Handshake(
         buffer: Data,
         serverKeyShare: Data,
+        keyShareGroup: UInt16,
         cipherSuite: UInt16,
         clientHello: Data
     ) async throws -> TLSRecordConnection {
@@ -28,9 +29,20 @@ extension TLSClient {
         }
 
         do {
-            let serverPubKey = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: serverKeyShare)
-            let sharedSecret = try privateKey.sharedSecretFromKeyAgreement(with: serverPubKey)
-            let sharedSecretData = sharedSecret.withUnsafeBytes { Data($0) }
+            let sharedSecretData: Data
+            if keyShareGroup == TLSNamedGroup.x25519MLKEM768 && serverKeyShare.count == 1120 {
+                let x25519PubKey = try Curve25519.KeyAgreement.PublicKey(
+                    rawRepresentation: serverKeyShare.suffix(32)
+                )
+                let x25519SS = try privateKey.sharedSecretFromKeyAgreement(with: x25519PubKey)
+                let x25519Data = x25519SS.withUnsafeBytes { Data($0) }
+                let mlkemData = try decapsulateMLKEM(ciphertext: Data(serverKeyShare.prefix(1088)))
+                sharedSecretData = mlkemData + x25519Data
+            } else {
+                let serverPubKey = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: serverKeyShare)
+                let sharedSecret = try privateKey.sharedSecretFromKeyAgreement(with: serverPubKey)
+                sharedSecretData = sharedSecret.withUnsafeBytes { Data($0) }
+            }
 
             let serverHello = extractServerHelloMessage(from: buffer)
 

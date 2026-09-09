@@ -435,7 +435,7 @@ nonisolated struct ClashProxyParser {
 
     private static func parseFingerprint(_ node: YAML.Node) -> TLSFingerprint {
         let raw = getString(node, key: "client-fingerprint")
-        return TLSFingerprint(rawValue: mapFingerprint(raw)) ?? .chrome120
+        return TLSFingerprint(rawValue: mapFingerprint(raw)) ?? .default
     }
 
     /// Parses a Clash bandwidth string (e.g. `"30 Mbps"`, `"30"`) into Mbit/s, or `def` if unparseable.
@@ -508,8 +508,8 @@ nonisolated struct ClashProxyParser {
         case "safari":  return TLSFingerprint.safari26.rawValue
         case "ios":     return TLSFingerprint.chrome120.rawValue
         case "edge":    return TLSFingerprint.edge106.rawValue
-        case "random":  return TLSFingerprint.chrome120.rawValue
-        default:        return rawFingerprint ?? TLSFingerprint.chrome120.rawValue
+        case "random":  return TLSFingerprint.default.rawValue
+        default:        return rawFingerprint ?? TLSFingerprint.default.rawValue
         }
     }
 }

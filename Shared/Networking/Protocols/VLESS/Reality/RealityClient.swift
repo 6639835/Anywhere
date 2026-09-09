@@ -125,12 +125,12 @@ actor RealityClient {
         guard random.withUnsafeMutableBytes({ SecRandomCopyBytes(kSecRandomDefault, 32, $0.baseAddress!) }) == errSecSuccess else {
             throw AnywhereError.tls(.handshakeFailed(detail: "Failed to generate random bytes"))
         }
-
-        // SessionId carries the Reality metadata in the first 16 bytes.
+        
         var sessionId = Data(count: 32)
-        sessionId[0] = 26  // protocol version 26.7.28
-        sessionId[1] = 7
-        sessionId[2] = 28
+        // protocol version 26.9.9
+        sessionId[0] = 26
+        sessionId[1] = 9
+        sessionId[2] = 9
         sessionId[3] = 0
 
         let timestamp = UInt32(Date().timeIntervalSince1970)
@@ -156,16 +156,13 @@ actor RealityClient {
         }
 
         var mlkemEncapsulationKey: Data?
-        #if compiler(>=6.2)
         if #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) {
             if let mlkemPrivateKey = try? CryptoKit.MLKEM768.PrivateKey() {
                 mlkemPrivateKeyStorage = mlkemPrivateKey
                 mlkemEncapsulationKey = Data(mlkemPrivateKey.publicKey.rawRepresentation)
             }
         }
-        #endif
-
-        // The zero-SessionId ClientHello is the AES-GCM AAD; the field is patched in place below.
+        
         let zeroSessionId = Data(count: 32)
         var rawClientHello = TLSClientHelloBuilder.buildRawClientHello(
             fingerprint: configuration.fingerprint,
@@ -771,7 +768,6 @@ actor RealityClient {
     }
 
     private func decapsulateMLKEM(ciphertext: Data) throws -> Data {
-        #if compiler(>=6.2)
         if #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) {
             guard let mlkemPrivateKey = mlkemPrivateKeyStorage as? CryptoKit.MLKEM768.PrivateKey else {
                 throw AnywhereError.tls(.handshakeFailed(detail: "ML-KEM private key not available"))
@@ -779,7 +775,6 @@ actor RealityClient {
             let sharedSecret = try mlkemPrivateKey.decapsulate(ciphertext)
             return sharedSecret.withUnsafeBytes { Data($0) }
         }
-        #endif
         throw AnywhereError.tls(.handshakeFailed(detail: "ML-KEM not supported on this platform"))
     }
 

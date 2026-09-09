@@ -15,7 +15,7 @@ import Synchronization
 // MARK: - ServerHello Result
 
 nonisolated private enum ServerHelloResult {
-    case tls13(keyShare: Data, cipherSuite: UInt16)
+    case tls13(keyShare: Data, keyShareGroup: UInt16, cipherSuite: UInt16)
     case tls12(cipherSuite: UInt16, serverRandom: Data, version: UInt16, extendedMasterSecret: Bool)
     case helloRetryRequest
 }
@@ -95,6 +95,7 @@ actor TLSClient {
     }
 
     var ephemeralPrivateKey: Curve25519.KeyAgreement.PrivateKey?
+    private var mlkemPrivateKeyStorage: Any?
     private var storedClientHello: Data?
     private var sentSessionID: Data?
 
@@ -316,7 +317,7 @@ actor TLSClient {
             serverName: configuration.serverName,
             publicKey: privateKey.publicKey.rawRepresentation,
             alpn: configuration.alpn ?? ["h2", "http/1.1"],
-            omitPQKeyShares: true
+            mlkemEncapsulationKey: generateMLKEMEncapsulationKey()
         )
 
         if let maxVersion = configuration.maxVersion, maxVersion.rawValue <= 0x0303 {
@@ -377,10 +378,11 @@ actor TLSClient {
         case .helloRetryRequest:
             throw AnywhereError.tls(.helloRetryRequest)
 
-        case .tls13(let serverKeyShare, let cipherSuite):
+        case .tls13(let serverKeyShare, let keyShareGroup, let cipherSuite):
             return try await handleTLS13Handshake(
                 buffer: buffer,
                 serverKeyShare: serverKeyShare,
+                keyShareGroup: keyShareGroup,
                 cipherSuite: cipherSuite,
                 clientHello: clientHello
             )
@@ -494,6 +496,7 @@ actor TLSClient {
 
             var foundVersion: UInt16 = 0
             var keyShareData: Data?
+            var keyShareGroup: UInt16 = 0
             var hasEMS = false
             var observedExtensionTypes = Set<UInt16>()
 
@@ -522,6 +525,12 @@ actor TLSClient {
                         let keyLen = Int(data[extOffset + 2]) << 8 | Int(data[extOffset + 3])
                         if group == TLSNamedGroup.x25519 && keyLen == 32, 4 + 32 <= extDataLen {
                             keyShareData = data.subdata(in: (extOffset + 4)..<(extOffset + 4 + 32))
+                            keyShareGroup = group
+                        } else if group == TLSNamedGroup.x25519MLKEM768,
+                                  keyLen == 1120, 4 + 1120 <= extDataLen,
+                                  offeredHybridKeyShare {
+                            keyShareData = data.subdata(in: (extOffset + 4)..<(extOffset + 4 + 1120))
+                            keyShareGroup = group
                         }
                     }
 
@@ -552,8 +561,7 @@ actor TLSClient {
 
                 extOffset += extDataLen
             }
-
-            // supported_versions is required to indicate TLS 1.3.
+            
             if foundVersion == 0x0304 {
                 guard legacyVersion == 0x0303 else { return nil }
                 if let sent = sentSessionID, sessionIDEcho != sent {
@@ -568,7 +576,7 @@ actor TLSClient {
                     return nil
                 }
                 if let keyShare = keyShareData {
-                    return .tls13(keyShare: keyShare, cipherSuite: cipherSuite)
+                    return .tls13(keyShare: keyShare, keyShareGroup: keyShareGroup, cipherSuite: cipherSuite)
                 }
                 return nil
             }
@@ -606,9 +614,33 @@ actor TLSClient {
         }
         return result == 0
     }
+    
+    private func generateMLKEMEncapsulationKey() -> Data? {
+        if #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) {
+            if let mlkemPrivateKey = try? CryptoKit.MLKEM768.PrivateKey() {
+                mlkemPrivateKeyStorage = mlkemPrivateKey
+                return Data(mlkemPrivateKey.publicKey.rawRepresentation)
+            }
+        }
+        return nil
+    }
+    
+    var offeredHybridKeyShare: Bool { mlkemPrivateKeyStorage != nil }
+
+    func decapsulateMLKEM(ciphertext: Data) throws -> Data {
+        if #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) {
+            guard let mlkemPrivateKey = mlkemPrivateKeyStorage as? CryptoKit.MLKEM768.PrivateKey else {
+                throw AnywhereError.tls(.handshakeFailed(detail: "ML-KEM private key not available"))
+            }
+            let sharedSecret = try mlkemPrivateKey.decapsulate(ciphertext)
+            return sharedSecret.withUnsafeBytes { Data($0) }
+        }
+        throw AnywhereError.tls(.handshakeFailed(detail: "ML-KEM not supported on this platform"))
+    }
 
     func clearHandshakeState() {
         ephemeralPrivateKey = nil
+        mlkemPrivateKeyStorage = nil
         storedClientHello = nil
         sentSessionID = nil
         echContext = nil
