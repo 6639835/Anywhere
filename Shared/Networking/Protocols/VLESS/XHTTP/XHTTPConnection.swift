@@ -612,7 +612,8 @@ nonisolated final class XHTTPXMUXMultiplexerManager: Sendable {
         pool.withLock { pool in
             let retiredIDs = pool.entries.compactMap { $0.value.isRetired(now: now) ? $0.key : nil }
             for id in retiredIDs {
-                if pool.entries[id]!.openUsage == 0, let connection = pool.entries[id]!.connection {
+                guard pool.entries[id]!.openUsage == 0 else { continue }
+                if let connection = pool.entries[id]!.connection {
                     retiredIdle.append(connection)
                 }
                 pool.entries[id] = nil
@@ -625,7 +626,7 @@ nonisolated final class XHTTPXMUXMultiplexerManager: Sendable {
             case dialOrJoin(UInt64)
         }
         let decision: Decision = pool.withLock { pool in
-            if let id = selectReusable(in: pool.entries) {
+            if let id = selectReusable(in: pool.entries, now: now) {
                 pool.entries[id]!.openUsage += 1
                 if pool.entries[id]!.leftUsage > 0 { pool.entries[id]!.leftUsage -= 1 }
                 switch pool.entries[id]!.phase {
@@ -719,10 +720,11 @@ nonisolated final class XHTTPXMUXMultiplexerManager: Sendable {
         return adopted ? connection : nil
     }
 
-    private func selectReusable(in entries: [UInt64: ClientEntry]) -> UInt64? {
-        if entries.isEmpty { return nil }
-        if connections > 0 && entries.count < connections { return nil }
-        let eligible = concurrency > 0 ? entries.filter { $0.value.openUsage < concurrency } : entries
+    private func selectReusable(in entries: [UInt64: ClientEntry], now: CFAbsoluteTime) -> UInt64? {
+        let live = entries.filter { !$0.value.isRetired(now: now) }
+        if live.isEmpty { return nil }
+        if connections > 0 && live.count < connections { return nil }
+        let eligible = concurrency > 0 ? live.filter { $0.value.openUsage < concurrency } : live
         return eligible.keys.randomElement()
     }
 
@@ -957,7 +959,7 @@ nonisolated final class XHTTPH2Multiplexer: XHTTPXMUXMultiplexerPoolable, Sendab
     var isPoolClosed: Bool { state.withLock { $0.phase == .closed } }
     func poolClose() { cancel() }
 
-    // MARK: Setup
+    // MARK: - Setup
 
     func connect() async throws {
         var initData = XHTTPConnection.h2Preface
