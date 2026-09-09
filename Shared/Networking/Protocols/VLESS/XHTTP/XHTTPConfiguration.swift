@@ -290,16 +290,17 @@ nonisolated struct XHTTPConfiguration: Codable, Equatable, Hashable {
         if let xmux, xmux.isEnabled { return xmux }
         return .connectionSpreadDefault
     }
-
-    /// Normalized path: ensure leading "/" and trailing "/".
+    
     var normalizedPath: String {
         let pathOnly = path.split(separator: "?", maxSplits: 1).first.map(String.init) ?? path
         var p = pathOnly
         if !p.hasPrefix("/") {
             p = "/" + p
         }
-        if !p.hasSuffix("/") {
-            p = p + "/"
+        if sessionIDPlacement == .path || seqPlacement == .path {
+            if !p.hasSuffix("/") {
+                p = p + "/"
+            }
         }
         return p
     }
