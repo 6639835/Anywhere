@@ -54,7 +54,7 @@ struct ProxyEditorView: View {
     @State private var vlessRealitySNI = ""
     @State private var vlessRealityPublicKey = ""
     @State private var vlessRealityShortId = ""
-    @State private var vlessFingerprint: TLSFingerprint = .chrome120
+    @State private var vlessFingerprint: TLSFingerprint = .deviceDefault
     
     @State private var vlessXHTTPDownloadEnabled = false
     @State private var vlessXHTTPDownloadAddress = ""

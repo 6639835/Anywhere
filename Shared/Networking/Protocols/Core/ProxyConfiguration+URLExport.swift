@@ -10,8 +10,6 @@ import Foundation
 // MARK: - URL Export
 
 extension ProxyConfiguration {
-
-    /// RFC 3986 §3.2.2: IPv6 literals must be bracketed in URL authority components.
     private var bracketedServerAddress: String {
         serverAddress.contains(":") ? "[\(serverAddress)]" : serverAddress
     }
@@ -105,7 +103,7 @@ extension ProxyConfiguration {
             if !reality.shortId.isEmpty {
                 parameters.append("sid=\(reality.shortId.hexEncodedString())")
             }
-            if reality.fingerprint != .chrome120 {
+            if reality.fingerprint != .deviceDefault {
                 parameters.append("fp=\(reality.fingerprint.rawValue)")
             }
         }

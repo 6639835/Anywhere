@@ -55,7 +55,7 @@ class TVProxyEditorViewController: UITableViewController {
     private var vlessRealityShortId = ""
     private var vlessTLSECHEnabled = false
     private var vlessTLSECH = ""
-    private var vlessFingerprint: TLSFingerprint = .chrome120
+    private var vlessFingerprint: TLSFingerprint = .deviceDefault
 
     // XHTTP detach: download stream dialed to a separate server, flattened into its own security + host/path (effectively a second proxy).
     private var vlessXHTTPDownloadEnabled = false

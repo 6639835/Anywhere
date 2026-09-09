@@ -13,7 +13,7 @@ nonisolated struct RealityConfiguration {
     let shortId: Data               // 0-8 bytes
     let fingerprint: TLSFingerprint
 
-    init(serverName: String, publicKey: Data, shortId: Data, fingerprint: TLSFingerprint = .chrome120) {
+    init(serverName: String, publicKey: Data, shortId: Data, fingerprint: TLSFingerprint = .deviceDefault) {
         self.serverName = serverName
         self.publicKey = publicKey
         self.shortId = shortId
@@ -38,8 +38,7 @@ nonisolated struct RealityConfiguration {
         let sidString = params["sid"] ?? ""
         let shortId = Data(hexString: sidString) ?? Data()
 
-        let fpString = params["fp"] ?? "chrome_120"
-        let fingerprint = TLSFingerprint(rawValue: fpString) ?? .chrome120
+        let fingerprint = params["fp"].flatMap { TLSFingerprint(rawValue: $0) } ?? .deviceDefault
 
         return RealityConfiguration(
             serverName: sni,
@@ -106,14 +105,9 @@ nonisolated enum TLSFingerprint: String, Codable, CaseIterable {
     case safari26 = "safari_26"
 
     case edge106 = "edge_106"
-
-    /// Minimal ClientHello for real (non-camouflage) handshakes, e.g. the MITM outer leg.
-    /// Browser fingerprints advertise ALPS, which needs a ClientEncryptedExtensions we don't
-    /// send — strict origins (e.g. Google's GFE) abort with `unexpected_message`.
+    
     case nonBrowser = "non_browser"
-
-    /// Tolerant decoder: an unknown saved fingerprint falls back to Chrome 120
-    /// rather than failing to decode.
+    
     init(from decoder: Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
         self = TLSFingerprint(rawValue: raw) ?? .chrome120
@@ -131,12 +125,18 @@ nonisolated enum TLSFingerprint: String, Codable, CaseIterable {
         case .nonBrowser: return "Non-Browser"
         }
     }
-
-    /// User-selectable camouflage fingerprints; `nonBrowser` is intentionally excluded.
+    
     static var allCases: [TLSFingerprint] {
         [.chrome133, .chrome120, .chrome106,
          .firefox148, .firefox120,
          .safari26,
          .edge106]
+    }
+    
+    static var deviceDefault: TLSFingerprint {
+        if #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) {
+            return .chrome133
+        }
+        return .chrome120
     }
 }
