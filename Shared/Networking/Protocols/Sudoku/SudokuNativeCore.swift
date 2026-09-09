@@ -357,34 +357,34 @@ nonisolated private struct SudokuLayout {
     let paddingPool: [UInt8]
     let encodeHint: [[UInt8]]
     let hintTable: [Bool]
+    /// Packed groups are 0...63; 0xff marks padding and other non-hint bytes.
     let decodeGroup: [UInt8]
-    let groupValid: [Bool]
 
     static func ascii() -> SudokuLayout {
         var padding = [UInt8](); for i in 0..<32 { padding.append(UInt8(0x20 + i)) }
         var encodeHint = Array(repeating: Array(repeating: UInt8(0), count: 16), count: 4)
         for value in 0..<4 { for position in 0..<16 { var b = UInt8(0x40 | (value << 4) | position); if b == 0x7f { b = 0x0a }; encodeHint[value][position] = b } }
-        var hint = Array(repeating: false, count: 256), groupValid = hint
-        var decode = Array(repeating: UInt8(0), count: 256)
+        var hint = Array(repeating: false, count: 256)
+        var decode = Array(repeating: UInt8.max, count: 256)
         for i in 0..<256 {
             let b = UInt8(i)
-            if (b & 0x40) == 0x40 { hint[i] = true; decode[i] = b & 0x3f; groupValid[i] = true }
+            if (b & 0x40) == 0x40 { hint[i] = true; decode[i] = b & 0x3f }
         }
-        hint[0x0a] = true; decode[0x0a] = 0x3f; groupValid[0x0a] = true
-        return SudokuLayout(name: "ascii", padMarker: 0x3f, paddingPool: padding, encodeHint: encodeHint, hintTable: hint, decodeGroup: decode, groupValid: groupValid)
+        hint[0x0a] = true; decode[0x0a] = 0x3f
+        return SudokuLayout(name: "ascii", padMarker: 0x3f, paddingPool: padding, encodeHint: encodeHint, hintTable: hint, decodeGroup: decode)
     }
 
     static func entropy() -> SudokuLayout {
         var padding = [UInt8](); for i in 0..<8 { padding.append(UInt8(0x80 + i)); padding.append(UInt8(0x10 + i)) }
         var encodeHint = Array(repeating: Array(repeating: UInt8(0), count: 16), count: 4)
         for value in 0..<4 { for position in 0..<16 { encodeHint[value][position] = UInt8((value << 5) | position) } }
-        var hint = Array(repeating: false, count: 256), groupValid = hint
-        var decode = Array(repeating: UInt8(0), count: 256)
+        var hint = Array(repeating: false, count: 256)
+        var decode = Array(repeating: UInt8.max, count: 256)
         for i in 0..<256 {
             let b = UInt8(i)
-            if (b & 0x90) == 0 { hint[i] = true; decode[i] = ((b >> 1) & 0x30) | (b & 0x0f); groupValid[i] = true }
+            if (b & 0x90) == 0 { hint[i] = true; decode[i] = ((b >> 1) & 0x30) | (b & 0x0f) }
         }
-        return SudokuLayout(name: "entropy", padMarker: 0x80, paddingPool: padding, encodeHint: encodeHint, hintTable: hint, decodeGroup: decode, groupValid: groupValid)
+        return SudokuLayout(name: "entropy", padMarker: 0x80, paddingPool: padding, encodeHint: encodeHint, hintTable: hint, decodeGroup: decode)
     }
 
     static func custom(_ pattern: String) throws -> SudokuLayout {
@@ -405,8 +405,8 @@ nonisolated private struct SudokuLayout {
         for value in 0..<4 { for position in 0..<16 { for i in 0..<2 { var out = UInt8((1 << xbits[0]) | (1 << xbits[1])); out &= ~UInt8(1 << xbits[i]); if (value & 2) != 0 { out |= UInt8(1 << pbits[0]) }; if (value & 1) != 0 { out |= UInt8(1 << pbits[1]) }; for group in 0..<4 where ((position >> (3 - group)) & 1) != 0 { out |= UInt8(1 << vbits[group]) }; if out.nonzeroBitCount >= 5, !padding.contains(out) { padding.append(out) } } } }
         guard !padding.isEmpty else { throw AnywhereError.proxy(.sudoku, .invalidConfiguration(detail: "invalid custom Sudoku table")) }
         padding.sort()
-        var hint = Array(repeating: false, count: 256), groupValid = hint
-        var decode = Array(repeating: UInt8(0), count: 256)
+        var hint = Array(repeating: false, count: 256)
+        var decode = Array(repeating: UInt8.max, count: 256)
         let xmask = UInt8((1 << xbits[0]) | (1 << xbits[1]))
         for i in 0..<256 {
             let wire = UInt8(i)
@@ -415,10 +415,10 @@ nonisolated private struct SudokuLayout {
             if (wire & UInt8(1 << pbits[0])) != 0 { valOut |= 0x02 }
             if (wire & UInt8(1 << pbits[1])) != 0 { valOut |= 0x01 }
             for group in 0..<4 where (wire & UInt8(1 << vbits[group])) != 0 { posOut |= UInt8(1 << (3 - group)) }
-            hint[i] = true; decode[i] = (valOut << 4) | posOut; groupValid[i] = true
+            hint[i] = true; decode[i] = (valOut << 4) | posOut
         }
         for value in 0..<4 { for position in 0..<16 { var out = xmask; if (value & 2) != 0 { out |= UInt8(1 << pbits[0]) }; if (value & 1) != 0 { out |= UInt8(1 << pbits[1]) }; for group in 0..<4 where ((position >> (3 - group)) & 1) != 0 { out |= UInt8(1 << vbits[group]) }; encodeHint[value][position] = out } }
-        return SudokuLayout(name: "custom(\(cleaned))", padMarker: padding[0], paddingPool: padding, encodeHint: encodeHint, hintTable: hint, decodeGroup: decode, groupValid: groupValid)
+        return SudokuLayout(name: "custom(\(cleaned))", padMarker: padding[0], paddingPool: padding, encodeHint: encodeHint, hintTable: hint, decodeGroup: decode)
     }
 }
 
@@ -671,48 +671,43 @@ nonisolated struct SudokuPackedDecoder {
         guard !data.isEmpty || !pending.isEmpty else { return Data() }
         if data.isEmpty { return pending.read(max: outputLimit) }
         var written = 0
-        let hintTable = table.layout.hintTable
-        let groupValid = table.layout.groupValid
         let decodeGroup = table.layout.decodeGroup
-        let decoded = try SudokuBufferPool.makeData(capacity: max(1, (data.count * 6 + bitCount) / 8)) { rawOut in
+        let decoded = SudokuBufferPool.makeData(capacity: max(1, (data.count * 6 + bitCount) / 8)) { rawOut in
             let outBytes = rawOut.bindMemory(to: UInt8.self)
-            try data.withUnsafeBytes { rawInput in
+            data.withUnsafeBytes { rawInput in
                 let input = rawInput.bindMemory(to: UInt8.self)
                 var index = 0
                 while index < input.count {
-                    if bitCount == 0, index + 3 < input.count {
-                        let b1 = input[index]
-                        let b2 = input[index + 1]
-                        let b3 = input[index + 2]
-                        let b4 = input[index + 3]
-                        let i1 = Int(b1), i2 = Int(b2), i3 = Int(b3), i4 = Int(b4)
-                        if hintTable[i1], hintTable[i2], hintTable[i3], hintTable[i4],
-                           groupValid[i1], groupValid[i2], groupValid[i3], groupValid[i4] {
-                            let g1 = UInt16(decodeGroup[i1])
-                            let g2 = UInt16(decodeGroup[i2])
-                            let g3 = UInt16(decodeGroup[i3])
-                            let g4 = UInt16(decodeGroup[i4])
-                            outBytes[written] = UInt8(truncatingIfNeeded: (g1 << 2) | (g2 >> 4))
-                            outBytes[written + 1] = UInt8(truncatingIfNeeded: (g2 << 4) | (g3 >> 2))
-                            outBytes[written + 2] = UInt8(truncatingIfNeeded: (g3 << 6) | g4)
-                            written += 3
-                            index += 4
-                            continue
-                        }
-                    }
-
                     let b = input[index]
                     index += 1
-                    guard hintTable[Int(b)] else {
+                    let group = decodeGroup[Int(b)]
+                    guard group < 64 else {
                         if b == padMarker {
                             bitBuffer = 0
                             bitCount = 0
                         }
                         continue
                     }
-                    guard groupValid[Int(b)] else { throw AnywhereError.proxy(.sudoku, .protocolViolation(detail: "Sudoku decode failed")) }
-                    let group = UInt64(decodeGroup[Int(b)])
-                    bitBuffer = (bitBuffer << 6) | group
+
+                    // Skip padding before probing a complete block. Reuse the
+                    // first lookup when only one group can be consumed.
+                    if bitCount == 0, index + 2 < input.count {
+                        let g2 = UInt16(decodeGroup[Int(input[index])])
+                        if g2 < 64 {
+                            let g3 = UInt16(decodeGroup[Int(input[index + 1])])
+                            let g4 = UInt16(decodeGroup[Int(input[index + 2])])
+                            if (g3 | g4) < 64 {
+                                let g1 = UInt16(group)
+                                outBytes[written] = UInt8(truncatingIfNeeded: (g1 << 2) | (g2 >> 4))
+                                outBytes[written + 1] = UInt8(truncatingIfNeeded: (g2 << 4) | (g3 >> 2))
+                                outBytes[written + 2] = UInt8(truncatingIfNeeded: (g3 << 6) | g4)
+                                written += 3
+                                index += 3
+                                continue
+                            }
+                        }
+                    }
+                    bitBuffer = (bitBuffer << 6) | UInt64(group)
                     bitCount += 6
                     while bitCount >= 8 {
                         bitCount -= 8
