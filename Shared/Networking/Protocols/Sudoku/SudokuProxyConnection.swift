@@ -83,83 +83,6 @@ nonisolated private enum SudokuHTTPMaskPathRoot {
     }
 }
 
-nonisolated private struct SudokuDataQueue {
-    private var storage = Data()
-    private var offset = 0
-
-    var count: Int { storage.count - offset }
-    var isEmpty: Bool { count == 0 }
-
-    mutating func append(_ data: Data) {
-        guard !data.isEmpty else { return }
-        compactBeforeAppend(additionalCount: data.count)
-        storage.append(data)
-    }
-
-    mutating func append(_ data: Data, from start: Int) {
-        guard start > 0 else {
-            append(data)
-            return
-        }
-        guard start < data.count else { return }
-        compactBeforeAppend(additionalCount: data.count - start)
-        data.withUnsafeBytes { raw in
-            guard let base = raw.baseAddress else { return }
-            storage.append(base.assumingMemoryBound(to: UInt8.self).advanced(by: start), count: data.count - start)
-        }
-    }
-
-    mutating func read(max: Int) -> Data {
-        let n = min(max, count)
-        guard n > 0 else { return Data() }
-        let start = offset
-        let out = storage.rangeData(offset: start, count: n)
-        offset += n
-        compactAfterRead()
-        return out
-    }
-
-    mutating func drain(exact count: Int, into out: inout Data) {
-        let n = min(count, self.count)
-        guard n > 0 else { return }
-        let start = offset
-        storage.withUnsafeBytes { raw in
-            guard let base = raw.baseAddress else { return }
-            out.append(base.assumingMemoryBound(to: UInt8.self).advanced(by: start), count: n)
-        }
-        offset += n
-        compactAfterRead()
-    }
-
-    mutating func removeAll(keepingCapacity: Bool = false) {
-        storage.removeAll(keepingCapacity: keepingCapacity)
-        offset = 0
-    }
-
-    private mutating func compactBeforeAppend(additionalCount: Int) {
-        if offset == 0 { return }
-        if offset == storage.count {
-            storage.removeAll(keepingCapacity: true)
-            offset = 0
-            return
-        }
-        if offset > 256 * 1024 || offset + additionalCount > storage.count {
-            storage.removeSubrange(0..<offset)
-            offset = 0
-        }
-    }
-
-    private mutating func compactAfterRead() {
-        if offset == storage.count {
-            storage.removeAll(keepingCapacity: true)
-            offset = 0
-        } else if offset > 512 * 1024 && offset * 2 > storage.count {
-            storage.removeSubrange(0..<offset)
-            offset = 0
-        }
-    }
-}
-
 nonisolated private enum SudokuNativeCrypto {
     static func randomData(count: Int) throws -> Data {
         guard count > 0 else { return Data() }
@@ -244,34 +167,63 @@ nonisolated private enum SudokuNativeCrypto {
         return hmacSHA256(key: base, parts: [Data("sudoku-record:".utf8), Data(methodName.utf8), epochData])
     }
 
+    static func recordSymmetricKey(base: Data, method: SudokuAEADMethod, epoch: UInt32) -> SymmetricKey {
+        let bytes = recordEpochKey(base: base, method: method, epoch: epoch)
+        return SymmetricKey(data: bytes.prefix(method == .aes128GCM ? 16 : 32))
+    }
+
     static func seal(method: SudokuAEADMethod, key: Data, nonce: Data, plaintext: Data, aad: Data) throws -> Data {
+        try seal(method: method, key: SymmetricKey(data: key.prefix(method == .aes128GCM ? 16 : 32)), nonce: nonce, plaintext: plaintext, aad: aad)
+    }
+
+    static func openRecord(method: SudokuAEADMethod, key: SymmetricKey, body: Data) throws -> Data {
+        let header = body.prefix(12)
+        do {
+            switch method {
+            case .aes128GCM:
+                return try AES.GCM.open(AES.GCM.SealedBox(combined: body), using: key, authenticating: header)
+            case .chacha20Poly1305:
+                return try ChaChaPoly.open(ChaChaPoly.SealedBox(combined: body), using: key, authenticating: header)
+            case .none:
+                return body
+            }
+        } catch {
+            let detail = method == .aes128GCM ? "AES-GCM open failed" : "ChaCha20-Poly1305 open failed"
+            throw AnywhereError.proxy(.sudoku, .protocolViolation(detail: detail))
+        }
+    }
+
+    static func seal(method: SudokuAEADMethod, key: SymmetricKey, nonce: Data, plaintext: Data, aad: Data) throws -> Data {
         switch method {
         case .aes128GCM:
             let box = try AES.GCM.seal(
                 plaintext,
-                using: SymmetricKey(data: key.prefix(16)),
+                using: key,
                 nonce: AES.GCM.Nonce(data: nonce),
                 authenticating: aad
             )
-            var out = Data(box.ciphertext)
-            out.append(box.tag)
-            return out
+            guard let combined = box.combined else {
+                throw AnywhereError.proxy(.sudoku, .protocolViolation(detail: "invalid record nonce length"))
+            }
+            return combined.dropFirst(nonce.count)
         case .chacha20Poly1305:
             let box = try ChaChaPoly.seal(
                 plaintext,
-                using: SymmetricKey(data: key.prefix(32)),
+                using: key,
                 nonce: ChaChaPoly.Nonce(data: nonce),
                 authenticating: aad
             )
-            var out = Data(box.ciphertext)
-            out.append(box.tag)
-            return out
+            return box.combined.dropFirst(nonce.count)
         case .none:
             return plaintext
         }
     }
 
     static func open(method: SudokuAEADMethod, key: Data, nonce: Data, ciphertext: Data, aad: Data) throws -> Data {
+        try open(method: method, key: SymmetricKey(data: key.prefix(method == .aes128GCM ? 16 : 32)), nonce: nonce, ciphertext: ciphertext, aad: aad)
+    }
+
+    static func open(method: SudokuAEADMethod, key: SymmetricKey, nonce: Data, ciphertext: Data, aad: Data) throws -> Data {
         switch method {
         case .aes128GCM:
             guard ciphertext.count >= 16 else { throw AnywhereError.proxy(.sudoku, .protocolViolation(detail: "short AES-GCM frame")) }
@@ -282,7 +234,7 @@ nonisolated private enum SudokuNativeCrypto {
                     ciphertext: ciphertext.prefix(split),
                     tag: ciphertext.suffix(16)
                 )
-                return try AES.GCM.open(box, using: SymmetricKey(data: key.prefix(16)), authenticating: aad)
+                return try AES.GCM.open(box, using: key, authenticating: aad)
             } catch {
                 throw AnywhereError.proxy(.sudoku, .protocolViolation(detail: "AES-GCM open failed"))
             }
@@ -295,7 +247,7 @@ nonisolated private enum SudokuNativeCrypto {
                     ciphertext: ciphertext.prefix(split),
                     tag: ciphertext.suffix(16)
                 )
-                return try ChaChaPoly.open(box, using: SymmetricKey(data: key.prefix(32)), authenticating: aad)
+                return try ChaChaPoly.open(box, using: key, authenticating: aad)
             } catch {
                 throw AnywhereError.proxy(.sudoku, .protocolViolation(detail: "ChaCha20-Poly1305 open failed"))
             }
@@ -528,22 +480,24 @@ nonisolated final class BlockingProxyStream: Sendable {
 }
 
 private nonisolated extension Data {
+    /// Preserve the existing zero-based Data convention at ProxyConnection
+    /// boundaries. Internal record/mux parsing can keep shared slices instead.
+    func zeroBasedData() -> Data { startIndex == 0 ? self : Data(self) }
+
+    // Slices retain their original indices. All protocol offsets are relative
+    // to the first byte, independently of the Data's startIndex.
+    func byte(at offset: Int) -> UInt8 { self[startIndex + offset] }
+
     func prefixData(_ count: Int) -> Data {
         let n = Swift.min(count, self.count)
         guard n > 0 else { return Data() }
-        if n == self.count { return self }
-        return withUnsafeBytes { raw in
-            guard let base = raw.baseAddress else { return Data() }
-            return Data(bytes: base, count: n)
-        }
+        return prefix(n)
     }
 
     func rangeData(offset: Int, count: Int) -> Data {
         guard offset >= 0, count > 0, offset <= self.count, count <= self.count - offset else { return Data() }
-        return withUnsafeBytes { raw in
-            guard let base = raw.baseAddress else { return Data() }
-            return Data(bytes: base.advanced(by: offset), count: count)
-        }
+        let start = startIndex + offset
+        return self[start..<(start + count)]
     }
 
     func uint32BE(at offset: Int) -> UInt32 {
@@ -1089,7 +1043,7 @@ private nonisolated func sudokuReadHTTPLine(
 ) async throws -> String {
     var data = Data()
     while true {
-        let byte = try await stream.readExact(1)[0]
+        let byte = try await stream.readExact(1).byte(at: 0)
         if byte == 0x0a { break }
         if byte != 0x0d { data.append(byte) }
         if data.count > maxBytes {
@@ -1657,7 +1611,7 @@ nonisolated final class SudokuHTTPMaskTransport: Sendable {
                 if s.phase == .closed { return (nil, true) }
                 if s.txQueue.isEmpty { return (nil, false) }
                 let n = min(maxBatchBytes, s.txQueue.count)
-                let batch = s.txQueue.read(max: n)
+                let batch = s.txQueue.readCoalesced(max: n)
                 if s.txQueue.isEmpty { s.txQueue.removeAll(keepingCapacity: false) }
                 toResume = drainWaitersLocked(&s)
                 return (batch, false)
@@ -1779,17 +1733,24 @@ nonisolated final class SudokuObfsTransport: Sendable {
 
     func readExact(_ count: Int) async throws -> Data {
         guard count > 0 else { return Data() }
-        var out = Data(capacity: count)
+        var out = try await receive(max: count)
+        if out.count < count { out.reserveCapacity(count) }
         while out.count < count { out.append(try await receive(max: count - out.count)) }
         return out
     }
 
     func readExactAllowingEOF(_ count: Int, what: String) async throws -> Data? {
         guard count > 0 else { return Data() }
-        var out = Data(capacity: count)
+        var out = Data()
         while out.count < count {
             do {
-                out.append(try await receive(max: count - out.count))
+                let chunk = try await receive(max: count - out.count)
+                if out.isEmpty {
+                    out = chunk
+                    if out.count < count { out.reserveCapacity(count) }
+                } else {
+                    out.append(chunk)
+                }
             } catch AnywhereError.proxy(.sudoku, .connectionClosed) {
                 if out.isEmpty { return nil }
                 throw AnywhereError.proxy(.sudoku, .protocolViolation(detail: "truncated \(what)"))
@@ -1844,6 +1805,7 @@ nonisolated final class SudokuRecordStream: Sendable {
         var sendSeq: UInt64
         var sendBytes: Int64 = 0
         var sendEpochUpdates: UInt32 = 0
+        var epochKey: SymmetricKey?
     }
     private let sendState: Mutex<SendState>
     
@@ -1852,6 +1814,7 @@ nonisolated final class SudokuRecordStream: Sendable {
         var recvEpoch: UInt32 = 0
         var recvSeq: UInt64 = 0
         var recvInitialized = false
+        var epochKey: SymmetricKey?
         var readBuffer = SudokuDataQueue()
     }
     private let state: Mutex<State>
@@ -1881,12 +1844,14 @@ nonisolated final class SudokuRecordStream: Sendable {
                 s.sendSeq = try SudokuNativeCrypto.randomNonZeroUInt64()
                 s.sendBytes = 0
                 s.sendEpochUpdates = 0
+                s.epochKey = nil
             }
             state.withLock { state in
                 state.baseRecv = recv
                 state.recvEpoch = 0
                 state.recvSeq = 0
                 state.recvInitialized = false
+                state.epochKey = nil
                 state.readBuffer.removeAll()
             }
         }
@@ -1894,16 +1859,23 @@ nonisolated final class SudokuRecordStream: Sendable {
 
     func send(_ data: Data) async throws {
         if data.isEmpty { return }
+        try await sendBuffers([data])
+    }
+
+    /// Serializes the complete logical write, including records crossing a
+    /// header/payload boundary. Only those crossing records need gathering.
+    func sendBuffers(_ buffers: [Data]) async throws {
         try await chainedSend { [self] in
+            var pending = SudokuDataQueue()
+            for buffer in buffers { pending.append(buffer) }
+            guard !pending.isEmpty else { return }
             if method == .none {
-                try await transport.send(data)
+                try await transport.send(pending.readCoalesced(max: pending.count))
                 return
             }
-            var offset = 0
-            while offset < data.count {
+            while !pending.isEmpty {
                 let maxPlain = 65535 - 12 - 16
-                let count = min(maxPlain, data.count - offset)
-                let chunk = data.rangeData(offset: offset, count: count)
+                let chunk = pending.readCoalesced(max: maxPlain)
                 let frame = try sendState.withLock { s -> Data in
                     var header = Data()
                     var epochBE = s.sendEpoch.bigEndian
@@ -1911,17 +1883,24 @@ nonisolated final class SudokuRecordStream: Sendable {
                     header.append(Data(bytes: &epochBE, count: 4))
                     header.append(Data(bytes: &seqBE, count: 8))
                     s.sendSeq &+= 1
-                    let key = SudokuNativeCrypto.recordEpochKey(base: s.baseSend, method: method, epoch: s.sendEpoch)
+                    let key = s.epochKey ?? SudokuNativeCrypto.recordSymmetricKey(base: s.baseSend, method: method, epoch: s.sendEpoch)
+                    s.epochKey = key
                     let cipher = try SudokuNativeCrypto.seal(method: method, key: key, nonce: header, plaintext: chunk, aad: header)
-                    var bodyLen = UInt16(header.count + cipher.count).bigEndian
-                    var frame = Data(bytes: &bodyLen, count: 2)
-                    frame.append(header)
-                    frame.append(cipher)
-                    return frame
+                    let bodyLen = header.count + cipher.count
+                    return SudokuBufferPool.makeData(capacity: bodyLen + 2) { output in
+                        output[0] = UInt8(bodyLen >> 8)
+                        output[1] = UInt8(truncatingIfNeeded: bodyLen)
+                        header.withUnsafeBytes { input in
+                            output.baseAddress!.advanced(by: 2).copyMemory(from: input.baseAddress!, byteCount: input.count)
+                        }
+                        cipher.withUnsafeBytes { input in
+                            output.baseAddress!.advanced(by: 2 + header.count).copyMemory(from: input.baseAddress!, byteCount: input.count)
+                        }
+                        return bodyLen + 2
+                    }
                 }
                 try await transport.send(frame)
-                offset += count
-                try maybeBumpSendEpoch(added: count)
+                try maybeBumpSendEpoch(added: chunk.count)
             }
         }
     }
@@ -1944,7 +1923,7 @@ nonisolated final class SudokuRecordStream: Sendable {
                 throw AnywhereError.proxy(.sudoku, .protocolViolation(detail: "truncated record body"))
             }
             let out: Data? = try state.withLock { state in
-                let plain = try decryptRecord(&state, body: body, bodyLen: bodyLen)
+                let plain = try decryptRecord(&state, body: body)
                 if plain.isEmpty { return nil }
                 if plain.count > max {
                     state.readBuffer.append(plain, from: max)
@@ -1958,18 +1937,19 @@ nonisolated final class SudokuRecordStream: Sendable {
 
     func readExact(_ count: Int) async throws -> Data {
         guard count > 0 else { return Data() }
-        var out = Data(capacity: count)
+        var out = try await receive(max: count)
+        if out.count < count { out.reserveCapacity(count) }
         while out.count < count { out.append(try await receive(max: count - out.count)) }
         return out
     }
 
     private static func parseRecordLength(_ lenData: Data) throws -> Int {
-        let bodyLen = Int(UInt16(lenData[0]) << 8 | UInt16(lenData[1]))
+        let bodyLen = Int(UInt16(lenData.byte(at: 0)) << 8 | UInt16(lenData.byte(at: 1)))
         guard bodyLen >= 12 && bodyLen <= 65535 else { throw AnywhereError.proxy(.sudoku, .protocolViolation(detail: "bad record length")) }
         return bodyLen
     }
 
-    private func decryptRecord(_ state: inout State, body: Data, bodyLen: Int) throws -> Data {
+    private func decryptRecord(_ state: inout State, body: Data) throws -> Data {
         let epoch = body.uint32BE(at: 0)
         let seq = body.uint64BE(at: 4)
         if state.recvInitialized {
@@ -1977,12 +1957,17 @@ nonisolated final class SudokuRecordStream: Sendable {
             if epoch == state.recvEpoch && seq != state.recvSeq { throw AnywhereError.proxy(.sudoku, .protocolViolation(detail: "out of order record")) }
             if epoch > state.recvEpoch && epoch - state.recvEpoch > 8 { throw AnywhereError.proxy(.sudoku, .protocolViolation(detail: "record epoch jump")) }
         }
-        let header = body.prefixData(12)
-        let ciphertext = body.rangeData(offset: 12, count: bodyLen - 12)
-        let key = SudokuNativeCrypto.recordEpochKey(base: state.baseRecv, method: method, epoch: epoch)
-        let plain = try SudokuNativeCrypto.open(method: method, key: key, nonce: header, ciphertext: ciphertext, aad: header)
+        let key: SymmetricKey
+        if epoch == state.recvEpoch, let cached = state.epochKey {
+            key = cached
+        } else {
+            key = SudokuNativeCrypto.recordSymmetricKey(base: state.baseRecv, method: method, epoch: epoch)
+        }
+        let plain = try SudokuNativeCrypto.openRecord(method: method, key: key, body: body)
+        // Publish the new epoch/key only after authentication succeeds.
+        state.epochKey = key
         state.recvEpoch = epoch
-        state.recvSeq = seq + 1
+        state.recvSeq = seq &+ 1
         state.recvInitialized = true
         return plain
     }
@@ -2003,6 +1988,7 @@ nonisolated final class SudokuRecordStream: Sendable {
             let threshold = Int64(32 << 20) * Int64(s.sendEpochUpdates + 1)
             guard s.sendBytes >= threshold else { return }
             s.sendEpoch &+= 1
+            s.epochKey = nil
             s.sendEpochUpdates &+= 1
             s.sendSeq = try SudokuNativeCrypto.randomNonZeroUInt64()
         }
@@ -2185,7 +2171,7 @@ nonisolated final class SudokuNativeClient {
         var offset = 0
         var out = Data()
         while offset + 2 <= data.count {
-            let bodyLen = Int(UInt16(data[offset]) << 8 | UInt16(data[offset + 1]))
+            let bodyLen = Int(UInt16(data.byte(at: offset)) << 8 | UInt16(data.byte(at: offset + 1)))
             guard bodyLen >= 12 && offset + 2 + bodyLen <= data.count else {
                 if out.isEmpty { throw AnywhereError.proxy(.sudoku, .protocolViolation(detail: "bad early record length")) }
                 break
@@ -2198,7 +2184,7 @@ nonisolated final class SudokuNativeClient {
             out.append(try SudokuNativeCrypto.open(method: config.aeadMethod, key: key, nonce: header, ciphertext: ciphertext, aad: header))
             offset += 2 + bodyLen
             if out.count >= 6 {
-                let kipLen = Int(UInt16(out[4]) << 8 | UInt16(out[5]))
+                let kipLen = Int(UInt16(out.byte(at: 4)) << 8 | UInt16(out.byte(at: 5)))
                 if out.count >= 6 + kipLen { break }
             }
         }
@@ -2295,10 +2281,10 @@ nonisolated final class SudokuNativeClient {
         } catch AnywhereError.proxy(.sudoku, .connectionClosed) {
             throw AnywhereError.proxy(.sudoku, .protocolViolation(detail: "truncated KIP header"))
         }
-        guard header[0] == 0x6b, header[1] == 0x69, header[2] == 0x70 else { throw AnywhereError.proxy(.sudoku, .protocolViolation(detail: "bad KIP magic")) }
-        let length = Int(UInt16(header[4]) << 8 | UInt16(header[5]))
+        guard header.byte(at: 0) == 0x6b, header.byte(at: 1) == 0x69, header.byte(at: 2) == 0x70 else { throw AnywhereError.proxy(.sudoku, .protocolViolation(detail: "bad KIP magic")) }
+        let length = Int(UInt16(header.byte(at: 4)) << 8 | UInt16(header.byte(at: 5)))
         do {
-            return (header[3], try await record.readExact(length))
+            return (header.byte(at: 3), try await record.readExact(length))
         } catch AnywhereError.proxy(.sudoku, .connectionClosed) {
             throw AnywhereError.proxy(.sudoku, .protocolViolation(detail: "truncated KIP payload"))
         }
@@ -2306,10 +2292,10 @@ nonisolated final class SudokuNativeClient {
 
     private func parseKIP(_ data: Data) throws -> (type: UInt8, payload: Data) {
         guard data.count >= 6 else { throw AnywhereError.proxy(.sudoku, .protocolViolation(detail: "short KIP frame")) }
-        guard data[0] == 0x6b, data[1] == 0x69, data[2] == 0x70 else { throw AnywhereError.proxy(.sudoku, .protocolViolation(detail: "bad KIP magic")) }
-        let length = Int(UInt16(data[4]) << 8 | UInt16(data[5]))
+        guard data.byte(at: 0) == 0x6b, data.byte(at: 1) == 0x69, data.byte(at: 2) == 0x70 else { throw AnywhereError.proxy(.sudoku, .protocolViolation(detail: "bad KIP magic")) }
+        let length = Int(UInt16(data.byte(at: 4)) << 8 | UInt16(data.byte(at: 5)))
         guard data.count >= 6 + length else { throw AnywhereError.proxy(.sudoku, .protocolViolation(detail: "truncated KIP frame \(data.count)/\(6 + length)")) }
-        return (data[3], data.rangeData(offset: 6, count: length))
+        return (data.byte(at: 3), data.rangeData(offset: 6, count: length))
     }
 }
 
@@ -2412,14 +2398,13 @@ nonisolated final class SudokuMuxClient: Multiplexer, Sendable {
         guard payload.count <= 256 * 1024 else { throw AnywhereError.proxy(.sudoku, .protocolViolation(detail: "mux frame too large")) }
         let isClosed = state.withLock { $0.phase == .closed }
         guard !isClosed else { throw AnywhereError.proxy(.sudoku, .connectionClosed(detail: nil)) }
-        var frame = Data([type])
+        var header = Data([type])
         var sid = streamID.bigEndian
         var length = UInt32(payload.count).bigEndian
-        frame.append(Data(bytes: &sid, count: 4))
-        frame.append(Data(bytes: &length, count: 4))
-        frame.append(payload)
+        header.append(Data(bytes: &sid, count: 4))
+        header.append(Data(bytes: &length, count: 4))
         do {
-            try await record.send(frame)
+            try await record.sendBuffers([header, payload])
             state.withLock { $0.lastWrite = ContinuousClock.now }
         } catch {
             close(error: error)
@@ -2482,7 +2467,7 @@ nonisolated final class SudokuMuxClient: Multiplexer, Sendable {
         while true {
             do {
                 let header = try await record.readExact(9)
-                let type = header[0]
+                let type = header.byte(at: 0)
                 let streamID = header.uint32BE(at: 1)
                 let length = Int(header.uint32BE(at: 5))
                 guard length <= 256 * 1024 else { throw AnywhereError.proxy(.sudoku, .protocolViolation(detail: "mux frame too large")) }
@@ -2725,7 +2710,7 @@ nonisolated final class SudokuTCPProxyConnection:
     func receiveRaw() async throws -> Data? {
         if phase.withLock({ $0 == .closed }) { return nil }
         do {
-            return try await stream.receive(max: sudokuTCPReceiveChunkSize)
+            return try await stream.receive(max: sudokuTCPReceiveChunkSize).zeroBasedData()
         } catch AnywhereError.proxy(.sudoku, .connectionClosed) {
             return nil
         }
@@ -2796,7 +2781,7 @@ nonisolated final class SudokuMuxTCPProxyConnection:
         if state.withLock({ $0.phase.readsFinished }) { return nil }
         do {
             if let data = try await stream.receive(max: sudokuTCPReceiveChunkSize), !data.isEmpty {
-                return data
+                return data.zeroBasedData()
             }
             state.withLock { _ = $0.transition(to: .halfClosedRemote) }
             return nil
@@ -2852,12 +2837,12 @@ nonisolated final class SudokuUDPProxyConnection: ProxyConnection, Sendable {
         if phase.withLock({ $0 == .closed }) { return nil }
         do {
             let header = try await stream.readExact(4)
-            let addrLen = Int(UInt16(header[0]) << 8 | UInt16(header[1]))
-            let payloadLen = Int(UInt16(header[2]) << 8 | UInt16(header[3]))
+            let addrLen = Int(UInt16(header.byte(at: 0)) << 8 | UInt16(header.byte(at: 1)))
+            let payloadLen = Int(UInt16(header.byte(at: 2)) << 8 | UInt16(header.byte(at: 3)))
             guard addrLen > 0 && addrLen <= 64 * 1024 else { throw AnywhereError.proxy(.sudoku, .protocolViolation(detail: "bad UoT address length")) }
             guard payloadLen <= 64 * 1024 else { throw AnywhereError.proxy(.sudoku, .protocolViolation(detail: "bad UoT payload length")) }
             _ = try await stream.readExact(addrLen)
-            return try await stream.readExact(payloadLen)
+            return try await stream.readExact(payloadLen).zeroBasedData()
         } catch AnywhereError.proxy(.sudoku, .connectionClosed) {
             return nil
         }
