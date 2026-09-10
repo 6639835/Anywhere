@@ -274,8 +274,8 @@ struct ProxiesView: View {
             }
         }
         
-        ToolbarItem {
-            Menu("More", systemImage: "ellipsis") {
+        if #available(iOS 27.0, *) {
+            ToolbarOverflowMenu {
                 Section {
                     Picker("Proxy Type", selection: $proxyType) {
                         Label("Servers", systemImage: "server.rack")
@@ -306,6 +306,41 @@ struct ProxiesView: View {
                     }
                 }
             }
+        } else {
+            ToolbarItem {
+                Menu("More", systemImage: "ellipsis") {
+                    Section {
+                        Picker("Proxy Type", selection: $proxyType) {
+                            Label("Servers", systemImage: "server.rack")
+                                .tag(ProxyType.servers)
+                            Label("Chains", systemImage:  "point.bottomleft.forward.to.point.topright.scurvepath.fill")
+                                .tag(ProxyType.chains)
+                        }
+                    }
+                    Section {
+                        Button {
+                            showingGroupAddSheet = true
+                        } label: {
+                            Label("New Group", systemImage: "folder.badge.plus")
+                        }
+                        NavigationLink {
+                            ReorderView()
+                        } label: {
+                            Label("Reorder", systemImage: "arrow.up.arrow.down")
+                        }
+                    }
+                    if !subscriptionStore.subscriptions.isEmpty {
+                        Section {
+                            Button {
+                                updateAllSubscriptions()
+                            } label: {
+                                Label("Update Subscriptions", systemImage: "arrow.clockwise")
+                            }
+                        }
+                    }
+                }
+            }
+            
         }
     }
     

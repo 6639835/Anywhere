@@ -73,8 +73,8 @@ struct MITMView: View {
                 ToolbarItem {
                     EditButton()
                 }
-                ToolbarItem {
-                    Menu("More", systemImage: "ellipsis") {
+                if #available(iOS 27.0, *) {
+                    ToolbarOverflowMenu {
                         Button {
                             showAddSheet = true
                         } label: {
@@ -91,6 +91,28 @@ struct MITMView: View {
                             showSubscribeAlert = true
                         } label: {
                             Label("Subscribe Rule Set", systemImage: "link")
+                        }
+                    }
+                } else {
+                    ToolbarItem {
+                        Menu("More", systemImage: "ellipsis") {
+                            Button {
+                                showAddSheet = true
+                            } label: {
+                                Label("Add Rule Set", systemImage: "plus")
+                            }
+                            Button {
+                                importError = nil
+                                showFileImporter = true
+                            } label: {
+                                Label("Import Rule Set", systemImage: "square.and.arrow.down")
+                            }
+                            Button {
+                                subscribeURL = ""
+                                showSubscribeAlert = true
+                            } label: {
+                                Label("Subscribe Rule Set", systemImage: "link")
+                            }
                         }
                     }
                 }

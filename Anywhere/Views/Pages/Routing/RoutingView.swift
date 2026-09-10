@@ -86,8 +86,8 @@ struct RoutingView: View {
                         EditButton()
                     }
                 }
-                ToolbarItem {
-                    Menu("More", systemImage: "ellipsis") {
+                if #available(iOS 27.0, *) {
+                    ToolbarOverflowMenu {
                         Button {
                             showAddSheet = true
                         } label: {
@@ -109,6 +109,33 @@ struct RoutingView: View {
                             showResetConfirmAlert = true
                         } label: {
                             Label("Reset", systemImage: "arrow.clockwise")
+                        }
+                    }
+                } else {
+                    ToolbarItem {
+                        Menu("More", systemImage: "ellipsis") {
+                            Button {
+                                showAddSheet = true
+                            } label: {
+                                Label("Add Rule Set", systemImage: "plus")
+                            }
+                            Button {
+                                importError = nil
+                                showFileImporter = true
+                            } label: {
+                                Label("Import Rule Set", systemImage: "square.and.arrow.down")
+                            }
+                            Button {
+                                subscribeURL = ""
+                                showSubscribeAlert = true
+                            } label: {
+                                Label("Subscribe Rule Set", systemImage: "link")
+                            }
+                            Button(role: .destructive) {
+                                showResetConfirmAlert = true
+                            } label: {
+                                Label("Reset", systemImage: "arrow.clockwise")
+                            }
                         }
                     }
                 }

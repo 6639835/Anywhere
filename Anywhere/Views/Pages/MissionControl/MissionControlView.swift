@@ -51,12 +51,22 @@ struct MissionControlView: View {
             .navigationTitle("Mission Control")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem {
-                    Menu("More", systemImage: "ellipsis") {
+                if #available(iOS 27.0, *) {
+                    ToolbarOverflowMenu {
                         Button {
                             Task { await stats.resetStats() }
                         } label: {
                             Label("Reset", systemImage: "arrow.clockwise")
+                        }
+                    }
+                } else {
+                    ToolbarItem {
+                        Menu("More", systemImage: "ellipsis") {
+                            Button {
+                                Task { await stats.resetStats() }
+                            } label: {
+                                Label("Reset", systemImage: "arrow.clockwise")
+                            }
                         }
                     }
                 }

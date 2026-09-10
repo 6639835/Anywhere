@@ -75,8 +75,8 @@ struct CustomRuleSetDetailView: View {
                     EditButton()
                 }
             }
-            ToolbarItem {
-                Menu("More", systemImage: "ellipsis") {
+            if #available(iOS 27.0, *) {
+                ToolbarOverflowMenu {
                     if !isSubscribed {
                         Button {
                             showAddRuleSheet = true
@@ -89,6 +89,24 @@ struct CustomRuleSetDetailView: View {
                         showRenameAlert = true
                     } label: {
                         Label("Rename", systemImage: "pencil")
+                    }
+                }
+            } else {
+                ToolbarItem {
+                    Menu("More", systemImage: "ellipsis") {
+                        if !isSubscribed {
+                            Button {
+                                showAddRuleSheet = true
+                            } label: {
+                                Label("Add Rule", systemImage: "plus")
+                            }
+                        }
+                        Button {
+                            renameText = customRuleSet?.name ?? ""
+                            showRenameAlert = true
+                        } label: {
+                            Label("Rename", systemImage: "pencil")
+                        }
                     }
                 }
             }
