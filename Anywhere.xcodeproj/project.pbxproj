@@ -311,6 +311,7 @@
 				"Networking/Protocols/SOCKS5/ProxyClient+SOCKS5.swift",
 				Networking/Protocols/SOCKS5/SOCKS5Connection.swift,
 				"Networking/Protocols/Sudoku/ProxyClient+Sudoku.swift",
+				Networking/Protocols/Sudoku/SudokuBuffers.swift,
 				Networking/Protocols/Sudoku/SudokuConfiguration.swift,
 				Networking/Protocols/Sudoku/SudokuMultiplexerPool.swift,
 				Networking/Protocols/Sudoku/SudokuNativeCore.swift,
