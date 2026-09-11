@@ -8594,9 +8594,6 @@
       "comment" : "HTTP Mask for Sudoku protocol",
       "shouldTranslate" : false
     },
-    "HTTPS" : {
-      "shouldTranslate" : false
-    },
     "HTTPUpgrade" : {
       "shouldTranslate" : false
     },

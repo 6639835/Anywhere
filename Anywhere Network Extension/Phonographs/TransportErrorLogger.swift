@@ -42,11 +42,6 @@ nonisolated enum TransportErrorLogger {
         let errorDescription = conciseErrorDescription(error)
         let suffix = context.map { " [\($0)]" } ?? ""
 
-        if case AnywhereError.proxy(.naive, _) = error {
-            logger.debug("\(prefix) \(operation) error: \(endpoint): \(errorDescription)\(suffix)")
-            return
-        }
-        
         switch (error as? AnywhereError)?.peerClose {
         case .cascade:
             logger.debug("\(prefix) \(operation) after peer close: \(endpoint): \(errorDescription)\(suffix)")

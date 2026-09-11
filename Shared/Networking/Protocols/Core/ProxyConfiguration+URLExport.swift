@@ -38,8 +38,6 @@ extension ProxyConfiguration {
             return toSOCKS5URL()
         case .sudoku:
             return toSudokuURL()
-        case .http11, .http2, .http3:
-            return toNaiveURL()
         }
     }
 
@@ -237,21 +235,6 @@ extension ProxyConfiguration {
             return "sudoku://"
         }
         return "sudoku://\(data.base64URLEncodedString())"
-    }
-
-    private func toNaiveURL() -> String {
-        let username: String?
-        let password: String?
-        switch outbound {
-        case .http11(let u, let p), .http2(let u, let p), .http3(let u, let p):
-            username = u; password = p
-        default:
-            username = nil; password = nil
-        }
-        let user = (username ?? "").addingPercentEncoding(withAllowedCharacters: .urlUserAllowed) ?? ""
-        let pass = (password ?? "").addingPercentEncoding(withAllowedCharacters: .urlPasswordAllowed) ?? ""
-        let fragment = name.addingPercentEncoding(withAllowedCharacters: .urlFragmentAllowed) ?? name
-        return "https://\(user):\(pass)@\(bracketedServerAddress):\(serverPort)#\(fragment)"
     }
 
     private func appendTransportParams(to params: inout [String]) {

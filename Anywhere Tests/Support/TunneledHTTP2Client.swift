@@ -25,12 +25,12 @@ enum TunneledHTTP2Client {
     ) async throws -> HTTPResponse {
         var preamble = Data()
         preamble.append(connectionPreface)
-        preamble.append(NaiveHTTP2Framer.settingsFrame([
+        preamble.append(HTTP2Framer.settingsFrame([
             (id: 0x2, value: 0),                    // ENABLE_PUSH off
             (id: 0x4, value: initialWindowSize),    // INITIAL_WINDOW_SIZE
             (id: 0x5, value: 16384),                // MAX_FRAME_SIZE (default)
         ]).serialized)
-        preamble.append(NaiveHTTP2Framer.windowUpdateFrame(streamID: 0, increment: connectionWindowBump).serialized)
+        preamble.append(HTTP2Framer.windowUpdateFrame(streamID: 0, increment: connectionWindowBump).serialized)
 
         let authority = port == 443 ? authorityHost : "\(authorityHost):\(port)"
         let requestHeaders: [(name: String, value: String)] = [
@@ -42,7 +42,7 @@ enum TunneledHTTP2Client {
             ("accept", "*/*"),
         ]
         let headerBlock = HPACKEncoder.encodeHeaderBlock(requestHeaders)
-        preamble.append(NaiveHTTP2Framer.headersFrame(streamID: streamID, headerBlock: headerBlock, endStream: true).serialized)
+        preamble.append(HTTP2Framer.headersFrame(streamID: streamID, headerBlock: headerBlock, endStream: true).serialized)
 
         try await stream.sendBytes(preamble)
         
@@ -62,25 +62,25 @@ enum TunneledHTTP2Client {
             buffer.append(chunk)
 
             var pendingOut = Data()
-            while let frame = NaiveHTTP2Framer.deserialize(from: &buffer) {
+            while let frame = HTTP2Framer.deserialize(from: &buffer) {
                 switch frame.type {
                 case .settings:
-                    if !frame.hasFlag(NaiveHTTP2FrameFlags.ack) {
-                        pendingOut.append(NaiveHTTP2Framer.settingsAckFrame().serialized)
+                    if !frame.hasFlag(HTTP2FrameFlags.ack) {
+                        pendingOut.append(HTTP2Framer.settingsAckFrame().serialized)
                     }
 
                 case .ping:
-                    if !frame.hasFlag(NaiveHTTP2FrameFlags.ack) {
-                        pendingOut.append(NaiveHTTP2Framer.pingAckFrame(opaqueData: frame.payload).serialized)
+                    if !frame.hasFlag(HTTP2FrameFlags.ack) {
+                        pendingOut.append(HTTP2Framer.pingAckFrame(opaqueData: frame.payload).serialized)
                     }
 
                 case .goaway:
-                    let info = NaiveHTTP2Framer.parseGoaway(payload: frame.payload)
+                    let info = HTTP2Framer.parseGoaway(payload: frame.payload)
                     throw HTTPClientError.connectionClosed("GOAWAY errorCode=\(info?.errorCode ?? 0)")
 
                 case .rstStream:
                     if frame.streamID == streamID {
-                        let code = NaiveHTTP2Framer.parseRstStream(payload: frame.payload) ?? 0
+                        let code = HTTP2Framer.parseRstStream(payload: frame.payload) ?? 0
                         throw HTTPClientError.connectionClosed("RST_STREAM errorCode=\(code)")
                     }
 
@@ -92,10 +92,10 @@ enum TunneledHTTP2Client {
 
                 case .headers:
                     guard frame.streamID == streamID else { break }
-                    if frame.hasFlag(NaiveHTTP2FrameFlags.padded) || (frame.flags & priorityFlag) != 0 {
+                    if frame.hasFlag(HTTP2FrameFlags.padded) || (frame.flags & priorityFlag) != 0 {
                         throw HTTPClientError.unsupported("padded/priority HEADERS")
                     }
-                    if !frame.hasFlag(NaiveHTTP2FrameFlags.endHeaders) {
+                    if !frame.hasFlag(HTTP2FrameFlags.endHeaders) {
                         throw HTTPClientError.unsupported("CONTINUATION frames")
                     }
                     guard let decoded = decoder.decodeHeaders(from: frame.payload) else {
@@ -108,7 +108,7 @@ enum TunneledHTTP2Client {
                             status = Int(raw)
                         }
                     }
-                    if frame.hasFlag(NaiveHTTP2FrameFlags.endStream) { done = true }
+                    if frame.hasFlag(HTTP2FrameFlags.endStream) { done = true }
 
                 case .data:
                     guard frame.streamID == streamID else { break }
@@ -118,14 +118,14 @@ enum TunneledHTTP2Client {
                     connectionConsumed += consumed
                     streamConsumed += consumed
                     if connectionConsumed >= windowUpdateThreshold {
-                        pendingOut.append(NaiveHTTP2Framer.windowUpdateFrame(streamID: 0, increment: UInt32(connectionConsumed)).serialized)
+                        pendingOut.append(HTTP2Framer.windowUpdateFrame(streamID: 0, increment: UInt32(connectionConsumed)).serialized)
                         connectionConsumed = 0
                     }
                     if streamConsumed >= windowUpdateThreshold {
-                        pendingOut.append(NaiveHTTP2Framer.windowUpdateFrame(streamID: streamID, increment: UInt32(streamConsumed)).serialized)
+                        pendingOut.append(HTTP2Framer.windowUpdateFrame(streamID: streamID, increment: UInt32(streamConsumed)).serialized)
                         streamConsumed = 0
                     }
-                    if frame.hasFlag(NaiveHTTP2FrameFlags.endStream) { done = true }
+                    if frame.hasFlag(HTTP2FrameFlags.endStream) { done = true }
                 }
             }
 
@@ -140,8 +140,8 @@ enum TunneledHTTP2Client {
         return HTTPResponse(statusCode: finalStatus, headers: responseHeaders, body: body)
     }
     
-    private static func unpaddedDataPayload(_ frame: NaiveHTTP2Frame) -> Data {
-        guard frame.hasFlag(NaiveHTTP2FrameFlags.padded) else { return frame.payload }
+    private static func unpaddedDataPayload(_ frame: HTTP2Frame) -> Data {
+        guard frame.hasFlag(HTTP2FrameFlags.padded) else { return frame.payload }
         guard let padLength = frame.payload.first else { return Data() }
         let withoutPadByte = frame.payload.dropFirst()
         guard withoutPadByte.count >= Int(padLength) else { return Data(withoutPadByte) }

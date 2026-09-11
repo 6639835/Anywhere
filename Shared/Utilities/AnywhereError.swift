@@ -38,7 +38,6 @@ nonisolated enum AnywhereError: Error {
         case vless = "VLESS"
         case vlessEncryption = "VLESS Encryption"
         case sudoku = "Sudoku"
-        case naive = "Naive"
         case hysteria = "Hysteria"
         case nowhere = "Nowhere"
         case webSocket = "WebSocket"
@@ -694,8 +693,7 @@ nonisolated extension AnywhereError {
              .quic(.closed(graceful: true)),
              .tls(.helloRetryRequest),
              .mitm(.needsHTTP1Fallback),
-             .routing(.dropped),
-             .proxy(.naive, _):
+             .routing(.dropped):
             .debug
         case .transport(.posix(_, errno: ECONNRESET)),
              .routing(.rejectedByRule),

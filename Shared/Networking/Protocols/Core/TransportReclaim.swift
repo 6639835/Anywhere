@@ -18,9 +18,7 @@ nonisolated enum TransportReclaim {
             case .hysteria: HysteriaClient.pool.reclaim()
             case .anytls:   AnyTLSMultiplexerRegistry.shared.reclaim()
             case .sudoku:   SudokuMultiplexerRegistry.shared.reclaim()
-            case .http2:    NaiveHTTP2MultiplexerPool.shared.reclaim()
-            case .http3:    NaiveHTTP3MultiplexerPool.shared.reclaim()
-            case .trojan, .shadowsocks, .socks5, .http11:
+            case .trojan, .shadowsocks, .socks5:
                 break
             }
         }

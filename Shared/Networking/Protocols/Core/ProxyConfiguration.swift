@@ -16,11 +16,6 @@ nonisolated enum OutboundProtocol: String, Codable, CaseIterable {
     case shadowsocks
     case socks5
     case sudoku
-    case http11
-    case http2
-    case http3
-    
-    var isNaive: Bool { self == .http11 || self == .http2 || self == .http3 }
 
     enum InitialDataPolicy: Equatable {
         case none
@@ -42,7 +37,7 @@ nonisolated enum OutboundProtocol: String, Codable, CaseIterable {
             return .limited(32 * 1024)
         case .vless, .sudoku:
             return .unbounded
-        case .hysteria, .trojan, .anytls, .shadowsocks, .socks5, .http11, .http2, .http3:
+        case .hysteria, .trojan, .anytls, .shadowsocks, .socks5:
             return .none
         }
     }
@@ -65,7 +60,7 @@ nonisolated enum OutboundProtocol: String, Codable, CaseIterable {
             return .tcp
         case .hysteria:
             return .udp
-        case .sudoku, .http11, .http2, .http3:
+        case .sudoku:
             return downstreamCommand == .tcp ? .tcp : nil
         }
     }
@@ -88,12 +83,6 @@ nonisolated enum OutboundProtocol: String, Codable, CaseIterable {
             "SOCKS5"
         case .sudoku:
             "Sudoku"
-        case .http11:
-            "HTTPS"
-        case .http2:
-            "HTTP/2"
-        case .http3:
-            "HTTP/3"
         }
     }
 }
@@ -134,9 +123,6 @@ nonisolated enum Outbound: Hashable, Sendable {
     case shadowsocks(password: String, method: String)
     case socks5(username: String?, password: String?)
     case sudoku(SudokuConfiguration)
-    case http11(username: String, password: String)
-    case http2(username: String, password: String)
-    case http3(username: String, password: String)
 }
 
 // MARK: - Xray Transport Layer Configuration
@@ -231,9 +217,6 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
         case .shadowsocks:  .shadowsocks
         case .socks5:       .socks5
         case .sudoku:       .sudoku
-        case .http11:       .http11
-        case .http2:        .http2
-        case .http3:        .http3
         }
     }
     
@@ -270,9 +253,6 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
         case .shadowsocks:      tag = nil
         case .socks5:           tag = nil
         case .sudoku:           tag = "TCP"
-        case .http11:           tag = "TCP"
-        case .http2:            tag = "TCP"
-        case .http3:            tag = "UDP"
         }
         return tag
     }
@@ -433,9 +413,6 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
         case ssPassword, ssMethod
         case socks5Username, socks5Password
         case sudoku
-        case http11Username, http11Password
-        case http2Username, http2Password
-        case http3Username, http3Password
         case chain
         case updatedAt
         case deletedAt
@@ -596,21 +573,6 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
             )
         case .sudoku:
             outbound = .sudoku(try container.decode(SudokuConfiguration.self, forKey: .sudoku))
-        case .http11:
-            outbound = .http11(
-                username: try container.decodeIfPresent(String.self, forKey: .http11Username) ?? "",
-                password: try container.decodeIfPresent(String.self, forKey: .http11Password) ?? ""
-            )
-        case .http2:
-            outbound = .http2(
-                username: try container.decodeIfPresent(String.self, forKey: .http2Username) ?? "",
-                password: try container.decodeIfPresent(String.self, forKey: .http2Password) ?? ""
-            )
-        case .http3:
-            outbound = .http3(
-                username: try container.decodeIfPresent(String.self, forKey: .http3Username) ?? "",
-                password: try container.decodeIfPresent(String.self, forKey: .http3Password) ?? ""
-            )
         }
 
         chain = try container.decodeIfPresent([ProxyConfiguration].self, forKey: .chain)
@@ -709,21 +671,6 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
             try container.encode(id, forKey: .uuid)
             try container.encode("none", forKey: .encryption)
             try container.encode(configuration, forKey: .sudoku)
-        case .http11(let username, let password):
-            try container.encode(id, forKey: .uuid)
-            try container.encode("none", forKey: .encryption)
-            try container.encode(username, forKey: .http11Username)
-            try container.encode(password, forKey: .http11Password)
-        case .http2(let username, let password):
-            try container.encode(id, forKey: .uuid)
-            try container.encode("none", forKey: .encryption)
-            try container.encode(username, forKey: .http2Username)
-            try container.encode(password, forKey: .http2Password)
-        case .http3(let username, let password):
-            try container.encode(id, forKey: .uuid)
-            try container.encode("none", forKey: .encryption)
-            try container.encode(username, forKey: .http3Username)
-            try container.encode(password, forKey: .http3Password)
         }
 
         try container.encodeIfPresent(chain, forKey: .chain)

@@ -474,13 +474,6 @@ nonisolated final class ProxyClient: Sendable {
             )
         }
 
-        if configuration.outboundProtocol.isNaive {
-            if command != .tcp {
-                throw AnywhereError.routing(.dropped)
-            }
-            return try await connectWithNaive(destinationHost: destinationHost, destinationPort: destinationPort)
-        }
-
         // Only VLESS reaches this point; Vision needs a TLS-record-like layer
         // (VLESS Encryption, or a raw TCP transport carrying TLS/Reality).
         switch configuration.xrayTransportLayer {
@@ -1338,7 +1331,6 @@ nonisolated extension OutboundProtocol {
         case .shadowsocks: .shadowsocks
         case .socks5: .socks5
         case .sudoku: .sudoku
-        case .http11, .http2, .http3: .naive
         }
     }
 }

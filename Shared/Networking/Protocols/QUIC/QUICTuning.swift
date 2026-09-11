@@ -64,7 +64,7 @@ nonisolated struct QUICTuning {
 }
 
 nonisolated extension QUICTuning {
-    static let naive = QUICTuning(
+    static let http3 = QUICTuning(
         cc: .cubic,
         maxStreamWindow: 64 * 1024 * 1024,
         maxWindow: 128 * 1024 * 1024,

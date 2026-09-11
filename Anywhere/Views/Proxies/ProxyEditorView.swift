@@ -114,9 +114,6 @@ struct ProxyEditorView: View {
     @State private var sudokuHTTPMaskPathRoot = ""
     @State private var sudokuMultiplex: SudokuMultiplex = .off
     
-    @State private var naiveUsername = ""
-    @State private var naivePassword = ""
-    
     private var isNowhere: Bool { selectedProtocol == .nowhere }
     private var isVLESS: Bool { selectedProtocol == .vless }
     private var isVLESSReality: Bool { vlessSecurity == "reality" }
@@ -127,7 +124,6 @@ struct ProxyEditorView: View {
     private var isShadowsocks: Bool { selectedProtocol == .shadowsocks }
     private var isSOCKS5: Bool { selectedProtocol == .socks5 }
     private var isSudoku: Bool { selectedProtocol == .sudoku }
-    private var isNaive: Bool { selectedProtocol.isNaive }
     
     private var isValid: Bool {
         guard !name.isEmpty, !serverAddress.isEmpty, UInt16(serverPort) != nil else { return false }
@@ -171,9 +167,6 @@ struct ProxyEditorView: View {
             guard let min = Int(sudokuPaddingMinText), let max = Int(sudokuPaddingMaxText) else { return false }
             return (0...100).contains(min) && min <= max && max <= 100
         }
-        if isNaive {
-            return !naiveUsername.isEmpty && !naivePassword.isEmpty
-        }
         return false
     }
     
@@ -206,9 +199,6 @@ struct ProxyEditorView: View {
                         Text(String("Shadowsocks")).tag(OutboundProtocol.shadowsocks)
                         Text(String("SOCKS5")).tag(OutboundProtocol.socks5)
                         Text(String("Sudoku")).tag(OutboundProtocol.sudoku)
-                        Text(String("HTTPS")).tag(OutboundProtocol.http11)
-                        Text(String("HTTP/2")).tag(OutboundProtocol.http2)
-                        Text(String("HTTP/3")).tag(OutboundProtocol.http3)
                     } label: {
                         TextWithColorfulIcon(title: "Protocol", systemName: "arrow.down.left.arrow.up.right.circle.fill", foregroundStyle: .white, backgroundStyle: .orange.gradient)
                     }
@@ -430,23 +420,6 @@ struct ProxyEditorView: View {
                 }
                 Toggle(isOn: $sudokuEnablePureDownlink) {
                     TextWithColorfulIcon(title: "Pure Downlink", comment: "Pure Downlink for Sudoku protocol", systemName: "arrow.down.to.line.compact", foregroundStyle: .white, backgroundStyle: .teal.gradient)
-                }
-            } else if isNaive {
-                LabeledContent {
-                    TextField("Username", text: $naiveUsername)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                        .multilineTextAlignment(.trailing)
-                } label: {
-                    TextWithColorfulIcon(title: "Username", systemName: "person.fill", foregroundStyle: .white, backgroundStyle: .green.gradient)
-                }
-                LabeledContent {
-                    SecureField("Password", text: $naivePassword)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                        .multilineTextAlignment(.trailing)
-                } label: {
-                    TextWithColorfulIcon(title: "Password", systemName: "key.fill", foregroundStyle: .white, backgroundStyle: .green.gradient)
                 }
             }
         }
@@ -1129,9 +1102,6 @@ struct ProxyEditorView: View {
             sudokuHTTPMaskHost = sudoku.httpMask.host
             sudokuHTTPMaskPathRoot = sudoku.httpMask.pathRoot
             sudokuMultiplex = sudoku.multiplex
-        case .http11(let user, let pass), .http2(let user, let pass), .http3(let user, let pass):
-            naiveUsername = user
-            naivePassword = pass
         }
     }
     
@@ -1186,7 +1156,7 @@ struct ProxyEditorView: View {
     private func save() {
         guard let port = UInt16(serverPort) else { return }
         let parsedUUID: UUID
-        if isNowhere || isHysteria || isTrojan || isAnyTLS || isShadowsocks || isSOCKS5 || isSudoku || isNaive {
+        if isNowhere || isHysteria || isTrojan || isAnyTLS || isShadowsocks || isSOCKS5 || isSudoku {
             parsedUUID = self.configuration?.id ?? UUID()
         } else {
             guard let uuid = UUID(vlessString: vlessUUID) else { return }
@@ -1372,12 +1342,6 @@ struct ProxyEditorView: View {
                     pathRoot: sudokuHTTPMaskPathRoot
                 )
             ))
-        case .http11:
-            outbound = .http11(username: naiveUsername, password: naivePassword)
-        case .http2:
-            outbound = .http2(username: naiveUsername, password: naivePassword)
-        case .http3:
-            outbound = .http3(username: naiveUsername, password: naivePassword)
         }
         
         let configuration = ProxyConfiguration(

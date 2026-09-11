@@ -233,7 +233,7 @@ nonisolated final class MITMScriptHTTP2Stream: Sendable {
             case ignore
             case failNoHead
             case fail(Error)
-            case ok(windowUpdate: NaiveHTTP2Frame?, finish: Bool)
+            case ok(windowUpdate: HTTP2Frame?, finish: Bool)
         }
         let outcome: Outcome = state.withLock { state in
             switch state.phase {
@@ -253,12 +253,12 @@ nonisolated final class MITMScriptHTTP2Stream: Sendable {
                 state.body.append(body)
             }
             
-            var windowUpdate: NaiveHTTP2Frame?
+            var windowUpdate: HTTP2Frame?
             state.streamReceiveConsumed += fullPayloadCount
             if !endStream, state.streamReceiveConsumed >= Self.receiveWindow / 2 {
                 let increment = UInt32(state.streamReceiveConsumed)
                 state.streamReceiveConsumed = 0
-                windowUpdate = NaiveHTTP2Framer.windowUpdateFrame(streamID: streamID, increment: increment)
+                windowUpdate = HTTP2Framer.windowUpdateFrame(streamID: streamID, increment: increment)
             }
 
             if endStream { state.endStreamReceived = true }

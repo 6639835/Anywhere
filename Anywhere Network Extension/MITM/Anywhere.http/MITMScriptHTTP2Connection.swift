@@ -322,7 +322,7 @@ nonisolated final class MITMScriptHTTP2Connection: Multiplexer, Sendable {
 
         var data = Data()
         data.append(Self.connectionPreface)
-        data.append(NaiveHTTP2Framer.settingsFrame([
+        data.append(HTTP2Framer.settingsFrame([
             (id: 0x1, value: Self.headerTableSize),
             (id: 0x2, value: 0),                                   // ENABLE_PUSH off
             (id: 0x3, value: Self.ownMaxConcurrentStreams),        // server-initiated streams
@@ -331,7 +331,7 @@ nonisolated final class MITMScriptHTTP2Connection: Multiplexer, Sendable {
             (id: 0x6, value: UInt32(Self.maxHeaderListSize)),
         ]).serialized)
         let bump = UInt32(Self.connectionReceiveWindow - Self.httpVersionDefaultWindow)
-        data.append(NaiveHTTP2Framer.windowUpdateFrame(streamID: 0, increment: bump).serialized)
+        data.append(HTTP2Framer.windowUpdateFrame(streamID: 0, increment: bump).serialized)
 
         do {
             try await transport.send(data)
@@ -389,9 +389,9 @@ nonisolated final class MITMScriptHTTP2Connection: Multiplexer, Sendable {
 
     private func drainFrames() {
         while true {
-            let frame: NaiveHTTP2Frame? = state.withLock { state in
+            let frame: HTTP2Frame? = state.withLock { state in
                 guard state.phase != .closed else { return nil }
-                return NaiveHTTP2Framer.deserialize(from: &state.receiveBuffer)
+                return HTTP2Framer.deserialize(from: &state.receiveBuffer)
             }
             guard let frame else { break }
             routeFrame(frame)
@@ -401,7 +401,7 @@ nonisolated final class MITMScriptHTTP2Connection: Multiplexer, Sendable {
         }
     }
 
-    private func routeFrame(_ frame: NaiveHTTP2Frame) {
+    private func routeFrame(_ frame: HTTP2Frame) {
         let pending: (streamID: UInt32, flags: UInt8, block: Data)? = state.withLock { $0.pendingHeaders }
         if let pending {
             guard frame.type == .continuation, frame.streamID == pending.streamID else {
@@ -416,8 +416,8 @@ nonisolated final class MITMScriptHTTP2Connection: Multiplexer, Sendable {
         case .settings:
             handleSettings(frame)
         case .ping:
-            if !frame.hasFlag(NaiveHTTP2FrameFlags.ack) {
-                sendControlFrame(NaiveHTTP2Framer.pingAckFrame(opaqueData: frame.payload))
+            if !frame.hasFlag(HTTP2FrameFlags.ack) {
+                sendControlFrame(HTTP2Framer.pingAckFrame(opaqueData: frame.payload))
             }
         case .goaway:
             handleGoaway(frame)
@@ -435,7 +435,7 @@ nonisolated final class MITMScriptHTTP2Connection: Multiplexer, Sendable {
                 return stream
             }
             if let stream {
-                let code = NaiveHTTP2Framer.parseRstStream(payload: frame.payload) ?? 0
+                let code = HTTP2Framer.parseRstStream(payload: frame.payload) ?? 0
                 stream.handleReset(errorCode: code)
             }
         case .continuation:
@@ -445,12 +445,12 @@ nonisolated final class MITMScriptHTTP2Connection: Multiplexer, Sendable {
 
     // MARK: - HEADERS
 
-    private func beginHeaders(_ frame: NaiveHTTP2Frame) {
+    private func beginHeaders(_ frame: HTTP2Frame) {
         guard let fragment = strippedHeaderBlockFragment(frame) else {
             connectionError("malformed HEADERS framing")
             return
         }
-        if frame.hasFlag(NaiveHTTP2FrameFlags.endHeaders) {
+        if frame.hasFlag(HTTP2FrameFlags.endHeaders) {
             completeHeaderBlock(streamID: frame.streamID, flags: frame.flags, block: fragment)
         } else {
             guard fragment.count <= Self.maxHeaderListSize else {
@@ -461,7 +461,7 @@ nonisolated final class MITMScriptHTTP2Connection: Multiplexer, Sendable {
         }
     }
 
-    private func appendContinuation(_ frame: NaiveHTTP2Frame) {
+    private func appendContinuation(_ frame: HTTP2Frame) {
         enum Step { case none; case overflow; case complete(streamID: UInt32, flags: UInt8, block: Data) }
         let step: Step = state.withLock { state in
             guard var pending = state.pendingHeaders else { return .none }
@@ -469,7 +469,7 @@ nonisolated final class MITMScriptHTTP2Connection: Multiplexer, Sendable {
             guard pending.block.count <= Self.maxHeaderListSize else {
                 return .overflow
             }
-            if frame.hasFlag(NaiveHTTP2FrameFlags.endHeaders) {
+            if frame.hasFlag(HTTP2FrameFlags.endHeaders) {
                 state.pendingHeaders = nil
                 return .complete(streamID: pending.streamID, flags: pending.flags, block: pending.block)
             } else {
@@ -492,14 +492,14 @@ nonisolated final class MITMScriptHTTP2Connection: Multiplexer, Sendable {
             connectionError("HPACK decode failed")
             return
         }
-        let endStream = (flags & NaiveHTTP2FrameFlags.endStream) != 0
+        let endStream = (flags & HTTP2FrameFlags.endStream) != 0
         let stream: MITMScriptHTTP2Stream? = state.withLock { $0.streams[streamID] }
         stream?.handleHeaders(fields: decoded.fields, endStream: endStream)
     }
 
-    private func strippedHeaderBlockFragment(_ frame: NaiveHTTP2Frame) -> Data? {
+    private func strippedHeaderBlockFragment(_ frame: HTTP2Frame) -> Data? {
         var bytes = frame.payload[...]
-        if frame.hasFlag(NaiveHTTP2FrameFlags.padded) {
+        if frame.hasFlag(HTTP2FrameFlags.padded) {
             guard let padLength = bytes.first else { return nil }
             bytes = bytes.dropFirst()
             guard bytes.count >= Int(padLength) else { return nil }
@@ -514,18 +514,18 @@ nonisolated final class MITMScriptHTTP2Connection: Multiplexer, Sendable {
 
     // MARK: - DATA (connection-scoped flow control)
 
-    private func handleData(_ frame: NaiveHTTP2Frame) {
-        let endStream = frame.hasFlag(NaiveHTTP2FrameFlags.endStream)
+    private func handleData(_ frame: HTTP2Frame) {
+        let endStream = frame.hasFlag(HTTP2FrameFlags.endStream)
         let body = Self.unpaddedDataPayload(frame)
 
-        let (windowUpdate, transport, stream): (NaiveHTTP2Frame?, ProxyConnection?, MITMScriptHTTP2Stream?) = state.withLock { state in
-            var update: NaiveHTTP2Frame?
+        let (windowUpdate, transport, stream): (HTTP2Frame?, ProxyConnection?, MITMScriptHTTP2Stream?) = state.withLock { state in
+            var update: HTTP2Frame?
             if frame.payload.count > 0 {
                 state.connectionRecvConsumed += frame.payload.count
                 if state.connectionRecvConsumed >= Self.connectionReceiveWindow / 2 {
                     let increment = UInt32(state.connectionRecvConsumed)
                     state.connectionRecvConsumed = 0
-                    update = NaiveHTTP2Framer.windowUpdateFrame(streamID: 0, increment: increment)
+                    update = HTTP2Framer.windowUpdateFrame(streamID: 0, increment: increment)
                 }
             }
             return (update, state.connection, state.streams[frame.streamID])
@@ -536,8 +536,8 @@ nonisolated final class MITMScriptHTTP2Connection: Multiplexer, Sendable {
         stream?.handleData(body, fullPayloadCount: frame.payload.count, endStream: endStream)
     }
 
-    private static func unpaddedDataPayload(_ frame: NaiveHTTP2Frame) -> Data {
-        guard frame.hasFlag(NaiveHTTP2FrameFlags.padded) else { return frame.payload }
+    private static func unpaddedDataPayload(_ frame: HTTP2Frame) -> Data {
+        guard frame.hasFlag(HTTP2FrameFlags.padded) else { return frame.payload }
         guard let padLength = frame.payload.first else { return Data() }
         let withoutPadByte = frame.payload.dropFirst()
         guard withoutPadByte.count >= Int(padLength) else { return Data(withoutPadByte) }
@@ -546,12 +546,12 @@ nonisolated final class MITMScriptHTTP2Connection: Multiplexer, Sendable {
 
     // MARK: - Control-frame handlers
 
-    private func handleSettings(_ frame: NaiveHTTP2Frame) {
-        if frame.hasFlag(NaiveHTTP2FrameFlags.ack) { return }
+    private func handleSettings(_ frame: HTTP2Frame) {
+        if frame.hasFlag(HTTP2FrameFlags.ack) { return }
 
         var becameReady = false
         let transport: ProxyConnection? = state.withLock { state in
-            for (id, value) in NaiveHTTP2Framer.parseSettings(payload: frame.payload) {
+            for (id, value) in HTTP2Framer.parseSettings(payload: frame.payload) {
                 switch id {
                 case 0x3: // MAX_CONCURRENT_STREAMS
                     state.maxConcurrentStreams = min(Self.ownMaxConcurrentStreams, value)
@@ -568,7 +568,7 @@ nonisolated final class MITMScriptHTTP2Connection: Multiplexer, Sendable {
         }
 
         if let transport {
-            sendFrame(NaiveHTTP2Framer.settingsAckFrame(), on: transport)
+            sendFrame(HTTP2Framer.settingsAckFrame(), on: transport)
         }
         if becameReady {
             setupDonePoke.yield(())
@@ -576,8 +576,8 @@ nonisolated final class MITMScriptHTTP2Connection: Multiplexer, Sendable {
         }
     }
 
-    private func handleGoaway(_ frame: NaiveHTTP2Frame) {
-        let parsed = NaiveHTTP2Framer.parseGoaway(payload: frame.payload)
+    private func handleGoaway(_ frame: HTTP2Frame) {
+        let parsed = HTTP2Framer.parseGoaway(payload: frame.payload)
         if let parsed {
             logger.warning("[MITMScriptHTTP2] GOAWAY lastStreamID=\(parsed.lastStreamID) errorCode=\(parsed.errorCode)")
         }
@@ -606,8 +606,8 @@ nonisolated final class MITMScriptHTTP2Connection: Multiplexer, Sendable {
         if closeNow { close(error: AnywhereError.proxy(.http2, .goaway)) }
     }
 
-    private func handleWindowUpdate(_ frame: NaiveHTTP2Frame) {
-        guard let increment = NaiveHTTP2Framer.parseWindowUpdate(payload: frame.payload), increment > 0 else { return }
+    private func handleWindowUpdate(_ frame: HTTP2Frame) {
+        guard let increment = HTTP2Framer.parseWindowUpdate(payload: frame.payload), increment > 0 else { return }
 
         enum Update { case ok; case overflow }
         let result: Update = state.withLock { state in
@@ -639,7 +639,7 @@ nonisolated final class MITMScriptHTTP2Connection: Multiplexer, Sendable {
         guard headerBlock.count <= Int(Self.maxFrameSize) else {
             throw AnywhereError.mitm(.requestHeadersTooLarge)
         }
-        let frame = NaiveHTTP2Framer.headersFrame(streamID: streamID, headerBlock: headerBlock, endStream: endStream)
+        let frame = HTTP2Framer.headersFrame(streamID: streamID, headerBlock: headerBlock, endStream: endStream)
         let transport = try currentTransport()
         try await transport.send(frame.serialized)
     }
@@ -681,14 +681,14 @@ nonisolated final class MITMScriptHTTP2Connection: Multiplexer, Sendable {
 
             if offset >= data.count {
                 if endStream {
-                    let frame = NaiveHTTP2Framer.dataFrame(streamID: stream.streamID, payload: Data(), endStream: true)
+                    let frame = HTTP2Framer.dataFrame(streamID: stream.streamID, payload: Data(), endStream: true)
                     return .send(frame: frame.serialized, nextOffset: offset, isLast: true, transport: connection)
                 }
                 return .done
             }
 
             let maxByFlow = min(state.connectionSendWindow, streamSendWindow)
-            let chunkSize = min(data.count - offset, min(NaiveHTTP2Framer.maxDataPayload, maxByFlow))
+            let chunkSize = min(data.count - offset, min(HTTP2Framer.maxDataPayload, maxByFlow))
             guard chunkSize > 0 else { return .park }
 
             state.connectionSendWindow -= chunkSize
@@ -696,7 +696,7 @@ nonisolated final class MITMScriptHTTP2Connection: Multiplexer, Sendable {
             let start = data.startIndex + offset
             let chunk = data.subdata(in: start..<(start + chunkSize))
             let isLast = offset + chunkSize >= data.count
-            let frame = NaiveHTTP2Framer.dataFrame(streamID: stream.streamID, payload: chunk, endStream: endStream && isLast)
+            let frame = HTTP2Framer.dataFrame(streamID: stream.streamID, payload: chunk, endStream: endStream && isLast)
             return .send(frame: frame.serialized, nextOffset: offset + chunkSize, isLast: isLast, transport: connection)
         }
     }
@@ -712,13 +712,13 @@ nonisolated final class MITMScriptHTTP2Connection: Multiplexer, Sendable {
         }
     }
 
-    func sendControlFrame(_ frame: NaiveHTTP2Frame) {
+    func sendControlFrame(_ frame: HTTP2Frame) {
         let transport: ProxyConnection? = state.withLock { $0.connection }
         guard let transport else { return }
         sendFrame(frame, on: transport)
     }
 
-    private func sendFrame(_ frame: NaiveHTTP2Frame, on transport: ProxyConnection) {
+    private func sendFrame(_ frame: HTTP2Frame, on transport: ProxyConnection) {
         spawn(.controlSend(frame.serialized, transport: transport))
     }
 
@@ -748,7 +748,7 @@ nonisolated final class MITMScriptHTTP2Connection: Multiplexer, Sendable {
         guard case .removed(let rst, let closeGoaway, let transport) = outcome else { return }
 
         if rst, let transport {
-            sendFrame(NaiveHTTP2Framer.rstStreamFrame(streamID: stream.streamID, errorCode: 0x8 /* CANCEL */), on: transport)
+            sendFrame(HTTP2Framer.rstStreamFrame(streamID: stream.streamID, errorCode: 0x8 /* CANCEL */), on: transport)
         }
         if closeGoaway {
             close(error: AnywhereError.proxy(.http2, .goaway))

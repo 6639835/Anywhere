@@ -94,7 +94,7 @@ nonisolated final class HTTP3Multiplexer: Multiplexer, Sendable {
         host: String,
         port: UInt16,
         serverName: String,
-        tuning: QUICTuning = .naive,
+        tuning: QUICTuning = .http3,
         transport: QUICDatagramTransport? = nil
     ) {
         self.quic = QUICConnection(

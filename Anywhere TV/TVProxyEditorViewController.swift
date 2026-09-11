@@ -116,9 +116,6 @@ class TVProxyEditorViewController: UITableViewController {
     private var sudokuHTTPMaskPathRoot = ""
     private var sudokuMultiplex: SudokuMultiplex = .off
 
-    private var naiveUsername = ""
-    private var naivePassword = ""
-
     private var isNowhere: Bool { selectedProtocol == .nowhere }
     private var isVLESS: Bool { selectedProtocol == .vless }
     private var isVLESSReality: Bool { vlessSecurity == "reality" }
@@ -129,7 +126,6 @@ class TVProxyEditorViewController: UITableViewController {
     private var isShadowsocks: Bool { selectedProtocol == .shadowsocks }
     private var isSOCKS5: Bool { selectedProtocol == .socks5 }
     private var isSudoku: Bool { selectedProtocol == .sudoku }
-    private var isNaive: Bool { selectedProtocol.isNaive }
 
     // MARK: - Form Structure
 
@@ -172,7 +168,6 @@ class TVProxyEditorViewController: UITableViewController {
         case sudokuPureDownlink
         case sudokuHTTPMaskDisable, sudokuHTTPMaskMode, sudokuHTTPMaskTLS
         case sudokuHTTPMaskHost, sudokuHTTPMaskPathRoot, sudokuMultiplex
-        case naiveUsername, naivePassword
         case socks5Username, socks5Password
     }
 
@@ -192,9 +187,6 @@ class TVProxyEditorViewController: UITableViewController {
             ("Shadowsocks", "shadowsocks"),
             ("SOCKS5", "socks5"),
             ("Sudoku", "sudoku"),
-            ("HTTPS", "http11"),
-            ("HTTP/2", "http2"),
-            ("HTTP/3", "http3"),
         ]
         sections.append((String(localized: "Protocol"), [
             .selection(label: String(localized: "Protocol"), value: selectedProtocol.name, options: protocolOptions, key: .outboundProtocol),
@@ -253,9 +245,6 @@ class TVProxyEditorViewController: UITableViewController {
             serverRows.append(.selection(label: String(localized: "ASCII"), value: sudokuASCIIMode.displayName, options: SudokuASCIIMode.allCases.map { ($0.displayName, $0.rawValue) }, key: .sudokuASCIIMode))
             serverRows.append(.text(label: String(localized: "Custom Tables", comment: "Custom Tables for Sudoku protocol"), value: sudokuCustomTablesText, placeholder: "comma,separated", key: .sudokuCustomTables))
             serverRows.append(.toggle(label: String(localized: "Pure Downlink", comment: "Pure Downlink for Sudoku protocol"), isOn: sudokuEnablePureDownlink, key: .sudokuPureDownlink))
-        } else if isNaive {
-            serverRows.append(.text(label: String(localized: "Username"), value: naiveUsername, placeholder: String(localized: "Username"), key: .naiveUsername))
-            serverRows.append(.text(label: String(localized: "Password"), value: naivePassword, placeholder: String(localized: "Password"), key: .naivePassword, secure: true))
         }
         sections.append((String(localized: "Server"), serverRows))
 
@@ -574,7 +563,6 @@ class TVProxyEditorViewController: UITableViewController {
             guard let min = Int(sudokuPaddingMinText), let max = Int(sudokuPaddingMaxText) else { return false }
             return (0...100).contains(min) && min <= max && max <= 100
         }
-        if isNaive { return !naiveUsername.isEmpty && !naivePassword.isEmpty }
         return false
     }
 
@@ -826,8 +814,6 @@ class TVProxyEditorViewController: UITableViewController {
         case .sudokuHTTPMaskPathRoot: sudokuHTTPMaskPathRoot = value
         case .sudokuMultiplex:
             if let mode = SudokuMultiplex(rawValue: value) { sudokuMultiplex = mode }
-        case .naiveUsername: naiveUsername = value
-        case .naivePassword: naivePassword = value
         }
     }
 
@@ -969,9 +955,6 @@ class TVProxyEditorViewController: UITableViewController {
             sudokuHTTPMaskHost = sudoku.httpMask.host
             sudokuHTTPMaskPathRoot = sudoku.httpMask.pathRoot
             sudokuMultiplex = sudoku.multiplex
-        case .http11(let user, let pass), .http2(let user, let pass), .http3(let user, let pass):
-            naiveUsername = user
-            naivePassword = pass
         }
     }
 
@@ -1029,7 +1012,7 @@ class TVProxyEditorViewController: UITableViewController {
     private func save() {
         guard let port = UInt16(serverPort) else { return }
         let parsedUUID: UUID
-        if isNowhere || isHysteria || isTrojan || isAnyTLS || isShadowsocks || isSOCKS5 || isSudoku || isNaive {
+        if isNowhere || isHysteria || isTrojan || isAnyTLS || isShadowsocks || isSOCKS5 || isSudoku {
             parsedUUID = existingConfiguration?.id ?? UUID()
         } else {
             guard let parsed = UUID(uuidString: vlessUUID) else { return }
@@ -1195,12 +1178,6 @@ class TVProxyEditorViewController: UITableViewController {
                     pathRoot: sudokuHTTPMaskPathRoot
                 )
             ))
-        case .http11:
-            outbound = .http11(username: naiveUsername, password: naivePassword)
-        case .http2:
-            outbound = .http2(username: naiveUsername, password: naivePassword)
-        case .http3:
-            outbound = .http3(username: naiveUsername, password: naivePassword)
         }
 
         let configuration = ProxyConfiguration(
