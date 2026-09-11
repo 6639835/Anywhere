@@ -495,6 +495,20 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
                     debugDescription: "Invalid Nowhere morph value"
                 )
             }
+            if tcpPort.map({ $0 == 0 }) == true {
+                throw DecodingError.dataCorruptedError(
+                    forKey: hasCarrierPorts ? .nowhereTCPPort : .serverPort,
+                    in: container,
+                    debugDescription: "Invalid zero Nowhere TCP port"
+                )
+            }
+            if udpPort.map({ $0 == 0 }) == true {
+                throw DecodingError.dataCorruptedError(
+                    forKey: hasCarrierPorts ? .nowhereUDPPort : .serverPort,
+                    in: container,
+                    debugDescription: "Invalid zero Nowhere UDP port"
+                )
+            }
             guard tcpPort != nil || udpPort != nil else {
                 throw DecodingError.dataCorruptedError(
                     forKey: .serverPort,

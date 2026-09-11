@@ -100,6 +100,10 @@ nonisolated struct NowhereRuntimeConfiguration: Hashable, Sendable {
         guard proxyTCPPort != nil || proxyUDPPort != nil else {
             throw AnywhereError.proxy(.nowhere, .protocolViolation(detail: "Nowhere requires a carrier port"))
         }
+        guard proxyTCPPort.map({ $0 != 0 }) ?? true,
+              proxyUDPPort.map({ $0 != 0 }) ?? true else {
+            throw AnywhereError.proxy(.nowhere, .protocolViolation(detail: "Nowhere carrier ports must be non-zero"))
+        }
         guard (uplink == .tcp ? proxyTCPPort : proxyUDPPort) != nil,
               (downlink == .tcp ? proxyTCPPort : proxyUDPPort) != nil else {
             throw AnywhereError.proxy(.nowhere, .protocolViolation(detail: "Nowhere route uses an unavailable carrier"))
