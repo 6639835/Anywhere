@@ -753,8 +753,14 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
             let reset = AnywhereError.proxy(.nowhere, .streamReset(code: header.flowID))
             finishRemovedFlow(removed, error: reset, discardingBuffered: true)
         case .data:
-            let inbox = try admitReceive(flowID: header.flowID, count: Self.creditBytes(for: payload.count))
-            try await inbox.send(.data(payload))
+            let charged = Self.creditBytes(for: payload.count)
+            let inbox = try admitReceive(flowID: header.flowID, count: charged)
+            do {
+                try await inbox.send(.data(payload))
+            } catch {
+                guard isLocallyFinished(flowID: header.flowID) else { throw error }
+                releaseConnectionReceiveCredit(count: charged)
+            }
         case .fin:
             let flow: FlowState? = state.withLock { state in
                 guard var flow = state.flows[header.flowID], !flow.peerFinished else { return nil }
@@ -763,10 +769,23 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
                 return flow
             }
             if let flow {
-                try await flow.inbox.send(.fin)
+                do {
+                    try await flow.inbox.send(.fin)
+                } catch {
+                    guard isLocallyFinished(flowID: header.flowID) else { throw error }
+                    return
+                }
                 flow.inbox.finish()
                 flow.termination.fire(nil)
             }
+        }
+    }
+
+    private func isLocallyFinished(flowID: UInt32) -> Bool {
+        state.withLock { state in
+            guard !state.closed else { return false }
+            guard let flow = state.flows[flowID] else { return true }
+            return !flow.acceptsWrites
         }
     }
 
