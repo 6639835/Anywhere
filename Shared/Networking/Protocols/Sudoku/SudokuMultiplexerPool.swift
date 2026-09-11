@@ -13,7 +13,6 @@ nonisolated private let logger = AnywhereLogger(category: "SudokuMultiplexerPool
 // MARK: - SudokuMultiplexerRegistry
 
 nonisolated final class SudokuMultiplexerRegistry: Sendable {
-
     nonisolated static let shared = SudokuMultiplexerRegistry()
 
     private struct Key: Hashable {

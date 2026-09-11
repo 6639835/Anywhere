@@ -369,9 +369,6 @@ nonisolated private enum SudokuTableCache {
 }
 
 nonisolated final class SudokuTables: Sendable {
-    /// The table pair is immutable after construction (`SudokuTable`/`SudokuTablePair` are
-    /// `Sendable`), so it's shared read-only — no lock. Multiple `SudokuTables` may share the
-    /// same cached pair; that's safe precisely because nothing mutates it.
     private let pair: SudokuTablePair
     let sendsTableHint: Bool
 
@@ -480,12 +477,8 @@ nonisolated final class BlockingProxyStream: Sendable {
 }
 
 private nonisolated extension Data {
-    /// Preserve the existing zero-based Data convention at ProxyConnection
-    /// boundaries. Internal record/mux parsing can keep shared slices instead.
     func zeroBasedData() -> Data { startIndex == 0 ? self : Data(self) }
-
-    // Slices retain their original indices. All protocol offsets are relative
-    // to the first byte, independently of the Data's startIndex.
+    
     func byte(at offset: Int) -> UInt8 { self[startIndex + offset] }
 
     func prefixData(_ count: Int) -> Data {
@@ -875,7 +868,6 @@ nonisolated final class SudokuConnectionFactory: Sendable {
         let task = Task { [weak self] in
             try? await Task.sleep(for: .seconds(delay))
             guard let self, !Task.isCancelled else { return }
-            // Deregister; a nil removal means `closeAll` already pulled (and cancelled) us.
             let stillTracked = self.preparedState.withLock { $0.scheduledTasks.removeValue(forKey: id) != nil }
             guard stillTracked else { return }
             operation()
@@ -1576,7 +1568,6 @@ nonisolated final class SudokuHTTPMaskTransport: Sendable {
         let maxBatchBytes = mode == .poll ? 49_152 : 262_144
         let flushInterval: TimeInterval = 0.005
         while true {
-            // 1. Wait for data or close.
             waitData: while true {
                 let step: Step<Void> = state.withLock { s in
                     if s.phase == .closed || !s.txQueue.isEmpty { return .done(()) }
@@ -1588,8 +1579,7 @@ nonisolated final class SudokuHTTPMaskTransport: Sendable {
                 }
             }
             if state.withLock({ $0.phase == .closed }) { return }
-
-            // 2. Coalesce a batch up to maxBatchBytes, bounded by a short flush deadline.
+            
             let flushDeadline = Date().addingTimeInterval(flushInterval)
             coalesce: while true {
                 let step: Step<Void> = state.withLock { s in
@@ -1604,8 +1594,7 @@ nonisolated final class SudokuHTTPMaskTransport: Sendable {
                     await waitSignal(observed: generation, until: flushDeadline)
                 }
             }
-
-            // 3. Read the batch.
+            
             var toResume: [AsyncStream<Never>.Continuation] = []
             let (batch, isClosed): (Data?, Bool) = state.withLock { s in
                 if s.phase == .closed { return (nil, true) }
@@ -1861,9 +1850,7 @@ nonisolated final class SudokuRecordStream: Sendable {
         if data.isEmpty { return }
         try await sendBuffers([data])
     }
-
-    /// Serializes the complete logical write, including records crossing a
-    /// header/payload boundary. Only those crossing records need gathering.
+    
     func sendBuffers(_ buffers: [Data]) async throws {
         try await chainedSend { [self] in
             var pending = SudokuDataQueue()
@@ -1964,7 +1951,6 @@ nonisolated final class SudokuRecordStream: Sendable {
             key = SudokuNativeCrypto.recordSymmetricKey(base: state.baseRecv, method: method, epoch: epoch)
         }
         let plain = try SudokuNativeCrypto.openRecord(method: method, key: key, body: body)
-        // Publish the new epoch/key only after authentication succeeds.
         state.epochKey = key
         state.recvEpoch = epoch
         state.recvSeq = seq &+ 1

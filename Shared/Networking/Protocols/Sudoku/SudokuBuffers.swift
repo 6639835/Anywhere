@@ -6,10 +6,7 @@
 import Foundation
 import Synchronization
 
-/// Buffers are writable only during initialization. Publishing a Data transfers
-/// ownership until its last slice is released, including asynchronous sends.
 nonisolated enum SudokuBufferPool {
-    // Bounded globally, with no eager per-connection allocation.
     private static let sizes = [4_096, 16_384, 65_536, 131_072, 262_144, 524_288, 1_048_576]
     private struct State {
         var buckets = [[Storage]](repeating: [], count: sizes.count)
@@ -18,9 +15,7 @@ nonisolated enum SudokuBufferPool {
     private static let idle = Mutex(State())
     private static let maxIdlePerSize = 2
     private static let maxIdleBytes = 2 * 1024 * 1024
-
-    // The pool lock transfers exclusive ownership. After publication only Data
-    // reads the bytes; its deallocator returns storage after all readers finish.
+    
     private final class Storage: @unchecked Sendable {
         let bytes: UnsafeMutableRawPointer
         let capacity: Int
@@ -74,8 +69,6 @@ nonisolated enum SudokuBufferPool {
     }
 }
 
-/// Retains immutable chunks instead of copying payloads into a growing Data.
-/// Consumed slots are cleared immediately; compaction moves only references.
 nonisolated struct SudokuDataQueue {
     private var chunks: [Data] = []
     private var head = 0
@@ -86,8 +79,6 @@ nonisolated struct SudokuDataQueue {
 
     mutating func append(_ data: Data) {
         guard !data.isEmpty else { return }
-        // Bound metadata for peers sending many tiny fragments. Large payloads
-        // stay shared; only small tails are coalesced, up to one 4 KiB chunk.
         if data.count <= 1024, let last = chunks.indices.last,
            (last > head || offset == 0), chunks[last].count <= 4096 - data.count {
             chunks[last].append(data)
@@ -102,8 +93,7 @@ nonisolated struct SudokuDataQueue {
         precondition(start >= 0 && start <= data.count)
         append(data.dropFirst(start))
     }
-
-    /// May return fewer than max bytes at a chunk boundary, as a stream read may.
+    
     mutating func read(max: Int) -> Data {
         guard max > 0, !isEmpty else { return Data() }
         let chunk = chunks[head]
@@ -113,8 +103,7 @@ nonisolated struct SudokuDataQueue {
         consume(n)
         return result
     }
-
-    /// Used only when the caller needs a contiguous batch (e.g. one HTTP body).
+    
     mutating func readCoalesced(max: Int) -> Data {
         let n = min(max, count)
         guard n > 0 else { return Data() }

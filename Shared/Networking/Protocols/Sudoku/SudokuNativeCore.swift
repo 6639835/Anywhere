@@ -449,8 +449,6 @@ private nonisolated func sudokuHasUniqueMatch(grids: [[UInt8]], positions: [UInt
 
 nonisolated final class SudokuTable: Sendable {
     fileprivate let layout: SudokuLayout
-    /// Table fingerprint published once at construction (immutable thereafter), so the whole
-    /// object is `Sendable` and can be shared read-only across tasks without a lock.
     let hint: UInt32
     private let encodeTable: [[SIMD4<UInt8>]]
     private let decodeMap: [UInt32: UInt8]
@@ -495,8 +493,6 @@ nonisolated final class SudokuTable: Sendable {
     }
 
     func encode(_ data: Data, rng: inout SudokuXorshift64Star, paddingThreshold: UInt64) -> Data {
-        // Each byte emits four hints and at most five pads, plus one final pad.
-        // Reserve the worst case once; no growth or Data.append in the hot loop.
         let capacity = paddingThreshold == 0 ? data.count * 4 : data.count * 9 + 1
         let paddingPool = layout.paddingPool
         let paddingCount = paddingPool.count
@@ -518,8 +514,6 @@ nonisolated final class SudokuTable: Sendable {
                     }
                     return
                 }
-                // A 100% threshold skips probability draws in the legacy codec.
-                // Preserve this distinction and the exact order of random draws.
                 let alwaysPad = paddingThreshold >= sudokuProbabilityOne
                 for byte in input {
                     if alwaysPad || UInt64(rng.nextUInt32()) < paddingThreshold {
@@ -558,8 +552,6 @@ nonisolated final class SudokuTablePair: Sendable {
         let mode = try Self.parseMode(asciiMode)
         let uplinkPattern = mode.uplink == "entropy" ? customUplink : ""
         let downlinkPattern = mode.downlink == "entropy" ? customDownlink : ""
-        // The fingerprint is a property of the pair (key + mode + patterns), so compute it up
-        // front and hand it to each table — the tables are then immutable from birth.
         let canonical = mode.uplink == "ascii" && mode.downlink == "ascii" ? "prefer_ascii" : (mode.uplink == "entropy" && mode.downlink == "entropy" ? "prefer_entropy" : asciiMode)
         let hint = Self.tableHintFingerprint(key: key, mode: canonical, uplinkPattern: uplinkPattern, downlinkPattern: downlinkPattern)
         uplink = try SudokuTable(key: key, token: mode.uplink, customPattern: uplinkPattern, hint: hint)
