@@ -10546,6 +10546,9 @@
         }
       }
     },
+    "Morph" : {
+      "shouldTranslate" : false
+    },
     "Move Down" : {
       "localizations" : {
         "ar" : {
@@ -10654,7 +10657,6 @@
       "shouldTranslate" : false
     },
     "Multiplex" : {
-      "comment" : "Multiplex for Sudoku protocol",
       "shouldTranslate" : false
     },
     "Muted" : {
@@ -17117,6 +17119,58 @@
     "TCP" : {
       "shouldTranslate" : false
     },
+    "TCP Port" : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "منفذ TCP"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TCP Port"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Puerto TCP"
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "پورت TCP"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Порт TCP"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TCP Bağlantı Noktası"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cổng TCP"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TCP 端口"
+          }
+        }
+      }
+    },
     "Terms" : {
       "localizations" : {
         "ar" : {
@@ -18374,6 +18428,58 @@
     },
     "UDP" : {
       "shouldTranslate" : false
+    },
+    "UDP Port" : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "منفذ UDP"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "UDP Port"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Puerto UDP"
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "پورت UDP"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Порт UDP"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "UDP Bağlantı Noktası"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cổng UDP"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "UDP 端口"
+          }
+        }
+      }
     },
     "Unblocked" : {
       "localizations" : {

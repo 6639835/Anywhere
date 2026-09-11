@@ -1026,7 +1026,7 @@ struct ProxyEditorView: View {
         }
         
         if isSudoku {
-            Section(String(localized: "Multiplex", comment: "Multiplex for Sudoku protocol")) {
+            Section(String(localized: "Multiplex")) {
                 Picker(selection: $sudokuMultiplex) {
                     ForEach(SudokuMultiplex.allCases, id: \.self) { mode in
                         Text(mode.displayName).tag(mode)

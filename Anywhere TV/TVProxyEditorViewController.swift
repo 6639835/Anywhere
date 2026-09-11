@@ -472,7 +472,7 @@ class TVProxyEditorViewController: UITableViewController {
 
         if isSudoku {
             sections.append((
-                String(localized: "Multiplex", comment: "Multiplex for Sudoku protocol"),
+                String(localized: "Multiplex"),
                 [
                     .selection(
                         label: String(localized: "Mode"),
