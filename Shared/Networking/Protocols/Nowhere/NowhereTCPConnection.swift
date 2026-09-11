@@ -39,7 +39,7 @@ actor NowhereTCPConnection: ProxyConnection, NowhereTerminationObservable {
         var flowRole: NowhereProtocol.FlowRole?
     }
 
-    private let configuration: NowhereConfiguration
+    private let configuration: NowhereRuntimeConfiguration
     private let connectHost: String
     private let tunnel: ProxyConnection?
 
@@ -50,7 +50,7 @@ actor NowhereTCPConnection: ProxyConnection, NowhereTerminationObservable {
     private var receiveInProgress = false
 
     init(
-        configuration: NowhereConfiguration,
+        configuration: NowhereRuntimeConfiguration,
         connectHost: String,
         tunnel: ProxyConnection?
     ) {
@@ -110,12 +110,30 @@ actor NowhereTCPConnection: ProxyConnection, NowhereTerminationObservable {
 
         do {
             let record: TLSRecordConnection
-            if let tunnel {
+            if configuration.morph {
+                let base: any ByteTransport
+                if let tunnel {
+                    base = TunneledTransport(tunnel: tunnel)
+                } else {
+                    let tcp = TCPTransport(
+                        host: connectHost,
+                        port: try configuration.proxyPort(for: .tcp),
+                        resolvesViaProxyDNS: true
+                    )
+                    try await tcp.connect()
+                    base = tcp
+                }
+                guard let keys = configuration.morphKeys else {
+                    base.cancel()
+                    throw AnywhereError.proxy(.nowhere, .protocolViolation(detail: "Missing Morph keys"))
+                }
+                record = try await client.connect(transport: NowhereMorphTCPTransport(inner: base, keys: keys))
+            } else if let tunnel {
                 record = try await client.connect(overTunnel: tunnel)
             } else {
                 record = try await client.connect(
                     host: connectHost,
-                    port: configuration.proxyPort
+                    port: try configuration.proxyPort(for: .tcp)
                 )
             }
 

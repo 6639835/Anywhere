@@ -93,13 +93,7 @@ nonisolated enum OutboundProtocol: String, Codable, CaseIterable {
 // MARK: - Outbound Protocol Configuration
 
 nonisolated enum Outbound: Hashable, Sendable {
-    case nowhere(
-        key: String,
-        uplink: NowhereNetwork,
-        downlink: NowhereNetwork,
-        multiplex: Bool,
-        securityLayer: GenericSecurityLayer
-    )
+    case nowhere(NowhereConfiguration)
     case vless(
         uuid: UUID,
         encryption: String,
@@ -228,7 +222,7 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
     
     var genericSecurityLayer: GenericSecurityLayer {
         switch outbound {
-        case .nowhere(_, _, _, _, let security): security
+        case .nowhere(let configuration):        .tls(TLSConfiguration(serverName: configuration.serverName, alpn: [NowhereProtocol.defaultALPN], minVersion: .tls13, maxVersion: .tls13))
         case .trojan(_, let security):           security
         case .anytls(_, _, _, _, let security):  security
         case .rfc(_, _, let security):           security
@@ -304,19 +298,24 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
     }
     
     var nowhereUplink: NowhereNetwork {
-        if case .nowhere(_, let uplink, _, _, _) = outbound { return uplink }
+        if case .nowhere(let configuration) = outbound { return configuration.uplink }
         return .udp
     }
 
     var nowhereDownlink: NowhereNetwork {
-        if case .nowhere(_, _, let downlink, _, _) = outbound { return downlink }
+        if case .nowhere(let configuration) = outbound { return configuration.downlink }
         return .udp
     }
 
     var nowhereMultiplex: Bool {
-        if case .nowhere(_, let uplink, let downlink, let multiplex, _) = outbound {
-            return multiplex && (uplink == .tcp || downlink == .tcp)
+        if case .nowhere(let configuration) = outbound {
+            return configuration.multiplex
         }
+        return false
+    }
+
+    var nowhereMorph: Bool {
+        if case .nowhere(let configuration) = outbound { return configuration.morph }
         return false
     }
 
@@ -373,7 +372,11 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
         self.id = id
         self.name = name
         self.serverAddress = serverAddress
-        self.serverPort = serverPort
+        if case .nowhere(let configuration) = outbound {
+            self.serverPort = configuration.canonicalPort ?? serverPort
+        } else {
+            self.serverPort = serverPort
+        }
         self.resolvedIP = resolvedIP
         self.subscriptionId = subscriptionId
         self.outbound = outbound
@@ -409,7 +412,7 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
 
     private enum CodingKeys: String, CodingKey {
         case id, name, serverAddress, serverPort, resolvedIP, subscriptionId
-        case nowhereKey, nowhereSNI, nowhereALPN, up, down, mux
+        case nowhereKey, nowhereSNI, nowhereALPN, nowhereTCPPort, nowhereUDPPort, up, down, mux, morph
         case outboundProtocol, uuid, encryption, flow
         case transport, websocket, httpUpgrade, grpc, xhttp
         case security, tls, reality
@@ -433,7 +436,7 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
         id = try container.decode(UUID.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
         serverAddress = try container.decode(String.self, forKey: .serverAddress)
-        serverPort = try container.decode(UInt16.self, forKey: .serverPort)
+        let decodedServerPort = try container.decode(UInt16.self, forKey: .serverPort)
         resolvedIP = try container.decodeIfPresent(String.self, forKey: .resolvedIP)
         subscriptionId = try container.decodeIfPresent(UUID.self, forKey: .subscriptionId)
 
@@ -442,8 +445,10 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
         switch `protocol` {
         case .nowhere:
             let explicitSNI = try container.decodeIfPresent(String.self, forKey: .nowhereSNI)
-            let alpnString = try container.decodeIfPresent(String.self, forKey: .nowhereALPN)
-            let alpn = alpnString.flatMap { $0.isEmpty ? nil : [$0] }
+            _ = try container.decodeIfPresent(String.self, forKey: .nowhereALPN)
+            let hasCarrierPorts = container.contains(.nowhereTCPPort) || container.contains(.nowhereUDPPort)
+            let tcpPort = hasCarrierPorts ? try container.decodeIfPresent(UInt16.self, forKey: .nowhereTCPPort) : decodedServerPort
+            let udpPort = hasCarrierPorts ? try container.decodeIfPresent(UInt16.self, forKey: .nowhereUDPPort) : decodedServerPort
             let rawUp = try container.decodeIfPresent(String.self, forKey: .up)
             let rawDown = try container.decodeIfPresent(String.self, forKey: .down)
             let uplink = rawUp.flatMap(NowhereNetwork.init(rawValue:)) ?? .tcp
@@ -474,17 +479,47 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
                     debugDescription: "Invalid Nowhere mux value"
                 )
             }
-            outbound = .nowhere(
+            let decodedMorph: Bool
+            let morphMissing = !container.contains(.morph)
+            let morphNull = morphMissing ? false : try container.decodeNil(forKey: .morph)
+            if morphMissing || morphNull {
+                decodedMorph = false
+            } else if let value = try? container.decode(Bool.self, forKey: .morph) {
+                decodedMorph = value
+            } else if let value = try? container.decode(Int.self, forKey: .morph), value == 0 || value == 1 {
+                decodedMorph = value == 1
+            } else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .morph,
+                    in: container,
+                    debugDescription: "Invalid Nowhere morph value"
+                )
+            }
+            guard tcpPort != nil || udpPort != nil else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .serverPort,
+                    in: container,
+                    debugDescription: "Nowhere requires at least one carrier port"
+                )
+            }
+            guard (uplink == .tcp ? tcpPort : udpPort) != nil,
+                  (downlink == .tcp ? tcpPort : udpPort) != nil else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .up,
+                    in: container,
+                    debugDescription: "Nowhere route uses an unavailable carrier"
+                )
+            }
+            outbound = .nowhere(NowhereConfiguration(
                 key: try container.decodeIfPresent(String.self, forKey: .nowhereKey) ?? "",
+                tcpPort: tcpPort,
+                udpPort: udpPort,
                 uplink: uplink,
                 downlink: downlink,
                 multiplex: (uplink == .tcp || downlink == .tcp) && decodedMultiplex,
-                securityLayer: .tls(TLSConfiguration(
-                    serverName: (explicitSNI?.isEmpty == false && explicitSNI != "none" ? explicitSNI : nil)
-                        ?? serverAddress,
-                    alpn: alpn
-                ))
-            )
+                morph: decodedMorph,
+                serverName: (explicitSNI?.isEmpty == false && explicitSNI != "none" ? explicitSNI : nil) ?? serverAddress
+            ))
 
         case .vless:
             let transportLayerString = try container.decodeIfPresent(String.self, forKey: .transport) ?? "tcp"
@@ -600,6 +635,12 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
             )
         }
 
+        if case .nowhere(let configuration) = outbound {
+            serverPort = configuration.canonicalPort ?? decodedServerPort
+        } else {
+            serverPort = decodedServerPort
+        }
+
         chain = try container.decodeIfPresent([ProxyConfiguration].self, forKey: .chain)
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? deletedAt ?? .distantPast
         deletedAt = try container.decodeIfPresent(Date.self, forKey: .deletedAt)
@@ -618,18 +659,17 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
         try container.encode(outboundProtocol, forKey: .outboundProtocol)
         
         switch outbound {
-        case .nowhere(let key, let uplink, let downlink, let multiplex, let securityLayer):
-            let tls = securityLayer.tlsConfiguration ?? TLSConfiguration(serverName: serverAddress)
+        case .nowhere(let configuration):
             try container.encode(id, forKey: .uuid)
             try container.encode("none", forKey: .encryption)
-            try container.encode(key, forKey: .nowhereKey)
-            try container.encode(uplink.rawValue, forKey: .up)
-            try container.encode(downlink.rawValue, forKey: .down)
-            try container.encode((uplink == .tcp || downlink == .tcp) && multiplex, forKey: .mux)
-            try container.encode(tls.serverName, forKey: .nowhereSNI)
-            if let alpn = tls.alpn?.first, !alpn.isEmpty {
-                try container.encode(alpn, forKey: .nowhereALPN)
-            }
+            try container.encode(configuration.key, forKey: .nowhereKey)
+            try container.encodeIfPresent(configuration.tcpPort, forKey: .nowhereTCPPort)
+            try container.encodeIfPresent(configuration.udpPort, forKey: .nowhereUDPPort)
+            try container.encode(configuration.uplink.rawValue, forKey: .up)
+            try container.encode(configuration.downlink.rawValue, forKey: .down)
+            try container.encode(configuration.multiplex, forKey: .mux)
+            try container.encode(configuration.morph, forKey: .morph)
+            try container.encode(configuration.serverName, forKey: .nowhereSNI)
         case .vless(let uuid, let encryption, let flow, let transport, let security):
             try container.encode(uuid, forKey: .uuid)
             try container.encode(encryption, forKey: .encryption)

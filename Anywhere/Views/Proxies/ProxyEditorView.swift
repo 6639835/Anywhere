@@ -19,11 +19,13 @@ struct ProxyEditorView: View {
     @State private var serverPort = ""
     
     @State private var nowhereKey = ""
+    @State private var nowhereTCPPort = ""
+    @State private var nowhereUDPPort = ""
     @State private var nowhereUplink: NowhereNetwork = .tcp
     @State private var nowhereDownlink: NowhereNetwork = .tcp
     @State private var nowhereMultiplex = false
+    @State private var nowhereMorph = false
     @State private var nowhereSNI = ""
-    @State private var nowhereALPN = ""
 
     @State private var vlessUUID = ""
     @State private var vlessEncryption = "none"
@@ -137,12 +139,17 @@ struct ProxyEditorView: View {
     private var isRFCTLS: Bool { rfcSecurity == "tls" }
     
     private var isValid: Bool {
-        guard !name.isEmpty, !serverAddress.isEmpty, UInt16(serverPort) != nil else { return false }
+        guard !name.isEmpty, !serverAddress.isEmpty else { return false }
         if isNowhere {
+            let tcpPort = validNowherePort(nowhereTCPPort)
+            let udpPort = validNowherePort(nowhereUDPPort)
             return !nowhereKey.isEmpty
             && nowhereKey.utf8.count <= 255
-            && nowhereALPN.utf8.count <= 255
+            && (nowhereTCPPort.isEmpty || tcpPort != nil)
+            && (nowhereUDPPort.isEmpty || udpPort != nil)
+            && (tcpPort != nil || udpPort != nil)
         }
+        guard UInt16(serverPort) != nil else { return false }
         if isVLESS {
             guard UUID(vlessString: vlessUUID) != nil,
                   !isVLESSReality || (!vlessRealitySNI.isEmpty && !vlessRealityPublicKey.isEmpty) else { return false }
@@ -258,12 +265,31 @@ struct ProxyEditorView: View {
             } label: {
                 TextWithColorfulIcon(title: "Address", systemName: "network", foregroundStyle: .white, backgroundStyle: .blue.gradient)
             }
-            LabeledContent {
-                TextField(String("443"), text: $serverPort)
-                    .keyboardType(.numberPad)
-                    .multilineTextAlignment(.trailing)
-            } label: {
-                TextWithColorfulIcon(title: "Port", systemName: "123.rectangle", foregroundStyle: .white, backgroundStyle: .cyan.gradient)
+            if isNowhere {
+                LabeledContent {
+                    TextField("TCP Port", text: $nowhereTCPPort)
+                        .keyboardType(.numberPad)
+                        .multilineTextAlignment(.trailing)
+                        .onChange(of: nowhereTCPPort) { reconcileNowhereCarriers() }
+                } label: {
+                    TextWithColorfulIcon(title: "TCP Port", systemName: "123.rectangle", foregroundStyle: .white, backgroundStyle: .cyan.gradient)
+                }
+                LabeledContent {
+                    TextField("UDP Port", text: $nowhereUDPPort)
+                        .keyboardType(.numberPad)
+                        .multilineTextAlignment(.trailing)
+                        .onChange(of: nowhereUDPPort) { reconcileNowhereCarriers() }
+                } label: {
+                    TextWithColorfulIcon(title: "UDP Port", systemName: "123.rectangle", foregroundStyle: .white, backgroundStyle: .cyan.gradient)
+                }
+            } else {
+                LabeledContent {
+                    TextField(String("443"), text: $serverPort)
+                        .keyboardType(.numberPad)
+                        .multilineTextAlignment(.trailing)
+                } label: {
+                    TextWithColorfulIcon(title: "Port", systemName: "123.rectangle", foregroundStyle: .white, backgroundStyle: .cyan.gradient)
+                }
             }
             if isNowhere {
                 LabeledContent {
@@ -462,21 +488,34 @@ struct ProxyEditorView: View {
         if isNowhere {
             Section("Network") {
                 Picker(selection: $nowhereUplink) {
-                    Text(verbatim: "TCP").tag(NowhereNetwork.tcp)
-                    Text(verbatim: "UDP").tag(NowhereNetwork.udp)
+                    if validNowherePort(nowhereTCPPort) != nil || validNowherePort(nowhereUDPPort) == nil {
+                        Text(verbatim: "TCP").tag(NowhereNetwork.tcp)
+                    }
+                    if validNowherePort(nowhereUDPPort) != nil {
+                        Text(verbatim: "UDP").tag(NowhereNetwork.udp)
+                    }
                 } label: {
                     TextWithColorfulIcon(title: "Upload", systemName: "arrow.up.circle.fill", foregroundStyle: .white, backgroundStyle: .blue.gradient)
                 }
+                .disabled(!hasBothNowhereCarriers)
                 Picker(selection: $nowhereDownlink) {
-                    Text(verbatim: "TCP").tag(NowhereNetwork.tcp)
-                    Text(verbatim: "UDP").tag(NowhereNetwork.udp)
+                    if validNowherePort(nowhereTCPPort) != nil || validNowherePort(nowhereUDPPort) == nil {
+                        Text(verbatim: "TCP").tag(NowhereNetwork.tcp)
+                    }
+                    if validNowherePort(nowhereUDPPort) != nil {
+                        Text(verbatim: "UDP").tag(NowhereNetwork.udp)
+                    }
                 } label: {
                     TextWithColorfulIcon(title: "Download", systemName: "arrow.down.circle.fill", foregroundStyle: .white, backgroundStyle: .blue.gradient)
                 }
+                .disabled(!hasBothNowhereCarriers)
                 Toggle(isOn: nowhereUplink == .tcp || nowhereDownlink == .tcp ? $nowhereMultiplex : .constant(true)) {
                     TextWithColorfulIcon(title: "Multiplex", systemName: "rectangle.split.3x1.fill", foregroundStyle: .white, backgroundStyle: .teal.gradient)
                 }
                 .disabled(nowhereUplink == .udp && nowhereDownlink == .udp)
+                Toggle(isOn: $nowhereMorph) {
+                    TextWithColorfulIcon(title: "Morph", systemName: "waveform.path", foregroundStyle: .white, backgroundStyle: .indigo.gradient)
+                }
             }
         } else if isVLESS {
             Section {
@@ -724,14 +763,6 @@ struct ProxyEditorView: View {
                         .multilineTextAlignment(.trailing)
                 } label: {
                     TextWithColorfulIcon(title: "SNI", systemName: "network", foregroundStyle: .white, backgroundStyle: .blue.gradient)
-                }
-                LabeledContent {
-                    TextField("ALPN", text: $nowhereALPN)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                        .multilineTextAlignment(.trailing)
-                } label: {
-                    TextWithColorfulIcon(title: "ALPN", systemName: "list.bullet", foregroundStyle: .white, backgroundStyle: .blue.gradient)
                 }
             }
         } else if isHysteria {
@@ -1046,14 +1077,15 @@ struct ProxyEditorView: View {
         name = configuration.name
         serverAddress = configuration.serverAddress
         serverPort = String(configuration.serverPort)
-        if case .nowhere(let key, let uplink, let downlink, let multiplex, let securityLayer) = configuration.outbound {
-            let tls = securityLayer.tlsConfiguration ?? TLSConfiguration(serverName: "")
-            nowhereKey = key
-            nowhereUplink = uplink
-            nowhereDownlink = downlink
-            nowhereMultiplex = (uplink == .tcp || downlink == .tcp) && multiplex
-            nowhereSNI = tls.serverName
-            nowhereALPN = tls.alpn?.first ?? ""
+        if case .nowhere(let nowhere) = configuration.outbound {
+            nowhereKey = nowhere.key
+            nowhereTCPPort = nowhere.tcpPort.map(String.init) ?? ""
+            nowhereUDPPort = nowhere.udpPort.map(String.init) ?? ""
+            nowhereUplink = nowhere.uplink
+            nowhereDownlink = nowhere.downlink
+            nowhereMultiplex = nowhere.multiplex
+            nowhereMorph = nowhere.morph
+            nowhereSNI = nowhere.serverName
         }
         if case .vless(let vlessUUID, let vlessEncryption, let vlessFlow, _, _) = configuration.outbound {
             self.vlessUUID = vlessUUID.uuidString
@@ -1242,7 +1274,16 @@ struct ProxyEditorView: View {
     }
     
     private func save() {
-        guard let port = UInt16(serverPort) else { return }
+        let nowhereTCP = validNowherePort(nowhereTCPPort)
+        let nowhereUDP = validNowherePort(nowhereUDPPort)
+        let port: UInt16
+        if isNowhere {
+            guard let canonicalPort = nowhereTCP ?? nowhereUDP else { return }
+            port = canonicalPort
+        } else {
+            guard let parsedPort = UInt16(serverPort) else { return }
+            port = parsedPort
+        }
         let parsedUUID: UUID
         if isNowhere || isHysteria || isTrojan || isAnyTLS || isShadowsocks || isSOCKS5 || isSudoku || isRFC {
             parsedUUID = self.configuration?.id ?? UUID()
@@ -1333,14 +1374,16 @@ struct ProxyEditorView: View {
         switch selectedProtocol {
         case .nowhere:
             let sni = nowhereSNI.isEmpty ? bareAddress : nowhereSNI
-            let alpn: [String]? = nowhereALPN.isEmpty ? nil : [nowhereALPN]
-            outbound = .nowhere(
+            outbound = .nowhere(NowhereConfiguration(
                 key: nowhereKey,
+                tcpPort: nowhereTCP,
+                udpPort: nowhereUDP,
                 uplink: nowhereUplink,
                 downlink: nowhereDownlink,
                 multiplex: (nowhereUplink == .tcp || nowhereDownlink == .tcp) && nowhereMultiplex,
-                securityLayer: .tls(TLSConfiguration(serverName: sni, alpn: alpn))
-            )
+                morph: nowhereMorph,
+                serverName: sni
+            ))
         case .vless:
             let vlessXrayTransportLayer: XrayTransportLayer
             if let vlessWebSocketConfiguration { vlessXrayTransportLayer = .ws(vlessWebSocketConfiguration) }
@@ -1464,5 +1507,27 @@ struct ProxyEditorView: View {
         
         onSave(configuration)
         dismiss()
+    }
+
+    private func validNowherePort(_ value: String) -> UInt16? {
+        guard let port = UInt16(value), port != 0 else { return nil }
+        return port
+    }
+
+    private var hasBothNowhereCarriers: Bool {
+        validNowherePort(nowhereTCPPort) != nil && validNowherePort(nowhereUDPPort) != nil
+    }
+
+    private func reconcileNowhereCarriers() {
+        let hasTCP = validNowherePort(nowhereTCPPort) != nil
+        let hasUDP = validNowherePort(nowhereUDPPort) != nil
+        if hasTCP && !hasUDP {
+            nowhereUplink = .tcp
+            nowhereDownlink = .tcp
+        } else if hasUDP && !hasTCP {
+            nowhereUplink = .udp
+            nowhereDownlink = .udp
+            nowhereMultiplex = false
+        }
     }
 }

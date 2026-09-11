@@ -13,7 +13,7 @@ nonisolated final class NowhereMultiplexerRegistry: Sendable {
 
     private struct Key: Hashable {
         let configurationID: UUID
-        let configuration: NowhereConfiguration
+        let configuration: NowhereRuntimeConfiguration
         let connectHost: String
         let chain: [ProxyConfiguration]
     }
@@ -37,7 +37,7 @@ nonisolated final class NowhereMultiplexerRegistry: Sendable {
 
     func acquire(
         configurationID: UUID,
-        configuration: NowhereConfiguration,
+        configuration: NowhereRuntimeConfiguration,
         connectHost: String,
         chain: [ProxyConfiguration],
         flowID: UInt32,
@@ -100,7 +100,7 @@ nonisolated private final class NowhereMultiplexerPool: Sendable {
 
     private struct Extra: Sendable {
         var nextBuildIdentifier: UInt64 = 0
-        var pendingBuild: PendingBuild?
+        var pendingBuilds: [UInt64: PendingBuild] = [:]
     }
 
     private typealias Base = MultiplexerPool<NowhereMultiplexer, Extra>
@@ -170,12 +170,12 @@ nonisolated private final class NowhereMultiplexerPool: Sendable {
 
     func closeAll() {
         pool.retire()
-        let pending = pool.state.withLock { state -> Task<NowhereMultiplexer, Error>? in
-            let task = state.extra.pendingBuild?.task
-            state.extra.pendingBuild = nil
-            return task
+        let pending = pool.state.withLock { state -> [Task<NowhereMultiplexer, Error>] in
+            let tasks = state.extra.pendingBuilds.values.map(\.task)
+            state.extra.pendingBuilds.removeAll(keepingCapacity: false)
+            return tasks
         }
-        pending?.cancel()
+        for task in pending { task.cancel() }
     }
 
     private func acquisition(flowID: UInt32) throws -> Acquisition {
@@ -189,9 +189,18 @@ nonisolated private final class NowhereMultiplexerPool: Sendable {
             }
             state.multiplexers[Self.bucket] = live
 
-            let candidates = live.sorted { lhs, rhs in
-                lhs.activeStreamCount < rhs.activeStreamCount
+            let sorted = live.sorted { lhs, rhs in
+                let left = lhs.loadSnapshot
+                let right = rhs.loadSnapshot
+                if left.connectionCredit != right.connectionCredit {
+                    return left.connectionCredit > right.connectionCredit
+                }
+                if left.outboundFrames != right.outboundFrames {
+                    return left.outboundFrames < right.outboundFrames
+                }
+                return left.activeStreams < right.activeStreams
             }
+            let candidates = sorted.filter { $0.activeStreamCount == 0 }
             for multiplexer in candidates {
                 let onEnd: @Sendable () -> Void = { [weak self, weak multiplexer] in
                     guard let self, let multiplexer else { return }
@@ -212,23 +221,39 @@ nonisolated private final class NowhereMultiplexerPool: Sendable {
                 }
             }
 
-            if let pending = state.extra.pendingBuild {
-                return .build(pending)
+            if live.count + state.extra.pendingBuilds.count >= NowhereMultiplexerConstants.maximumMultiplexers {
+                for multiplexer in sorted {
+                    let onEnd: @Sendable () -> Void = { [weak self, weak multiplexer] in
+                        guard let self, let multiplexer else { return }
+                        self.noteStreamEnded(multiplexer)
+                    }
+                    if let reservation = try multiplexer.reserveStream(
+                        flowID: flowID,
+                        maximumActiveFlows: NowhereMultiplexerConstants.maximumActiveFlowsPerMultiplexer,
+                        onEnd: onEnd
+                    ) {
+                        state.lastActivity[ObjectIdentifier(multiplexer)] = MonotonicClock.now
+                        return .reserved((multiplexer, reservation))
+                    }
+                }
+                if let pending = state.extra.pendingBuilds.values.min(by: { $0.identifier < $1.identifier }) {
+                    return .build(pending)
+                }
+                throw AnywhereError.proxy(.nowhere, .streamIDsExhausted)
             }
             state.extra.nextBuildIdentifier &+= 1
             let pending = PendingBuild(
                 identifier: state.extra.nextBuildIdentifier,
                 task: Task { [builder] in try await builder() }
             )
-            state.extra.pendingBuild = pending
+            state.extra.pendingBuilds[pending.identifier] = pending
             return .build(pending)
         }
     }
 
     private func clearPendingBuild(identifier: UInt64) {
-        pool.state.withLock { state in
-            guard state.extra.pendingBuild?.identifier == identifier else { return }
-            state.extra.pendingBuild = nil
+        _ = pool.state.withLock { state in
+            state.extra.pendingBuilds.removeValue(forKey: identifier)
         }
     }
 
@@ -258,9 +283,7 @@ nonisolated private final class NowhereMultiplexerPool: Sendable {
     ) -> (accepted: Bool, inserted: Bool) {
         var inserted = false
         let accepted = pool.state.withLock { state -> Bool in
-            if state.extra.pendingBuild?.identifier == pending.identifier {
-                state.extra.pendingBuild = nil
-            }
+            state.extra.pendingBuilds.removeValue(forKey: pending.identifier)
             guard state.phase == .open, !multiplexer.isClosed else { return false }
 
             let identifier = ObjectIdentifier(multiplexer)

@@ -11,12 +11,13 @@ import Darwin
 
 nonisolated enum NowhereProtocol {
     static let closeErrCodeOK: UInt64 = 0x100
-    static let defaultALPN = "now/1"
+    static let defaultALPN = "nw2"
     static let authFrameSize = 32
     static let flowHeaderSize = 5
     static let flowResultSize = 1
-    static let udpHeaderSize = 5
-    static let udpFragmentHeaderSize = 13
+    static let udpHeaderSize = 4
+    static let udpFragmentHeaderSize = 12
+    static let maximumFlowID: UInt32 = 0x3fff_ffff
     static let maxUDPPacketSize = Int(UInt16.max)
     static let maxDomainLength = 253
     static let maxPortalHops: UInt8 = 7
@@ -96,8 +97,8 @@ nonisolated enum NowhereProtocol {
             guard hops <= maxPortalHops else {
                 throw AnywhereError.proxy(.nowhere, .connectionClosed(detail: "Hop budget exceeds \(maxPortalHops)"))
             }
-            guard flowID != 0 else {
-                throw AnywhereError.proxy(.nowhere, .connectionClosed(detail: "Invalid zero flow ID"))
+            guard (1...maximumFlowID).contains(flowID) else {
+                throw AnywhereError.proxy(.nowhere, .connectionClosed(detail: "Invalid flow ID"))
             }
             switch role {
             case .duplex:
@@ -226,7 +227,7 @@ nonisolated enum NowhereProtocol {
         guard keyBytes.count <= UInt8.max else {
             throw AnywhereError.proxy(.nowhere, .protocolViolation(detail: "Nowhere shared key exceeds 255 bytes"))
         }
-        let salt = Data(SHA256.hash(data: Data("nowhere/now/1/auth-root".utf8)))
+        let salt = Data(SHA256.hash(data: Data("nowhere/nw2/auth-root".utf8)))
         let authRoot = hmacSHA256(key: salt, message: keyBytes)
         var info = Data("authentication".utf8)
         info.append(0x01)
@@ -321,12 +322,11 @@ nonisolated enum NowhereProtocol {
     // MARK: - QUIC DATAGRAM
 
     static func encodeUDPControl(type: UDPType, flowID: UInt32) throws -> Data {
-        guard type == .close, flowID != 0 else {
+        guard type == .close, (1...maximumFlowID).contains(flowID) else {
             throw AnywhereError.proxy(.nowhere, .connectionClosed(detail: "Invalid UDP CLOSE frame"))
         }
         var output = Data(capacity: udpHeaderSize)
-        output.append(type.rawValue)
-        output.appendUInt32(flowID)
+        output.appendUInt32(UInt32(type.rawValue) << 30 | flowID)
         return output
     }
 
@@ -336,14 +336,13 @@ nonisolated enum NowhereProtocol {
         payload: Data,
         maxDatagramSize: Int
     ) throws -> [Data] {
-        guard flowID != 0 else { throw AnywhereError.proxy(.nowhere, .connectionClosed(detail: "Invalid flow ID")) }
+        guard (1...maximumFlowID).contains(flowID) else { throw AnywhereError.proxy(.nowhere, .connectionClosed(detail: "Invalid flow ID")) }
         guard payload.count <= maxUDPPacketSize else { throw AnywhereError.proxy(.nowhere, .packetTooLarge) }
         guard maxDatagramSize >= udpHeaderSize else {
             throw AnywhereError.proxy(.nowhere, .datagramTooLarge(maxFrame: maxDatagramSize, headerSize: udpHeaderSize))
         }
         if payload.count <= maxDatagramSize - udpHeaderSize {
             var frame = Data(capacity: udpHeaderSize + payload.count)
-            frame.append(UDPType.data.rawValue)
             frame.appendUInt32(flowID)
             frame.append(payload)
             return [frame]
@@ -362,8 +361,7 @@ nonisolated enum NowhereProtocol {
             let start = index * payloadCapacity
             let end = min(payload.count, start + payloadCapacity)
             var frame = Data(capacity: udpFragmentHeaderSize + end - start)
-            frame.append(UDPType.fragment.rawValue)
-            frame.appendUInt32(flowID)
+            frame.appendUInt32(UInt32(UDPType.fragment.rawValue) << 30 | flowID)
             frame.appendUInt32(packetID)
             frame.append(UInt8(index))
             frame.append(UInt8(count))
@@ -387,10 +385,10 @@ nonisolated enum NowhereProtocol {
                               totalLength: UInt16(payload.count), payload: payload)
         case .fragment:
             guard data.count > udpFragmentHeaderSize else { return nil }
-            let packetID = data.uint32(at: 5)
-            let index = data.byte(at: 9)
-            let count = data.byte(at: 10)
-            let total = data.uint16(at: 11)
+            let packetID = data.uint32(at: 4)
+            let index = data.byte(at: 8)
+            let count = data.byte(at: 9)
+            let total = data.uint16(at: 10)
             let payload = Data(data.dropFirst(udpFragmentHeaderSize))
             guard packetID != 0, count >= 2, index < count, total != 0,
                   Int(total) >= Int(count), !payload.isEmpty,
@@ -408,10 +406,9 @@ nonisolated enum NowhereProtocol {
 
     static func decodeUDPEnvelope(_ data: Data) -> (type: UDPType, flowID: UInt32)? {
         guard data.count >= udpHeaderSize else { return nil }
-        let flags = data.byte(at: 0)
-        guard flags & 0xfc == 0,
-              let type = UDPType(rawValue: flags & 0x03) else { return nil }
-        let flowID = data.uint32(at: 1)
+        let value = data.uint32(at: 0)
+        guard let type = UDPType(rawValue: UInt8(value >> 30)) else { return nil }
+        let flowID = value & maximumFlowID
         guard flowID != 0 else { return nil }
         return (type, flowID)
     }

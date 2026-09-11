@@ -42,25 +42,34 @@ extension ProxyConfiguration {
     }
 
     private func toNowhereURL() -> String {
-        guard case .nowhere(let key, let uplink, let downlink, let multiplex, let securityLayer) = outbound,
-              let tls = securityLayer.tlsConfiguration else {
+        guard case .nowhere(let configuration) = outbound else {
             return ""
         }
         let usernameCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
-        let encodedKey = key.addingPercentEncoding(withAllowedCharacters: usernameCharacters) ?? ""
+        let encodedKey = configuration.key.addingPercentEncoding(withAllowedCharacters: usernameCharacters) ?? ""
         let fragment = name.addingPercentEncoding(withAllowedCharacters: .urlFragmentAllowed) ?? name
-        var parameters: [String] = ["up=\(uplink.rawValue)", "down=\(downlink.rawValue)"]
-        if (uplink == .tcp || downlink == .tcp) && multiplex {
+        var parameters: [String] = ["up=\(configuration.uplink.rawValue)", "down=\(configuration.downlink.rawValue)"]
+        if configuration.multiplex {
             parameters.append("mux=1")
         }
-        if tls.serverName != serverAddress {
-            parameters.append("sni=\(encodedQueryValue(tls.serverName))")
+        if configuration.serverName != serverAddress {
+            parameters.append("sni=\(encodedQueryValue(configuration.serverName))")
         }
-        if let alpn = tls.alpn?.first, !alpn.isEmpty {
-            parameters.append("alpn=\(encodedQueryValue(alpn))")
+        if configuration.morph {
+            parameters.append("morph=1")
         }
-        let query = parameters.isEmpty ? "" : "?\(parameters.joined(separator: "&"))"
-        return "nowhere://\(encodedKey)@\(bracketedServerAddress):\(serverPort)\(query)#\(fragment)"
+        let endpoint: String
+        if let tcpPort = configuration.tcpPort,
+           let udpPort = configuration.udpPort,
+           tcpPort == udpPort {
+            endpoint = "\(bracketedServerAddress):\(tcpPort)"
+        } else {
+            var carriers: [String] = []
+            if let tcpPort = configuration.tcpPort { carriers.append("tcp:\(tcpPort)") }
+            if let udpPort = configuration.udpPort { carriers.append("udp:\(udpPort)") }
+            endpoint = "\(bracketedServerAddress)/\(carriers.joined(separator: "/"))"
+        }
+        return "nowhere://\(encodedKey)@\(endpoint)?\(parameters.joined(separator: "&"))#\(fragment)"
     }
 
     private func toVLESSURL() -> String {

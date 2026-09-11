@@ -73,33 +73,38 @@ nonisolated extension ProxyClient {
         destinationPort: UInt16,
         initialData: Data?
     ) async throws -> ProxyConnection {
-        guard case .nowhere(let key, let uplink, let downlink, let multiplex, let securityLayer) = configuration.outbound else {
+        guard case .nowhere(let nowhere) = configuration.outbound else {
             throw AnywhereError.proxy(.nowhere, .protocolViolation(detail: "Invalid Nowhere configuration"))
         }
-        guard let tls = securityLayer.tlsConfiguration else {
-            throw AnywhereError.proxy(.nowhere, .protocolViolation(detail: "Nowhere TLS configuration not set"))
-        }
+        let key = nowhere.key
+        let uplink = nowhere.uplink
+        let downlink = nowhere.downlink
+        let multiplex = nowhere.multiplex
         let effectiveMultiplex = multiplex && (uplink == .tcp || downlink == .tcp)
         let identityKey = NowhereTransportIdentityKey(
             configurationID: configuration.id,
             proxyHost: configuration.serverAddress,
-            proxyPort: configuration.serverPort,
+            proxyTCPPort: nowhere.tcpPort,
+            proxyUDPPort: nowhere.udpPort,
             key: key,
             uplink: uplink,
             downlink: downlink,
             multiplex: effectiveMultiplex,
-            tls: tls
+            morph: nowhere.morph,
+            tls: TLSConfiguration(serverName: nowhere.serverName, alpn: [NowhereProtocol.defaultALPN], minVersion: .tls13, maxVersion: .tls13)
         )
         let sessionID = try NowhereTransportIdentityRegistry.shared.identity(for: identityKey)
-        let nwConfig = try NowhereConfiguration(
+        let nwConfig = try NowhereRuntimeConfiguration(
             proxyHost: configuration.serverAddress,
-            proxyPort: configuration.serverPort,
+            proxyTCPPort: nowhere.tcpPort,
+            proxyUDPPort: nowhere.udpPort,
             key: key,
             uplink: uplink,
             downlink: downlink,
             multiplex: effectiveMultiplex,
+            morph: nowhere.morph,
             sessionID: sessionID,
-            tls: tls
+            serverName: nowhere.serverName
         )
 
         let destination = try NowhereProtocol.Target(host: destinationHost, port: destinationPort)
@@ -127,7 +132,7 @@ nonisolated extension ProxyClient {
     }
 
     private func connectLogicalNowhere(
-        nwConfig: NowhereConfiguration,
+        nwConfig: NowhereRuntimeConfiguration,
         command: ProxyCommand,
         destination: NowhereProtocol.Target,
         initialData: Data?,
@@ -247,7 +252,7 @@ nonisolated extension ProxyClient {
     }
 
     private func connectDuplexNowhere(
-        nwConfig: NowhereConfiguration,
+        nwConfig: NowhereRuntimeConfiguration,
         command: ProxyCommand,
         destination: NowhereProtocol.Target,
         initialData: Data?,
@@ -365,7 +370,7 @@ nonisolated extension ProxyClient {
     }
 
     private func connectAsymmetricNowhere(
-        nwConfig: NowhereConfiguration,
+        nwConfig: NowhereRuntimeConfiguration,
         command: ProxyCommand,
         destination: NowhereProtocol.Target,
         initialData: Data?,
@@ -488,7 +493,7 @@ nonisolated extension ProxyClient {
     }
 
     private func openAsymmetricHalf(
-        nwConfig: NowhereConfiguration,
+        nwConfig: NowhereRuntimeConfiguration,
         destination: NowhereProtocol.Target,
         mode: NowhereTCPRelayMode,
         header: NowhereProtocol.FlowHeader,
@@ -614,7 +619,7 @@ nonisolated extension ProxyClient {
     }
 
     private func openNowhereMultiplexerHalf(
-        nwConfig: NowhereConfiguration,
+        nwConfig: NowhereRuntimeConfiguration,
         destination: NowhereProtocol.Target,
         flowHeader: NowhereProtocol.FlowHeader,
         initialData: Data?,
@@ -650,7 +655,7 @@ nonisolated extension ProxyClient {
                 ).get()
                 multiplexerChain = chain
                 let proxyHost = configuration.serverAddress
-                let proxyPort = configuration.serverPort
+                let proxyPort = try nwConfig.proxyPort(for: .tcp)
                 let useResolvedAddress = useResolvedAddressForDirectDial
                 multiplexerBuilder = {
                     let holders = Mutex<[ProxyClient]>([])
@@ -720,19 +725,37 @@ nonisolated extension ProxyClient {
     }
 
     private static func makeNowhereMultiplexer(
-        configuration: NowhereConfiguration,
+        configuration: NowhereRuntimeConfiguration,
         connectHost: String,
         tunnel: ProxyConnection?,
         chainHolders: [ProxyClient] = []
     ) async throws -> NowhereMultiplexer {
         let client = TLSClient(configuration: configuration.tcpTLSConfiguration)
         let record: TLSRecordConnection
-        if let tunnel {
+        if configuration.morph {
+            let base: any ByteTransport
+            if let tunnel {
+                base = TunneledTransport(tunnel: tunnel)
+            } else {
+                let tcp = TCPTransport(
+                    host: connectHost,
+                    port: try configuration.proxyPort(for: .tcp),
+                    resolvesViaProxyDNS: true
+                )
+                try await tcp.connect()
+                base = tcp
+            }
+            guard let keys = configuration.morphKeys else {
+                base.cancel()
+                throw AnywhereError.proxy(.nowhere, .protocolViolation(detail: "Missing Morph keys"))
+            }
+            record = try await client.connect(transport: NowhereMorphTCPTransport(inner: base, keys: keys))
+        } else if let tunnel {
             record = try await client.connect(overTunnel: tunnel)
         } else {
             record = try await client.connect(
                 host: connectHost,
-                port: configuration.proxyPort
+                port: try configuration.proxyPort(for: .tcp)
             )
         }
 
@@ -756,6 +779,10 @@ nonisolated extension ProxyClient {
             let transport = TLSByteTransport(record)
             var bootstrap = auth
             bootstrap.append(NowhereMultiplexerConstants.marker)
+            bootstrap.append(try NowhereMultiplexerFrameHeader.window(
+                flowID: 0,
+                creditUnits: Int(NowhereMultiplexerConstants.connectionWindowExtensionUnits)
+            ).encode())
             do {
                 try await transport.send(bootstrap)
             } catch {
@@ -774,7 +801,7 @@ nonisolated extension ProxyClient {
     }
 
     private func connectPooledChainedNowhere(
-        nwConfig: NowhereConfiguration,
+        nwConfig: NowhereRuntimeConfiguration,
         chain: [ProxyConfiguration],
         header: NowhereProtocol.FlowHeader,
         attempt: NowhereFlowOpenAttempt,
@@ -806,7 +833,7 @@ nonisolated extension ProxyClient {
     }
 
     private func acquireChainedNowhereClient(
-        nwConfig: NowhereConfiguration,
+        nwConfig: NowhereRuntimeConfiguration,
         chain: [ProxyConfiguration],
         lastDeliver: ProxyCommand
     ) async throws -> NowhereClient {
@@ -815,7 +842,7 @@ nonisolated extension ProxyClient {
             lastDeliver: lastDeliver
         ).get()
         let nwServerAddress = configuration.serverAddress
-        let nwServerPort = configuration.serverPort
+        let nwServerPort = try nwConfig.proxyPort(for: .udp)
         let useResolvedAddress = useResolvedAddressForDirectDial
 
         return try await NowhereClient.acquireChained(

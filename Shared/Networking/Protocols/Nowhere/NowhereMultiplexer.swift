@@ -14,6 +14,12 @@ nonisolated fileprivate enum NowhereMultiplexerInboundEvent: Sendable {
 }
 
 nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
+    struct LoadSnapshot: Sendable {
+        let connectionCredit: Int
+        let outboundFrames: Int
+        let activeStreams: Int
+    }
+
     struct StreamReservation: Sendable {
         fileprivate let flowID: UInt32
         fileprivate let inbox: NowhereMultiplexerAsyncQueue<NowhereMultiplexerInboundEvent>
@@ -26,9 +32,11 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
         let onEnd: (@Sendable () -> Void)?
 
         var acceptsWrites = true
-        var sendCredit = NowhereMultiplexerConstants.streamWindowBytes
-        var fairSendCredit = NowhereMultiplexerConstants.streamWindowBytes
-        var fairLimit = NowhereMultiplexerConstants.streamWindowBytes
+        var peerFinished = false
+        var dataInFlight = false
+        var sendCredit = NowhereMultiplexerConstants.baseStreamWindowBytes
+        var fairSendCredit = NowhereMultiplexerConstants.baseStreamWindowBytes
+        var fairLimit = NowhereMultiplexerConstants.baseStreamWindowBytes
         var fairDebt = 0
         var receiveCredit = NowhereMultiplexerConstants.streamWindowBytes
         var pendingReceiveCredit = 0
@@ -36,7 +44,7 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
 
     private struct State {
         var flows: [UInt32: FlowState] = [:]
-        var connectionSendCredit = NowhereMultiplexerConstants.connectionWindowBytes
+        var connectionSendCredit = NowhereMultiplexerConstants.baseConnectionWindowBytes
         var connectionReceiveCredit = NowhereMultiplexerConstants.connectionWindowBytes
         var pendingConnectionCredit = 0
 
@@ -104,6 +112,16 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
 
     var activeStreamCount: Int { state.withLock { $0.flows.count } }
 
+    var loadSnapshot: LoadSnapshot {
+        state.withLock {
+            LoadSnapshot(
+                connectionCredit: $0.connectionSendCredit,
+                outboundFrames: $0.outboundFrames,
+                activeStreams: $0.flows.count
+            )
+        }
+    }
+
     func installCloseHandler(_ handler: @escaping @Sendable () -> Void) {
         let immediate: (@Sendable () -> Void)? = state.withLock { state in
             guard !state.closeHandlerInstalled else { return nil }
@@ -131,7 +149,9 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
         onEnd: (@Sendable () -> Void)? = nil
     ) throws -> StreamReservation? {
         precondition((1...NowhereMultiplexerConstants.maximumStreams).contains(maximumActiveFlows))
-        guard flowID != 0 else { throw NowhereMultiplexerWireError.invalidFlowID }
+        guard (1...NowhereProtocol.maximumFlowID).contains(flowID) else {
+            throw NowhereMultiplexerWireError.invalidFlowID
+        }
         return try state.withLock { state in
             guard !state.closed else { throw Self.closedError(state.terminalError) }
             guard state.flows.count < maximumActiveFlows else { return nil }
@@ -161,11 +181,7 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
 
     func openStream(_ reservation: StreamReservation) async throws -> NowhereMultiplexerStream {
         do {
-            let syn = try NowhereMultiplexerFrameHeader.stream(
-                flowID: reservation.flowID,
-                flags: .syn,
-                payloadLength: 0
-            )
+            let syn = try NowhereMultiplexerFrameHeader.open(flowID: reservation.flowID)
             try await writeFrame(
                 header: syn,
                 payload: Data(),
@@ -227,7 +243,7 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
             : nil
         let discarded = inbox.finish(throwing: error, discardingBuffered: true)
         let released = discarded.reduce(into: 0) { total, event in
-            if case .data(let data) = event { total += data.count }
+            if case .data(let data) = event { total += Self.creditBytes(for: data.count) }
         }
         if released != 0 { releaseConnectionReceiveCredit(count: released) }
     }
@@ -236,16 +252,18 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
         var offset = 0
         while offset < data.count {
             let length = min(NowhereMultiplexerConstants.maximumFramePayload, data.count - offset)
-            try await acquireSendCredit(flowID: flowID, count: length)
+            let charged = Self.creditBytes(for: length)
+            try await acquireSendCredit(flowID: flowID, count: charged)
             let end = offset + length
             let payload = data.subdata(in: offset..<end)
-            let header = try NowhereMultiplexerFrameHeader.stream(
+            let header = try NowhereMultiplexerFrameHeader.data(
                 flowID: flowID,
                 payloadLength: length
             )
             try await writeFrame(header: header, payload: payload) { [self] in
-                rollbackSendCredit(flowID: flowID, count: length)
+                rollbackSendCredit(flowID: flowID, count: charged)
             }
+            releaseDataSlot(flowID: flowID)
             offset = end
         }
     }
@@ -257,7 +275,7 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
         while let event = try await inbox.next() {
             switch event {
             case .data(let data):
-                releaseReceiveCredit(flowID: flowID, count: data.count)
+                releaseReceiveCredit(flowID: flowID, count: Self.creditBytes(for: data.count))
                 return data
             case .fin:
                 return nil
@@ -273,11 +291,7 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
         }
         guard !isClosed else { return }
         do {
-            let header = try NowhereMultiplexerFrameHeader.stream(
-                flowID: flowID,
-                flags: reset ? .rst : .fin,
-                payloadLength: 0
-            )
+            let header = try NowhereMultiplexerFrameHeader.terminal(flowID: flowID, reset: reset)
             try await writeFrame(header: header, payload: Data())
         } catch {
         }
@@ -319,7 +333,7 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
             discardingBuffered: discardingBuffered
         )
         let released = discarded.reduce(into: 0) { total, event in
-            if case .data(let data) = event { total += data.count }
+            if case .data(let data) = event { total += Self.creditBytes(for: data.count) }
         }
         if released != 0 { releaseConnectionReceiveCredit(count: released) }
         removed.termination.fire(error)
@@ -364,6 +378,7 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
     private func rollbackSendCredit(flowID: UInt32, count: Int) {
         state.withLock { state in
             guard !state.closed, var flow = state.flows[flowID] else { return }
+            flow.dataInFlight = false
             flow.sendCredit = min(
                 NowhereMultiplexerConstants.streamWindowBytes,
                 flow.sendCredit + count
@@ -373,6 +388,15 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
                 NowhereMultiplexerConstants.connectionWindowBytes,
                 state.connectionSendCredit + count
             )
+            state.flows[flowID] = flow
+            state.sendCreditGate.wakeAll()
+        }
+    }
+
+    private func releaseDataSlot(flowID: UInt32) {
+        state.withLock { state in
+            guard var flow = state.flows[flowID] else { return }
+            flow.dataInFlight = false
             state.flows[flowID] = flow
             state.sendCreditGate.wakeAll()
         }
@@ -389,9 +413,11 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
                 guard var flow = state.flows[flowID], flow.acceptsWrites else {
                     return .failed(AnywhereError.proxy(.nowhere, .streamClosed))
                 }
-                if flow.sendCredit >= count,
+                if !flow.dataInFlight,
+                   flow.sendCredit >= count,
                    flow.fairSendCredit >= count,
                    state.connectionSendCredit >= count {
+                    flow.dataInFlight = true
                     flow.sendCredit -= count
                     flow.fairSendCredit -= count
                     state.connectionSendCredit -= count
@@ -412,7 +438,7 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
     }
 
     private func receiveWindow(_ header: NowhereMultiplexerFrameHeader) throws {
-        let credit = Int(header.value)
+        let credit = Int(header.value) * 1024
         try state.withLock { state in
             guard !state.closed else { throw Self.closedError(state.terminalError) }
             if header.flowID == 0 {
@@ -450,6 +476,12 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
                 throw AnywhereError.proxy(
                     .nowhere,
                     .protocolViolation(detail: "STREAM data for unknown Multiplexer flow \(flowID)")
+                )
+            }
+            guard !flow.peerFinished else {
+                throw AnywhereError.proxy(
+                    .nowhere,
+                    .protocolViolation(detail: "STREAM data after Multiplexer FIN for flow \(flowID)")
                 )
             }
             guard flow.receiveCredit >= count, state.connectionReceiveCredit >= count else {
@@ -572,8 +604,8 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
     private func writeWindows(flowID: UInt32, credit: Int) async throws {
         var remaining = credit
         while remaining != 0 {
-            let delta = min(remaining, Int(UInt16.max))
-            let header = try NowhereMultiplexerFrameHeader.window(flowID: flowID, credit: delta)
+            let delta = min(remaining, Int(UInt16.max) * 1024)
+            let header = try NowhereMultiplexerFrameHeader.window(flowID: flowID, creditUnits: delta / 1024)
             try await writeFrame(header: header, payload: Data())
             remaining -= delta
         }
@@ -682,9 +714,9 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
                     )
                     let payloadLength: Int
                     switch header.kind {
-                    case .stream, .datagram:
+                    case .data:
                         payloadLength = Int(header.value)
-                    case .window:
+                    case .open, .window, .fin, .reset:
                         payloadLength = 0
                     }
                     guard buffer.count - headerEnd >= payloadLength else { break }
@@ -710,47 +742,36 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
         switch header.kind {
         case .window:
             try receiveWindow(header)
-
-        case .datagram:
-            throw AnywhereError.proxy(
-                .nowhere,
-                .unsupported(feature: "Multiplexer DATAGRAM")
-            )
-
-        case .stream:
-            try await receiveStream(header: header, payload: payload)
-        }
-    }
-
-    private func receiveStream(header: NowhereMultiplexerFrameHeader, payload: Data) async throws {
-        if header.flags.contains(.syn) {
+        case .open:
             throw AnywhereError.proxy(
                 .nowhere,
                 .protocolViolation(detail: "Portal initiated an unsupported Multiplexer stream")
             )
-        }
-
-        if header.flags.contains(.rst) {
+        case .reset:
             let removed = removeFlow(header.flowID)
             guard let removed else { return }
             let reset = AnywhereError.proxy(.nowhere, .streamReset(code: header.flowID))
             finishRemovedFlow(removed, error: reset, discardingBuffered: true)
-            return
-        }
-
-        if !payload.isEmpty {
-            let inbox = try admitReceive(flowID: header.flowID, count: payload.count)
+        case .data:
+            let inbox = try admitReceive(flowID: header.flowID, count: Self.creditBytes(for: payload.count))
             try await inbox.send(.data(payload))
-        }
-
-        if header.flags.contains(.fin) {
-            let flow = state.withLock { $0.flows[header.flowID] }
+        case .fin:
+            let flow: FlowState? = state.withLock { state in
+                guard var flow = state.flows[header.flowID], !flow.peerFinished else { return nil }
+                flow.peerFinished = true
+                state.flows[header.flowID] = flow
+                return flow
+            }
             if let flow {
                 try await flow.inbox.send(.fin)
                 flow.inbox.finish()
                 flow.termination.fire(nil)
             }
         }
+    }
+
+    private static func creditBytes(for payloadLength: Int) -> Int {
+        ((payloadLength + 1023) / 1024) * 1024
     }
 
     // MARK: - Teardown
