@@ -213,6 +213,7 @@
 				Networking/Protocols/Nowhere/NowhereClient.swift,
 				Networking/Protocols/Nowhere/NowhereConfiguration.swift,
 				Networking/Protocols/Nowhere/NowhereConnection.swift,
+				Networking/Protocols/Nowhere/NowhereMorph.swift,
 				Networking/Protocols/Nowhere/NowhereMultiplexer.swift,
 				Networking/Protocols/Nowhere/NowhereMultiplexerAsyncQueue.swift,
 				Networking/Protocols/Nowhere/NowhereMultiplexerConnection.swift,

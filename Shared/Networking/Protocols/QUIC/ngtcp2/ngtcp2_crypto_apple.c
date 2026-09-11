@@ -401,13 +401,9 @@ static uint32_t chacha_load32_le(const uint8_t *p) {
          ((uint32_t)p[3] << 24);
 }
 
-/* Writes the first |outlen| (<= 8) keystream bytes of the block selected by
-   |counter| and |nonce|. */
-static void chacha20_keystream(uint8_t *out, size_t outlen,
-                               const uint8_t key[32], uint32_t counter,
-                               const uint8_t nonce[12]) {
+static void chacha20_block(uint8_t out[64], const uint8_t key[32],
+                           uint32_t counter, const uint8_t nonce[12]) {
   uint32_t s[16], x[16];
-  uint8_t block[8];
   int i;
 
   s[0] = 0x61707865;
@@ -433,14 +429,40 @@ static void chacha20_keystream(uint8_t *out, size_t outlen,
     CHACHA_QR(x[2], x[7], x[8], x[13]);
     CHACHA_QR(x[3], x[4], x[9], x[14]);
   }
-  for (i = 0; i < 2; i++) {
+  for (i = 0; i < 16; i++) {
     uint32_t word = x[i] + s[i];
-    block[4 * i] = (uint8_t)word;
-    block[4 * i + 1] = (uint8_t)(word >> 8);
-    block[4 * i + 2] = (uint8_t)(word >> 16);
-    block[4 * i + 3] = (uint8_t)(word >> 24);
+    out[4 * i] = (uint8_t)word;
+    out[4 * i + 1] = (uint8_t)(word >> 8);
+    out[4 * i + 2] = (uint8_t)(word >> 16);
+    out[4 * i + 3] = (uint8_t)(word >> 24);
   }
-  memcpy(out, block, outlen);
+}
+
+int nowhere_chacha20_xor(uint8_t *dest, const uint8_t *src, size_t len,
+                         const uint8_t key[32], const uint8_t nonce[12],
+                         uint64_t offset) {
+  uint8_t block[64];
+  uint64_t end = offset + len;
+  size_t consumed = 0;
+
+  if (end < offset || end > ((uint64_t)1 << 38) - 64) {
+    return -1;
+  }
+  while (consumed < len) {
+    uint64_t position = offset + consumed;
+    uint32_t counter = (uint32_t)(position / 64);
+    size_t block_offset = (size_t)(position % 64);
+    size_t count = len - consumed;
+    if (count > 64 - block_offset) {
+      count = 64 - block_offset;
+    }
+    chacha20_block(block, key, counter, nonce);
+    for (size_t i = 0; i < count; i++) {
+      dest[consumed + i] = (src ? src[consumed + i] : 0) ^ block[block_offset + i];
+    }
+    consumed += count;
+  }
+  return 0;
 }
 
 /* --- Header Protection mask --- */
@@ -469,7 +491,11 @@ int ngtcp2_crypto_hp_mask(uint8_t *dest, const ngtcp2_crypto_cipher *hp,
     /* RFC 9001 §5.4.4: counter = sample[0..3] (little endian), nonce =
        sample[4..15]; the mask is ChaCha20 over 5 zero bytes, i.e. the first
        NGTCP2_HP_MASKLEN keystream bytes. */
-    chacha20_keystream(dest, 5, ctx->key, chacha_load32_le(sample), sample + 4);
+    {
+      uint8_t block[64];
+      chacha20_block(block, ctx->key, chacha_load32_le(sample), sample + 4);
+      memcpy(dest, block, NGTCP2_HP_MASKLEN);
+    }
     return 0;
   default:
     return -1;

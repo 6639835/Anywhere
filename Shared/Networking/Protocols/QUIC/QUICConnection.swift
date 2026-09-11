@@ -61,6 +61,7 @@ actor QUICConnection {
     let serverName: String
     let alpn: [String]
     let tuning: QUICTuning
+    let directMaxUDPPayload: Int
 
     let transport: QUICDatagramTransport?
 
@@ -332,6 +333,7 @@ actor QUICConnection {
     init(host: String, port: UInt16, serverName: String? = nil, alpn: [String],
          datagramsEnabled: Bool = false, tuning: QUICTuning,
          obfuscator: QUICPacketObfuscator? = nil,
+         directMaxUDPPayload: Int = QUICConnection.maxUDPPayload,
          transport: QUICDatagramTransport? = nil) {
         self.host = host
         self.port = port
@@ -340,6 +342,7 @@ actor QUICConnection {
         self.datagramsEnabled = datagramsEnabled
         self.tuning = tuning
         self.obfuscator = obfuscator
+        self.directMaxUDPPayload = directMaxUDPPayload
         self.transport = transport
         self.bridge = NGTCP2ConcurrencyBridge()
     }
