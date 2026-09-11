@@ -39,113 +39,66 @@ nonisolated final class TLSRecordConnection: Sendable {
     var connection: (any ByteTransport)? {
         phase.withLock { if case .attached(let transport) = $0 { transport } else { nil } }
     }
-
-    /// Adopts the handshake's transport. Called once by the handshake driver
-    /// (TLSClient/TLSServer/RealityClient) when it hands the connection over.
+    
     func adoptTransport(_ transport: (any ByteTransport)?) {
         guard let transport else { return }
         let adopted: Bool = phase.withLock { Phase.transition(&$0, to: .attached(transport)) }
         if !adopted {
-            logger.debug("[TLSRecordConnection] adoptTransport after cancel/attach; cancelling the handed-over transport")
             transport.cancel()
         }
     }
-
-    /// Ordered wire-send pipeline shared by the async `send`/`sendRaw` surface and the internal
-    /// TLS 1.3 KeyUpdate response. Each ``chainedSend`` body runs only once the previous finished,
-    /// so record building (sequence-number assignment) and the key-switch never interleave a send —
-    /// submission order is wire order — without a lock held across the `await`.
+    
     private let sendChain = SerialSender()
-
-    /// Runs `body` after all prior chained sends and awaits it (backpressure + errors). Internal so
-    /// the +TLS13 KeyUpdate response (a different file) drains through the same chain.
     func chainedSend(_ body: @escaping @Sendable () async throws -> Void) async throws {
         try await sendChain.run(body)
     }
 
     let tlsVersion: UInt16
-
-    /// Backing store for ``negotiatedALPN``; the mutex makes the handshake-time write a safe
-    /// publication to whichever task later reads it.
+    
     private let negotiatedALPNBox = Mutex<String>("")
-
-    /// The value of the ALPN sent by the peer; empty when the peer selected none. Read-only
-    /// snapshot; written once via ``publishNegotiatedALPN(_:)``.
     var negotiatedALPN: String { negotiatedALPNBox.withLock { $0 } }
-
-    /// Publishes the handshake's ALPN outcome. Called once by the handshake driver
-    /// (TLSClient/TLSServer/RealityClient); reads observe it via ``negotiatedALPN``.
     func publishNegotiatedALPN(_ alpn: String) {
         negotiatedALPNBox.withLock { $0 = alpn }
     }
 
     let cipherSuite: UInt16
-
-    /// TLS 1.3 exporter master secret. It is immutable across KeyUpdate and never exposed.
+    
     private let exporterMasterSecret: Data?
 
     // MARK: - Per-direction Record State
-
-    /// One direction's record-protection state: the AEAD key material plus that direction's
-    /// record sequence counter (a fetch-then-increment per record). The key fields are mutable
-    /// only for the TLS 1.3 post-handshake KeyUpdate (RFC 8446 §7.2), which installs the next
-    /// key generation AND resets the counter to zero; both live behind one mutex so the epoch
-    /// switch is a single atomic mutation — a record can never pair new keys with an old
-    /// counter or vice versa.
+    
     struct DirectionState {
         var key: Data
         var iv: Data
         var symmetricKey: SymmetricKey
-        /// TLS 1.3 application traffic secret, retained so KeyUpdate can derive the next
-        /// generation. `nil` for TLS 1.2 (which has no KeyUpdate) and disables KeyUpdate handling.
         var appSecret: Data? = nil
-        /// The AEAD record sequence counter for this direction.
         var seqNum: UInt64 = 0
     }
-
-    /// Egress (our send direction) record state. Reads happen per record build; the rekey
-    /// mutation runs only under the send chain, so egress epochs are additionally ordered
-    /// against every application send.
+    
     private let egressState: Mutex<DirectionState>
-
-    /// Ingress (peer's send direction) record state. The rekey mutation runs only on the
-    /// receive path, which is driven by a single consumer holding the ``receiveState`` lock —
-    /// this lock nests inside that one, never the reverse.
     private let ingressState: Mutex<DirectionState>
-
-    /// TLS 1.2 CBC MAC keys, mapped to this endpoint's directions at init. Empty for AEAD
-    /// suites and TLS 1.3; immutable — no rekey path exists for them.
+    
     let egressMACKey: Data
     let ingressMACKey: Data
-
-    /// Fetches the egress key generation paired with the sequence number the next record must
-    /// be sealed with (`seqNum` of the returned snapshot), post-incrementing the counter. One
-    /// lock hold pairs the two, so the pair can never straddle a KeyUpdate epoch switch;
-    /// callers compute the record from the snapshot outside the lock.
+    
     func nextEgressState() -> DirectionState {
         egressState.withLock { state in
             defer { state.seqNum += 1 }
             return state
         }
     }
-
-    /// Fetches the ingress key generation paired with the sequence number the next record must
-    /// be opened with, post-incrementing the counter (see ``nextEgressState()``).
+    
     func nextIngressState() -> DirectionState {
         ingressState.withLock { state in
             defer { state.seqNum += 1 }
             return state
         }
     }
-
-    /// Runs `mutate` under the egress-state lock — the egress KeyUpdate epoch switch commits
-    /// its key swap and counter reset in one hold. `mutate` must not block or await; key
-    /// derivation is the intended (short, synchronous) workload.
+    
     func mutateEgressState(_ mutate: (inout DirectionState) -> Void) {
         egressState.withLock { mutate(&$0) }
     }
-
-    /// Runs `mutate` under the ingress-state lock (see ``mutateEgressState(_:)``).
+    
     func mutateIngressState(_ mutate: (inout DirectionState) -> Void) {
         ingressState.withLock { mutate(&$0) }
     }
@@ -153,17 +106,10 @@ nonisolated final class TLSRecordConnection: Sendable {
     private static let maxRecordPlaintext = 16384
 
     // MARK: - Receive State
-
-    /// The record layer's receive-side critical state: the undecrypted byte buffer plus the
-    /// flags the decrypt path latches while draining it. A given connection has a single
-    /// receive consumer; `processBuffer` runs with this lock held and mutates the state
-    /// through `inout` rather than re-locking.
+    
     struct ReceiveState {
         var buffer: Data
-        /// Set when a peer KeyUpdate(update_requested) arrives; consumed after this lock is
-        /// released so we can send our own KeyUpdate without holding it.
         var keyUpdateResponsePending = false
-        /// Latched when the peer's close_notify arrives; further receives report a clean close.
         var receivedCloseNotify = false
     }
 
@@ -187,14 +133,16 @@ nonisolated final class TLSRecordConnection: Sendable {
         self.cipherSuite = cipherSuite
         self.direction = direction
         self.exporterMasterSecret = exporterMasterSecret
-        // Map the wire roles (client/server) onto this endpoint's directions once, here; the
-        // record paths deal only in egress/ingress.
-        let client = DirectionState(key: clientKey, iv: clientIV,
-                                    symmetricKey: SymmetricKey(data: clientKey),
-                                    appSecret: clientAppSecret)
-        let server = DirectionState(key: serverKey, iv: serverIV,
-                                    symmetricKey: SymmetricKey(data: serverKey),
-                                    appSecret: serverAppSecret)
+        let client = DirectionState(
+            key: clientKey, iv: clientIV,
+            symmetricKey: SymmetricKey(data: clientKey),
+            appSecret: clientAppSecret
+        )
+        let server = DirectionState(
+            key: serverKey, iv: serverIV,
+            symmetricKey: SymmetricKey(data: serverKey),
+            appSecret: serverAppSecret
+        )
         self.egressState = Mutex(direction == .server ? server : client)
         self.ingressState = Mutex(direction == .server ? client : server)
         self.egressMACKey = Data()
@@ -218,19 +166,22 @@ nonisolated final class TLSRecordConnection: Sendable {
         self.cipherSuite = cipherSuite
         self.direction = direction
         self.exporterMasterSecret = nil
-        let client = DirectionState(key: clientKey, iv: clientIV,
-                                    symmetricKey: SymmetricKey(data: clientKey),
-                                    seqNum: initialClientSeqNum)
-        let server = DirectionState(key: serverKey, iv: serverIV,
-                                    symmetricKey: SymmetricKey(data: serverKey),
-                                    seqNum: initialServerSeqNum)
+        let client = DirectionState(
+            key: clientKey, iv: clientIV,
+            symmetricKey: SymmetricKey(data: clientKey),
+            seqNum: initialClientSeqNum
+        )
+        let server = DirectionState(
+            key: serverKey, iv: serverIV,
+            symmetricKey: SymmetricKey(data: serverKey),
+            seqNum: initialServerSeqNum
+        )
         self.egressState = Mutex(direction == .server ? server : client)
         self.ingressState = Mutex(direction == .server ? client : server)
         self.egressMACKey = direction == .server ? serverMACKey : clientMACKey
         self.ingressMACKey = direction == .server ? clientMACKey : serverMACKey
     }
-
-    /// Derives connection-bound keying material without exposing the exporter master secret.
+    
     func exportKeyingMaterial(label: String, context: Data, length: Int) throws -> Data {
         guard tlsVersion == 0x0304, let exporterMasterSecret, length > 0 else {
             throw AnywhereError.tls(.handshakeFailed(detail: "TLS exporter unavailable"))
@@ -242,29 +193,20 @@ nonisolated final class TLSRecordConnection: Sendable {
             length: length
         )
     }
-
-    /// Buffers application bytes read during the handshake; call before any `receive()`.
+    
     func prependToReceiveBuffer(_ data: Data) {
         receiveState.withLock { $0.buffer.append(data) }
     }
 
     // MARK: - Send / Receive (Raw, Unencrypted)
-
-    // Async raw (unencrypted) surface for the VLESS-Vision direct-copy path, which peels the record
-    // crypto and shuttles already-framed TLS records straight through. A given connection is driven
-    // by one consumer, so this never races the encrypted `receive()` on the receive state.
-
-    /// Sends `data` verbatim (no record encryption), serialized through the send chain so it
-    /// orders with the encrypted sends and the internal KeyUpdate response.
+    
     func sendRaw(_ data: Data) async throws {
         try await chainedSend { [self] in
             guard let connection else { throw AnywhereError.tls(.record(.connectionUnavailable)) }
             try await connection.send(data)
         }
     }
-
-    /// Receives raw (undecrypted) bytes: any handshake-buffered bytes first, then straight off the
-    /// transport. `nil` signals a clean close.
+    
     func receiveRaw() async throws -> Data? {
         let buffered: Data? = receiveState.withLock { state in
             guard !state.buffer.isEmpty else { return nil }
@@ -282,18 +224,7 @@ nonisolated final class TLSRecordConnection: Sendable {
     }
 
     // MARK: - Async Surface
-
-    // The record layer's send/receive surface, over the transport's async surface
-    // (writes serialized through the send chain). Its consumers are `TLSProxyConnection`/
-    // `RealityProxyConnection`, the MITM `MITMByteLeg` legs, and the async raw direct-copy above.
-    // Sends and the raw direct-copy share the synchronous record crypto and `processBuffer`;
-    // a given connection is driven by one consumer, so the receive paths never touch
-    // the receive state concurrently.
-
-    /// Encrypts `data` into TLS records and sends them, awaiting the write. The record build
-    /// (sequence-number assignment) and the wire send happen under a single the send chain hold,
-    /// so a record's sequence number always matches its position on the wire — even under
-    /// concurrent callers — and it orders with the internal KeyUpdate response.
+    
     func send(_ data: Data) async throws {
         try await chainedSend { [self] in
             guard let connection else { throw AnywhereError.tls(.record(.connectionUnavailable)) }
@@ -301,8 +232,7 @@ nonisolated final class TLSRecordConnection: Sendable {
             try await connection.send(record)
         }
     }
-
-    /// Receives and decrypts one chunk of application data; `nil` signals a clean close.
+    
     func receive() async throws -> Data? {
         while true {
             let (processed, needsKeyUpdateResponse) = receiveState.withLock { state -> (BufferResult?, Bool) in
@@ -323,9 +253,9 @@ nonisolated final class TLSRecordConnection: Sendable {
                 case .error(let error):
                     throw error
                 case .needMore:
-                    break            // fall through to read more bytes
+                    break
                 case .skip:
-                    continue         // re-process without reading (non-app record consumed)
+                    continue
                 case .closed:
                     return nil
                 }
@@ -337,7 +267,7 @@ nonisolated final class TLSRecordConnection: Sendable {
             switch try await connection.receive() {
             case .bytes(let data):
                 receiveState.withLock { $0.buffer.append(data) }
-                continue             // re-process with the new bytes
+                continue
             case .end:
                 return nil
             }
@@ -369,9 +299,7 @@ nonisolated final class TLSRecordConnection: Sendable {
         case skip
         case closed
     }
-
-    /// Processes framed records out of `state` (passed `inout` by the single receive consumer,
-    /// which holds the ``receiveState`` lock while this runs).
+    
     private func processBuffer(_ state: inout ReceiveState) -> BufferResult? {
         if state.receivedCloseNotify {
             return .closed
@@ -503,7 +431,7 @@ nonisolated final class TLSRecordConnection: Sendable {
         return nil
     }
 
-    // MARK: - TLS Record Crypto (Dispatch)
+    // MARK: - TLS Record Crypto
 
     private func buildTLSRecords(for data: Data) throws -> Data {
         if data.count <= Self.maxRecordPlaintext {

@@ -348,7 +348,6 @@ actor ShadowsocksUDPSession {
         do {
             decoded = try decryptPacket(data)
         } catch {
-            logger.debug("[SS-UDP] Decrypt error: \(error.localizedDescription)")
             return
         }
 
@@ -373,7 +372,6 @@ actor ShadowsocksUDPSession {
                 return
             }
         }
-        logger.debug("[SS-UDP] No flow for reply from \(decoded.host):\(decoded.port); dropped")
     }
 
     private func firstRegistration(in tokens: [Token]) -> Registration? {

@@ -8,44 +8,41 @@
 import Foundation
 
 nonisolated enum AnywhereError: Error {
+    case certificate(Certificate)
+    case diagnostics(Diagnostics)
     case dns(DNS)
+    case mitm(MITM)
+    case parse(Parse)
+    case proxy(Wire, Proxy)
+    case quic(QUIC)
+    case routing(Routing)
+    case store(Store)
+    case subscription(Subscription)
     case transport(Transport)
     case tls(TLS)
-    case quic(QUIC)
-    case proxy(Wire, Proxy)
-    case routing(Routing)
-    case mitm(MITM)
-    case certificate(Certificate)
-    case store(Store)
-    case parse(Parse)
-    case subscription(Subscription)
     case tunnel(Tunnel)
-    case diagnostics(Diagnostics)
     case wrapped(context: String, underlying: any Error)
+    
+    // MARK: Certificate
 
-    // MARK: Wire
-
-    enum Wire: String, Sendable {
-        case direct = "Direct"
-        case socks5 = "SOCKS5"
-        case httpConnect = "HTTP"
-        case http1 = "HTTP/1"
-        case http2 = "HTTP/2"
-        case http3 = "HTTP/3"
-        case shadowsocks = "Shadowsocks"
-        case trojan = "Trojan"
-        case anyTLS = "AnyTLS"
-        case vless = "VLESS"
-        case vlessEncryption = "VLESS Encryption"
-        case sudoku = "Sudoku"
-        case hysteria = "Hysteria"
-        case nowhere = "Nowhere"
-        case webSocket = "WebSocket"
-        case grpc = "gRPC"
-        case xhttp = "XHTTP"
-        case httpUpgrade = "HTTPUpgrade"
+    enum Certificate: Sendable {
+        case keyGenerationFailed(detail: String)
+        case keychainWriteFailed(status: OSStatus)
+        case keychainReadFailed(status: OSStatus)
+        case missingCAComponents
+        case buildFailed(underlying: any Error)
+        case signingFailed(detail: String)
+        case publicKeyExportFailed
+        case invalidPublicKey
+        case asn1ParseFailed(detail: String)
     }
+    
+    // MARK: Diagnostics
 
+    enum Diagnostics: Sendable, Equatable {
+        case latencyProbeFailed(status: String)
+    }
+    
     // MARK: DNS
 
     enum DNS: Sendable, Equatable {
@@ -53,6 +50,145 @@ nonisolated enum AnywhereError: Error {
         case noAddresses(host: String)
         case malformedResponse
         case timedOut(host: String)
+    }
+    
+    // MARK: MITM
+
+    enum MITM: Sendable, Equatable {
+        case notHTTP
+        case responseTooLarge(limit: Int)
+        case scriptBudgetExceeded(limit: Int)
+        case scriptStoreCapacityExceeded
+        case scriptStoreWriteFailed
+        case scriptMessageMalformed(detail: String)
+        case invalidScriptRequest
+        case upstreamHandshakeTimeout
+        case requestHeadersTooLarge
+        case needsHTTP1Fallback
+        case rewriteRulesCorrupted(BinaryPayload)
+        case profileServerBindFailed
+    }
+    
+    // MARK: Parse
+
+    enum Parse: Sendable, Equatable {
+        case yaml(detail: String)
+        case clashConfigMissingProxies
+        case invalidURL(String)
+        case proxyURI(ProxyURI)
+
+        enum ProxyURI: Sendable, Equatable {
+            case unsupportedScheme(String?)
+            case missingFields
+            case invalidValue(field: String, value: String)
+            case noPublicKeys
+        }
+    }
+    
+    // MARK: Proxy
+
+    enum Proxy: Sendable, Equatable {
+        case invalidConfiguration(detail: String)
+        case notReady
+        case handshakeFailed(detail: String)
+        case authenticationRequired
+        case authenticationRejected(status: Int?, detail: String?)
+        case tunnelRejected(detail: String)
+        case protocolViolation(detail: String)
+        case upgradeFailed(detail: String)
+        case rpcFailed(status: Int, method: String, message: String?)
+        case streamClosed
+        case connectionClosed(detail: String?)
+        case webSocketClosed(code: UInt16, reason: String)
+        case streamReset(code: UInt32)
+        case goaway
+        case streamIDsExhausted
+        case flowRejected(code: UInt8)
+        case openTimeout
+        case unsupported(feature: String)
+        case datagramTooLarge(maxFrame: Int, headerSize: Int)
+        case packetTooLarge
+        case cipher(Cipher)
+
+        enum Cipher: Sendable, Equatable {
+            case unsupportedMethod(String)
+            case invalidKey
+            case encryptionFailed
+            case decryptionFailed
+            case staleTimestamp
+            case replayedSalt
+            case malformedHeader
+        }
+    }
+    
+    enum Wire: String, Sendable {
+        case anyTLS = "AnyTLS"
+        case direct = "Direct"
+        case grpc = "gRPC"
+        case http11 = "HTTP/1.1"
+        case http2 = "HTTP/2"
+        case http3 = "HTTP/3"
+        case httpConnect = "HTTP"
+        case httpUpgrade = "HTTPUpgrade"
+        case hysteria = "Hysteria"
+        case nowhere = "Nowhere"
+        case rfc = "RFC"
+        case shadowsocks = "Shadowsocks"
+        case socks5 = "SOCKS5"
+        case sudoku = "Sudoku"
+        case trojan = "Trojan"
+        case vless = "VLESS"
+        case vlessEncryption = "VLESS Encryption"
+        case webSocket = "WebSocket"
+        case xhttp = "XHTTP"
+    }
+    
+    // MARK: QUIC
+
+    enum QUIC: Sendable, Equatable {
+        case connectionFailed(detail: String)
+        case handshakeFailed(detail: String)
+        case streamFailed(detail: String)
+        case streamReset(applicationCode: UInt64)
+        case streamClosedWithError(applicationCode: UInt64)
+        case datagramTooLarge(limit: Int)
+        case datagramQueueFull
+        case timedOut
+        case closed(graceful: Bool)
+    }
+    
+    // MARK: Routing
+
+    enum Routing: Sendable, Equatable {
+        case rejectedByRule(host: String)
+        case dropped
+        case payloadCorrupted(BinaryPayload)
+        case configurationMissing(host: String)
+    }
+    
+    // MARK: Store
+
+    enum Store: Sendable {
+        enum Resource: String, Sendable {
+            case configurations, chains, groups, subscriptions, certificates
+            case routingRuleSets, mitmRuleSets, routingDatabase
+            case routingPayload, mitmPayload, scripts
+        }
+
+        case loadFailed(Resource, underlying: any Error)
+        case saveFailed(Resource, underlying: any Error)
+        case missing(Resource)
+        case corrupted(Resource, detail: String?)
+        case migrationFailed(file: String, underlying: any Error)
+        case syncFailed(underlying: any Error)
+    }
+
+    // MARK: Subscription
+
+    enum Subscription: Sendable {
+        case invalidURL
+        case noConfigurations
+        case fetchFailed(underlying: any Error)
     }
 
     // MARK: Transport
@@ -68,7 +204,6 @@ nonisolated enum AnywhereError: Error {
         case connectionFailed(endpoint: String?, detail: String)
         case timedOut(Operation, endpoint: String?, detail: String?)
         case terminated
-        /// A fatal `tcp_write` on the downlink (not backpressure — that retries silently).
         case writeFailed(pending: Int, sndbuf: Int)
     }
 
@@ -130,142 +265,11 @@ nonisolated enum AnywhereError: Error {
         }
     }
 
-    // MARK: QUIC
-
-    enum QUIC: Sendable, Equatable {
-        case connectionFailed(detail: String)
-        case handshakeFailed(detail: String)
-        case streamFailed(detail: String)
-        case streamReset(applicationCode: UInt64)
-        case streamClosedWithError(applicationCode: UInt64)
-        case datagramTooLarge(limit: Int)
-        case datagramQueueFull
-        case timedOut
-        case closed(graceful: Bool)
-    }
-
-    // MARK: Proxy
-
-    enum Proxy: Sendable, Equatable {
-        case invalidConfiguration(detail: String)
-        case notReady
-        case handshakeFailed(detail: String)
-        case authenticationRequired
-        case authenticationRejected(status: Int?, detail: String?)
-        case tunnelRejected(detail: String)
-        case protocolViolation(detail: String)
-        case upgradeFailed(detail: String)
-        case rpcFailed(status: Int, method: String, message: String?)
-        case streamClosed
-        case connectionClosed(detail: String?)
-        case webSocketClosed(code: UInt16, reason: String)
-        case streamReset(code: UInt32)
-        case goaway
-        case streamIDsExhausted
-        case flowRejected(code: UInt8)
-        case openTimeout
-        case unsupported(feature: String)
-        case datagramTooLarge(maxFrame: Int, headerSize: Int)
-        case packetTooLarge
-        case cipher(Cipher)
-
-        enum Cipher: Sendable, Equatable {
-            case unsupportedMethod(String)
-            case invalidKey
-            case encryptionFailed
-            case decryptionFailed
-            case staleTimestamp
-            case replayedSalt
-            case malformedHeader
-        }
-    }
-
-    // MARK: Routing
-
-    enum Routing: Sendable, Equatable {
-        case rejectedByRule(host: String)
-        case dropped
-        case payloadCorrupted(BinaryPayload)
-        case configurationMissing(host: String)
-    }
-
     enum BinaryPayload: Sendable, Equatable {
         case badMagic
         case unsupportedVersion
         case truncated
         case malformed
-    }
-
-    // MARK: MITM
-
-    enum MITM: Sendable, Equatable {
-        case notHTTP
-        case responseTooLarge(limit: Int)
-        case scriptBudgetExceeded(limit: Int)
-        case scriptStoreCapacityExceeded
-        case scriptStoreWriteFailed
-        case scriptMessageMalformed(detail: String)
-        case invalidScriptRequest
-        case upstreamHandshakeTimeout
-        case requestHeadersTooLarge
-        case needsHTTP1Fallback
-        case rewriteRulesCorrupted(BinaryPayload)
-        case profileServerBindFailed
-    }
-
-    // MARK: Certificate
-
-    enum Certificate: Sendable {
-        case keyGenerationFailed(detail: String)
-        case keychainWriteFailed(status: OSStatus)
-        case keychainReadFailed(status: OSStatus)
-        case missingCAComponents
-        case buildFailed(underlying: any Error)
-        case signingFailed(detail: String)
-        case publicKeyExportFailed
-        case invalidPublicKey
-        case asn1ParseFailed(detail: String)
-    }
-
-    // MARK: Store
-
-    enum Store: Sendable {
-        enum Resource: String, Sendable {
-            case configurations, chains, groups, subscriptions, certificates
-            case routingRuleSets, mitmRuleSets, routingDatabase
-            case routingPayload, mitmPayload, scripts
-        }
-
-        case loadFailed(Resource, underlying: any Error)
-        case saveFailed(Resource, underlying: any Error)
-        case missing(Resource)
-        case corrupted(Resource, detail: String?)
-        case migrationFailed(file: String, underlying: any Error)
-        case syncFailed(underlying: any Error)
-    }
-
-    // MARK: Parse
-
-    enum Parse: Sendable, Equatable {
-        case yaml(detail: String)
-        case clashConfigMissingProxies
-        case invalidURL(String)
-        case proxyURI(ProxyURI)
-
-        enum ProxyURI: Sendable, Equatable {
-            case unsupportedScheme(String?)
-            case missingFields
-            case invalidValue(field: String, value: String)
-            case noPublicKeys
-        }
-    }
-
-    // MARK: Subscription
-
-    enum Subscription: Sendable {
-        case invalidURL
-        case noConfigurations
-        case fetchFailed(underlying: any Error)
     }
 
     // MARK: Tunnel
@@ -275,12 +279,6 @@ nonisolated enum AnywhereError: Error {
         case settingsApplyFailed(underlying: any Error)
         case ipcFailed(underlying: any Error)
         case sessionUnavailable
-    }
-
-    // MARK: Diagnostics
-
-    enum Diagnostics: Sendable, Equatable {
-        case latencyProbeFailed(status: String)
     }
 }
 

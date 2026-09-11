@@ -81,6 +81,20 @@ class TVProxyEditorViewController: UITableViewController {
     private var hysteriaObfuscationMinText = String(HysteriaObfuscation.geckoMinPacketSizeDefault)
     private var hysteriaObfuscationMaxText = String(HysteriaObfuscation.geckoMaxPacketSizeDefault)
     private var hysteriaSNI = ""
+    
+    private var sudokuKey = ""
+    private var sudokuAEADMethod: SudokuAEADMethod = .chacha20Poly1305
+    private var sudokuPaddingMinText = "5"
+    private var sudokuPaddingMaxText = "15"
+    private var sudokuASCIIMode: SudokuASCIIMode = .preferEntropy
+    private var sudokuCustomTablesText = ""
+    private var sudokuEnablePureDownlink = true
+    private var sudokuHTTPMaskDisable = false
+    private var sudokuHTTPMaskMode: SudokuHTTPMaskMode = .legacy
+    private var sudokuHTTPMaskTLS = false
+    private var sudokuHTTPMaskHost = ""
+    private var sudokuHTTPMaskPathRoot = ""
+    private var sudokuMultiplex: SudokuMultiplex = .off
 
     private var trojanPassword = ""
     private var trojanSNI = ""
@@ -102,30 +116,27 @@ class TVProxyEditorViewController: UITableViewController {
     private var socks5Username = ""
     private var socks5Password = ""
 
-    private var sudokuKey = ""
-    private var sudokuAEADMethod: SudokuAEADMethod = .chacha20Poly1305
-    private var sudokuPaddingMinText = "5"
-    private var sudokuPaddingMaxText = "15"
-    private var sudokuASCIIMode: SudokuASCIIMode = .preferEntropy
-    private var sudokuCustomTablesText = ""
-    private var sudokuEnablePureDownlink = true
-    private var sudokuHTTPMaskDisable = false
-    private var sudokuHTTPMaskMode: SudokuHTTPMaskMode = .legacy
-    private var sudokuHTTPMaskTLS = false
-    private var sudokuHTTPMaskHost = ""
-    private var sudokuHTTPMaskPathRoot = ""
-    private var sudokuMultiplex: SudokuMultiplex = .off
+    private var rfcUsername = ""
+    private var rfcPassword = ""
+    private var rfcSecurity = "tls"
+    private var rfcSNI = ""
+    private var rfcALPN = ""
+    private var rfcECHEnabled = false
+    private var rfcECH = ""
+    private var rfcFingerprint: TLSFingerprint = .default
 
     private var isNowhere: Bool { selectedProtocol == .nowhere }
     private var isVLESS: Bool { selectedProtocol == .vless }
     private var isVLESSReality: Bool { vlessSecurity == "reality" }
     private var isVLESSTLS: Bool { vlessSecurity == "tls" }
     private var isHysteria: Bool { selectedProtocol == .hysteria }
+    private var isSudoku: Bool { selectedProtocol == .sudoku }
     private var isTrojan: Bool { selectedProtocol == .trojan }
     private var isAnyTLS: Bool { selectedProtocol == .anytls }
     private var isShadowsocks: Bool { selectedProtocol == .shadowsocks }
     private var isSOCKS5: Bool { selectedProtocol == .socks5 }
-    private var isSudoku: Bool { selectedProtocol == .sudoku }
+    private var isRFC: Bool { selectedProtocol == .rfc }
+    private var isRFCTLS: Bool { rfcSecurity == "tls" }
 
     // MARK: - Form Structure
 
@@ -160,15 +171,16 @@ class TVProxyEditorViewController: UITableViewController {
         case hysteriaPassword, hysteriaCC, hysteriaUploadMbps, hysteriaDownloadMbps
         case hysteriaObfuscationType, hysteriaObfuscationPassword, hysteriaObfuscationMin, hysteriaObfuscationMax
         case hysteriaSNI
-        case trojanPassword, trojanSNI, trojanALPN, trojanECHEnabled, trojanECH, trojanFingerprint
-        case anytlsPassword, anytlsSNI, anytlsALPN, anytlsECHEnabled, anytlsECH, anytlsFingerprint
-        case ssPassword, ssMethod
         case sudokuKey, sudokuAEADMethod, sudokuPaddingMin, sudokuPaddingMax
         case sudokuASCIIMode, sudokuCustomTables
         case sudokuPureDownlink
         case sudokuHTTPMaskDisable, sudokuHTTPMaskMode, sudokuHTTPMaskTLS
         case sudokuHTTPMaskHost, sudokuHTTPMaskPathRoot, sudokuMultiplex
+        case trojanPassword, trojanSNI, trojanALPN, trojanECHEnabled, trojanECH, trojanFingerprint
+        case anytlsPassword, anytlsSNI, anytlsALPN, anytlsECHEnabled, anytlsECH, anytlsFingerprint
+        case ssPassword, ssMethod
         case socks5Username, socks5Password
+        case rfcUsername, rfcPassword, rfcSecurity, rfcSNI, rfcALPN, rfcECHEnabled, rfcECH, rfcFingerprint
     }
 
     private var formSections: [(title: String?, rows: [RowType])] {
@@ -182,11 +194,12 @@ class TVProxyEditorViewController: UITableViewController {
             ("Nowhere", "nowhere"),
             ("VLESS", "vless"),
             ("Hysteria", "hysteria"),
+            ("Sudoku", "sudoku"),
             ("Trojan", "trojan"),
             ("AnyTLS", "anytls"),
             ("Shadowsocks", "shadowsocks"),
             ("SOCKS5", "socks5"),
-            ("Sudoku", "sudoku"),
+            ("RFC", "rfc"),
         ]
         sections.append((String(localized: "Protocol"), [
             .selection(label: String(localized: "Protocol"), value: selectedProtocol.name, options: protocolOptions, key: .outboundProtocol),
@@ -218,6 +231,14 @@ class TVProxyEditorViewController: UITableViewController {
                 serverRows.append(.text(label: String(localized: "Minimum Packet Size", comment: "Minimum Packet Size for Hysteria protocol Gecko obfuscation"), value: hysteriaObfuscationMinText, placeholder: String(HysteriaObfuscation.geckoMinPacketSizeDefault), key: .hysteriaObfuscationMin))
                 serverRows.append(.text(label: String(localized: "Maximum Packet Size", comment: "Maximum Packet Size for Hysteria protocol Gecko obfuscation"), value: hysteriaObfuscationMaxText, placeholder: String(HysteriaObfuscation.geckoMaxPacketSizeDefault), key: .hysteriaObfuscationMax))
             }
+        } else if isSudoku {
+            serverRows.append(.text(label: String(localized: "Key", comment: "Key for Sudoku protocol"), value: sudokuKey, placeholder: String(localized: "Key", comment: "Key for Sudoku protocol"), key: .sudokuKey, secure: true))
+            serverRows.append(.selection(label: String(localized: "AEAD", comment: "AEAD for Sudoku protocol"), value: sudokuAEADMethod.displayName, options: SudokuAEADMethod.allCases.map { ($0.displayName, $0.rawValue) }, key: .sudokuAEADMethod))
+            serverRows.append(.text(label: String(localized: "Padding Min", comment: "Padding Min for Sudoku protocol"), value: sudokuPaddingMinText, placeholder: "0-100", key: .sudokuPaddingMin))
+            serverRows.append(.text(label: String(localized: "Padding Max", comment: "Padding Max for Sudoku protocol"), value: sudokuPaddingMaxText, placeholder: "0-100", key: .sudokuPaddingMax))
+            serverRows.append(.selection(label: String(localized: "ASCII"), value: sudokuASCIIMode.displayName, options: SudokuASCIIMode.allCases.map { ($0.displayName, $0.rawValue) }, key: .sudokuASCIIMode))
+            serverRows.append(.text(label: String(localized: "Custom Tables", comment: "Custom Tables for Sudoku protocol"), value: sudokuCustomTablesText, placeholder: "comma,separated", key: .sudokuCustomTables))
+            serverRows.append(.toggle(label: String(localized: "Pure Downlink", comment: "Pure Downlink for Sudoku protocol"), isOn: sudokuEnablePureDownlink, key: .sudokuPureDownlink))
         } else if isTrojan {
             serverRows.append(.text(label: String(localized: "Password"), value: trojanPassword, placeholder: String(localized: "Password"), key: .trojanPassword, secure: true))
         } else if isAnyTLS {
@@ -237,14 +258,9 @@ class TVProxyEditorViewController: UITableViewController {
         } else if isSOCKS5 {
             serverRows.append(.text(label: String(localized: "Username"), value: socks5Username, placeholder: String(localized: "Username"), key: .socks5Username))
             serverRows.append(.text(label: String(localized: "Password"), value: socks5Password, placeholder: String(localized: "Password"), key: .socks5Password, secure: true))
-        } else if isSudoku {
-            serverRows.append(.text(label: String(localized: "Key", comment: "Key for Sudoku protocol"), value: sudokuKey, placeholder: String(localized: "Key", comment: "Key for Sudoku protocol"), key: .sudokuKey, secure: true))
-            serverRows.append(.selection(label: String(localized: "AEAD", comment: "AEAD for Sudoku protocol"), value: sudokuAEADMethod.displayName, options: SudokuAEADMethod.allCases.map { ($0.displayName, $0.rawValue) }, key: .sudokuAEADMethod))
-            serverRows.append(.text(label: String(localized: "Padding Min", comment: "Padding Min for Sudoku protocol"), value: sudokuPaddingMinText, placeholder: "0-100", key: .sudokuPaddingMin))
-            serverRows.append(.text(label: String(localized: "Padding Max", comment: "Padding Max for Sudoku protocol"), value: sudokuPaddingMaxText, placeholder: "0-100", key: .sudokuPaddingMax))
-            serverRows.append(.selection(label: String(localized: "ASCII"), value: sudokuASCIIMode.displayName, options: SudokuASCIIMode.allCases.map { ($0.displayName, $0.rawValue) }, key: .sudokuASCIIMode))
-            serverRows.append(.text(label: String(localized: "Custom Tables", comment: "Custom Tables for Sudoku protocol"), value: sudokuCustomTablesText, placeholder: "comma,separated", key: .sudokuCustomTables))
-            serverRows.append(.toggle(label: String(localized: "Pure Downlink", comment: "Pure Downlink for Sudoku protocol"), isOn: sudokuEnablePureDownlink, key: .sudokuPureDownlink))
+        } else if isRFC {
+            serverRows.append(.text(label: String(localized: "Username"), value: rfcUsername, placeholder: String(localized: "Username"), key: .rfcUsername))
+            serverRows.append(.text(label: String(localized: "Password"), value: rfcPassword, placeholder: String(localized: "Password"), key: .rfcPassword, secure: true))
         }
         sections.append((String(localized: "Server"), serverRows))
 
@@ -349,10 +365,13 @@ class TVProxyEditorViewController: UITableViewController {
                 tlsRows.append(.text(label: String(localized: "Short ID", comment: "Short ID for Reality security layer"), value: vlessRealityShortId, placeholder: String(localized: "Short ID", comment: "Short ID for Reality security layer"), key: .vlessRealityShortId))
                 tlsRows.append(.selection(label: String(localized: "Fingerprint"), value: vlessFingerprint.displayName, options: TLSFingerprint.allCases.map { ($0.displayName, $0.rawValue) }, key: .vlessFingerprint))
             }
-            // With detach on, the main TLS only secures the upload leg; label it to pair with the "TLS (Download)" section.
             let tlsTitle = (vlessTransport == "xhttp" && vlessXHTTPDownloadEnabled)
                 ? String(localized: "TLS (Upload)") : String(localized: "TLS")
             sections.append((tlsTitle, tlsRows))
+        } else if isHysteria {
+            sections.append((String(localized: "TLS"), [
+                .text(label: String(localized: "SNI"), value: hysteriaSNI, placeholder: String(localized: "SNI"), key: .hysteriaSNI),
+            ]))
         } else if isTrojan {
             var trojanRows: [RowType] = [
                 .text(label: String(localized: "SNI"), value: trojanSNI, placeholder: String(localized: "SNI"), key: .trojanSNI),
@@ -375,10 +394,25 @@ class TVProxyEditorViewController: UITableViewController {
             }
             anytlsRows.append(.selection(label: String(localized: "Fingerprint"), value: anytlsFingerprint.displayName, options: TLSFingerprint.allCases.map { ($0.displayName, $0.rawValue) }, key: .anytlsFingerprint))
             sections.append((String(localized: "TLS"), anytlsRows))
-        } else if isHysteria {
-            sections.append((String(localized: "TLS"), [
-                .text(label: String(localized: "SNI"), value: hysteriaSNI, placeholder: String(localized: "SNI"), key: .hysteriaSNI),
-            ]))
+        } else if isRFC {
+            var rfcRows: [RowType] = [
+                .selection(
+                    label: String(localized: "Security", comment: "Security for RFC protocol"),
+                    value: isRFCTLS ? String(localized: "TLS") : String(localized: "None"),
+                    options: [(String(localized: "None"), "none"), (String(localized: "TLS"), "tls")],
+                    key: .rfcSecurity
+                ),
+            ]
+            if isRFCTLS {
+                rfcRows.append(.text(label: String(localized: "SNI"), value: rfcSNI, placeholder: String(localized: "SNI"), key: .rfcSNI))
+                rfcRows.append(.text(label: String(localized: "ALPN"), value: rfcALPN, placeholder: String(localized: "h2,http/1.1"), key: .rfcALPN))
+                rfcRows.append(.toggle(label: String(localized: "Enable ECH"), isOn: rfcECHEnabled, key: .rfcECHEnabled))
+                if rfcECHEnabled {
+                    rfcRows.append(.text(label: String(localized: "ECH Config"), value: rfcECH, placeholder: String(localized: "Base64"), key: .rfcECH))
+                }
+                rfcRows.append(.selection(label: String(localized: "Fingerprint"), value: rfcFingerprint.displayName, options: TLSFingerprint.allCases.map { ($0.displayName, $0.rawValue) }, key: .rfcFingerprint))
+            }
+            sections.append((String(localized: "TLS"), rfcRows))
         }
 
         if isVLESS && vlessTransport == "xhttp" {
@@ -517,9 +551,7 @@ class TVProxyEditorViewController: UITableViewController {
         default: String(localized: "None")
         }
     }
-
-    /// Rebuilds the obfuscation enum from the decomposed fields; `make` returns nil for the "none"
-    /// type and normalizes the gecko packet-size bounds.
+    
     private var hysteriaObfuscationValue: HysteriaObfuscation? {
         HysteriaObfuscation.make(
             type: hysteriaObfuscationType == "none" ? nil : hysteriaObfuscationType,
@@ -554,15 +586,16 @@ class TVProxyEditorViewController: UITableViewController {
             }
             return true
         }
-        if isTrojan { return !trojanPassword.isEmpty }
-        if isAnyTLS { return !anytlsPassword.isEmpty }
-        if isShadowsocks { return !ssPassword.isEmpty }
-        if isSOCKS5 { return true }
         if isSudoku {
             guard !sudokuKey.isEmpty else { return false }
             guard let min = Int(sudokuPaddingMinText), let max = Int(sudokuPaddingMaxText) else { return false }
             return (0...100).contains(min) && min <= max && max <= 100
         }
+        if isTrojan { return !trojanPassword.isEmpty }
+        if isAnyTLS { return !anytlsPassword.isEmpty }
+        if isShadowsocks { return !ssPassword.isEmpty }
+        if isSOCKS5 { return true }
+        if isRFC { return !rfcUsername.contains(":") }
         return false
     }
 
@@ -779,6 +812,23 @@ class TVProxyEditorViewController: UITableViewController {
         case .hysteriaObfuscationPassword: hysteriaObfuscationPassword = value
         case .hysteriaObfuscationMin: hysteriaObfuscationMinText = value
         case .hysteriaObfuscationMax: hysteriaObfuscationMaxText = value
+        case .sudokuKey: sudokuKey = value
+        case .sudokuAEADMethod:
+            if let method = SudokuAEADMethod(rawValue: value) { sudokuAEADMethod = method }
+        case .sudokuPaddingMin: sudokuPaddingMinText = value
+        case .sudokuPaddingMax: sudokuPaddingMaxText = value
+        case .sudokuASCIIMode:
+            if let mode = SudokuASCIIMode(rawValue: value) { sudokuASCIIMode = mode }
+        case .sudokuCustomTables: sudokuCustomTablesText = value
+        case .sudokuPureDownlink: sudokuEnablePureDownlink = value == "true"
+        case .sudokuHTTPMaskDisable: sudokuHTTPMaskDisable = value == "true"
+        case .sudokuHTTPMaskMode:
+            if let mode = SudokuHTTPMaskMode(rawValue: value) { sudokuHTTPMaskMode = mode }
+        case .sudokuHTTPMaskTLS: sudokuHTTPMaskTLS = value == "true"
+        case .sudokuHTTPMaskHost: sudokuHTTPMaskHost = value
+        case .sudokuHTTPMaskPathRoot: sudokuHTTPMaskPathRoot = value
+        case .sudokuMultiplex:
+            if let mode = SudokuMultiplex(rawValue: value) { sudokuMultiplex = mode }
         case .trojanPassword: trojanPassword = value
         case .trojanSNI: trojanSNI = value
         case .trojanALPN: trojanALPN = value
@@ -797,23 +847,15 @@ class TVProxyEditorViewController: UITableViewController {
         case .ssMethod: ssMethod = value
         case .socks5Username: socks5Username = value
         case .socks5Password: socks5Password = value
-        case .sudokuKey: sudokuKey = value
-        case .sudokuAEADMethod:
-            if let method = SudokuAEADMethod(rawValue: value) { sudokuAEADMethod = method }
-        case .sudokuPaddingMin: sudokuPaddingMinText = value
-        case .sudokuPaddingMax: sudokuPaddingMaxText = value
-        case .sudokuASCIIMode:
-            if let mode = SudokuASCIIMode(rawValue: value) { sudokuASCIIMode = mode }
-        case .sudokuCustomTables: sudokuCustomTablesText = value
-        case .sudokuPureDownlink: sudokuEnablePureDownlink = value == "true"
-        case .sudokuHTTPMaskDisable: sudokuHTTPMaskDisable = value == "true"
-        case .sudokuHTTPMaskMode:
-            if let mode = SudokuHTTPMaskMode(rawValue: value) { sudokuHTTPMaskMode = mode }
-        case .sudokuHTTPMaskTLS: sudokuHTTPMaskTLS = value == "true"
-        case .sudokuHTTPMaskHost: sudokuHTTPMaskHost = value
-        case .sudokuHTTPMaskPathRoot: sudokuHTTPMaskPathRoot = value
-        case .sudokuMultiplex:
-            if let mode = SudokuMultiplex(rawValue: value) { sudokuMultiplex = mode }
+        case .rfcUsername: rfcUsername = value
+        case .rfcPassword: rfcPassword = value
+        case .rfcSecurity: rfcSecurity = value
+        case .rfcSNI: rfcSNI = value
+        case .rfcALPN: rfcALPN = value
+        case .rfcECHEnabled: rfcECHEnabled = value == "true"
+        case .rfcECH: rfcECH = value
+        case .rfcFingerprint:
+            if let fingerprint = TLSFingerprint(rawValue: value) { rfcFingerprint = fingerprint }
         }
     }
 
@@ -919,6 +961,20 @@ class TVProxyEditorViewController: UITableViewController {
                 }
             }
             hysteriaSNI = sni
+        case .sudoku(let sudoku):
+            sudokuKey = sudoku.key
+            sudokuAEADMethod = sudoku.aeadMethod
+            sudokuPaddingMinText = String(sudoku.paddingMin)
+            sudokuPaddingMaxText = String(sudoku.paddingMax)
+            sudokuASCIIMode = sudoku.asciiMode
+            sudokuCustomTablesText = sudoku.customTables.joined(separator: ",")
+            sudokuEnablePureDownlink = sudoku.enablePureDownlink
+            sudokuHTTPMaskDisable = sudoku.httpMask.disable
+            sudokuHTTPMaskMode = sudoku.httpMask.mode
+            sudokuHTTPMaskTLS = sudoku.httpMask.tls
+            sudokuHTTPMaskHost = sudoku.httpMask.host
+            sudokuHTTPMaskPathRoot = sudoku.httpMask.pathRoot
+            sudokuMultiplex = sudoku.multiplex
         case .trojan(let password, let securityLayer):
             let tls = securityLayer.tlsConfiguration ?? TLSConfiguration(serverName: "")
             trojanPassword = password
@@ -941,20 +997,17 @@ class TVProxyEditorViewController: UITableViewController {
         case .socks5(let user, let pass):
             socks5Username = user ?? ""
             socks5Password = pass ?? ""
-        case .sudoku(let sudoku):
-            sudokuKey = sudoku.key
-            sudokuAEADMethod = sudoku.aeadMethod
-            sudokuPaddingMinText = String(sudoku.paddingMin)
-            sudokuPaddingMaxText = String(sudoku.paddingMax)
-            sudokuASCIIMode = sudoku.asciiMode
-            sudokuCustomTablesText = sudoku.customTables.joined(separator: ",")
-            sudokuEnablePureDownlink = sudoku.enablePureDownlink
-            sudokuHTTPMaskDisable = sudoku.httpMask.disable
-            sudokuHTTPMaskMode = sudoku.httpMask.mode
-            sudokuHTTPMaskTLS = sudoku.httpMask.tls
-            sudokuHTTPMaskHost = sudoku.httpMask.host
-            sudokuHTTPMaskPathRoot = sudoku.httpMask.pathRoot
-            sudokuMultiplex = sudoku.multiplex
+        case .rfc(let username, let password, let securityLayer):
+            rfcUsername = username ?? ""
+            rfcPassword = password ?? ""
+            rfcSecurity = securityLayer.tag
+            if let tls = securityLayer.tlsConfiguration {
+                rfcSNI = tls.serverName
+                rfcALPN = tls.alpn?.joined(separator: ",") ?? ""
+                rfcECHEnabled = tls.echEnabled
+                rfcECH = tls.echConfig ?? ""
+                rfcFingerprint = tls.fingerprint
+            }
         }
     }
 
@@ -1012,7 +1065,7 @@ class TVProxyEditorViewController: UITableViewController {
     private func save() {
         guard let port = UInt16(serverPort) else { return }
         let parsedUUID: UUID
-        if isNowhere || isHysteria || isTrojan || isAnyTLS || isShadowsocks || isSOCKS5 || isSudoku {
+        if isNowhere || isHysteria || isTrojan || isAnyTLS || isShadowsocks || isSOCKS5 || isSudoku || isRFC {
             parsedUUID = existingConfiguration?.id ?? UUID()
         } else {
             guard let parsed = UUID(uuidString: vlessUUID) else { return }
@@ -1059,7 +1112,6 @@ class TVProxyEditorViewController: UITableViewController {
             let host = vlessXHTTPHost.isEmpty ? serverAddress : vlessXHTTPHost
             let mode = XHTTPMode(rawValue: vlessXHTTPMode) ?? .auto
             var parameters: [String: String] = ["host": host, "path": vlessXHTTPPath, "mode": mode.rawValue]
-            // Merge advanced fields (vlessXHTTPExtra) with the detached download source so neither clobbers the other.
             var extra: [String: Any] = [:]
             if !vlessXHTTPExtra.isEmpty, let data = vlessXHTTPExtra.data(using: .utf8),
                let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
@@ -1123,33 +1175,83 @@ class TVProxyEditorViewController: UITableViewController {
                 obfuscation: hysteriaObfuscationValue,
                 sni: sni
             )
+        case .sudoku:
+            outbound = .sudoku(
+                SudokuConfiguration(
+                    key: sudokuKey,
+                    aeadMethod: sudokuAEADMethod,
+                    paddingMin: Int(sudokuPaddingMinText) ?? 5,
+                    paddingMax: Int(sudokuPaddingMaxText) ?? 15,
+                    asciiMode: sudokuASCIIMode,
+                    customTables: sudokuCustomTablesText
+                        .split(separator: ",")
+                        .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                        .filter { !$0.isEmpty },
+                    enablePureDownlink: sudokuEnablePureDownlink,
+                    multiplex: sudokuMultiplex,
+                    httpMask: SudokuHTTPMaskConfiguration(
+                        disable: sudokuHTTPMaskDisable,
+                        mode: sudokuHTTPMaskMode,
+                        tls: sudokuHTTPMaskTLS,
+                        host: sudokuHTTPMaskHost,
+                        pathRoot: sudokuHTTPMaskPathRoot
+                    )
+                )
+            )
         case .trojan:
             let sni = trojanSNI.isEmpty ? bareAddress : trojanSNI
             let alpn: [String]? = trojanALPN.isEmpty ? nil : trojanALPN.split(separator: ",").map { String($0) }
             let ech = trojanECH.trimmingCharacters(in: .whitespacesAndNewlines)
             outbound = .trojan(
                 password: trojanPassword,
-                securityLayer: .tls(TLSConfiguration(serverName: sni, alpn: alpn, echEnabled: trojanECHEnabled, echConfig: trojanECHEnabled && !ech.isEmpty ? ech : nil, fingerprint: trojanFingerprint))
+                securityLayer: .tls(
+                    TLSConfiguration(
+                        serverName: sni,
+                                     alpn: alpn,
+                        echEnabled: trojanECHEnabled,
+                        echConfig: trojanECHEnabled && !ech.isEmpty ? ech : nil,
+                        fingerprint: trojanFingerprint
+                    )
+                )
             )
         case .anytls:
             let sni = anytlsSNI.isEmpty ? bareAddress : anytlsSNI
             let alpn: [String]? = anytlsALPN.isEmpty ? nil : anytlsALPN.split(separator: ",").map { String($0) }
-            let idleCheckInterval: Int
-            let idleTimeout: Int
-            let minIdleSession: Int
-            if let existing = existingConfiguration, case .anytls(_, let c, let t, let m, _) = existing.outbound {
-                idleCheckInterval = c; idleTimeout = t; minIdleSession = m
-            } else {
-                idleCheckInterval = 30; idleTimeout = 30; minIdleSession = 0
-            }
             let ech = anytlsECH.trimmingCharacters(in: .whitespacesAndNewlines)
-            outbound = .anytls(
-                password: anytlsPassword,
-                idleCheckInterval: idleCheckInterval,
-                idleTimeout: idleTimeout,
-                minIdleSession: minIdleSession,
-                securityLayer: .tls(TLSConfiguration(serverName: sni, alpn: alpn, echEnabled: anytlsECHEnabled, echConfig: anytlsECHEnabled && !ech.isEmpty ? ech : nil, fingerprint: anytlsFingerprint))
-            )
+            if let existing = existingConfiguration,
+               case .anytls(_, let idleCheckInterval, let idleTimeout, let minIdleSession, _) = existing.outbound {
+                outbound = .anytls(
+                    password: anytlsPassword,
+                    idleCheckInterval: idleCheckInterval,
+                    idleTimeout: idleTimeout,
+                    minIdleSession: minIdleSession,
+                    securityLayer: .tls(
+                        TLSConfiguration(
+                            serverName: sni,
+                            alpn: alpn,
+                            echEnabled: anytlsECHEnabled,
+                            echConfig: anytlsECHEnabled && !ech.isEmpty ? ech : nil,
+                            fingerprint: anytlsFingerprint
+                        )
+                    )
+                )
+            } else {
+                outbound = .anytls(
+                    password: anytlsPassword,
+                    idleCheckInterval: 30,
+                    idleTimeout: 30,
+                    minIdleSession: 0,
+                    securityLayer: .tls(
+                        TLSConfiguration(
+                            serverName: sni,
+                            alpn: alpn,
+                            echEnabled: anytlsECHEnabled,
+                            echConfig: anytlsECHEnabled && !ech.isEmpty ? ech : nil,
+                            fingerprint: anytlsFingerprint
+                        )
+                    )
+                )
+            }
         case .shadowsocks:
             outbound = .shadowsocks(password: ssPassword, method: ssMethod)
         case .socks5:
@@ -1157,27 +1259,29 @@ class TVProxyEditorViewController: UITableViewController {
                 username: socks5Username.isEmpty ? nil : socks5Username,
                 password: socks5Password.isEmpty ? nil : socks5Password
             )
-        case .sudoku:
-            outbound = .sudoku(SudokuConfiguration(
-                key: sudokuKey,
-                aeadMethod: sudokuAEADMethod,
-                paddingMin: Int(sudokuPaddingMinText) ?? 5,
-                paddingMax: Int(sudokuPaddingMaxText) ?? 15,
-                asciiMode: sudokuASCIIMode,
-                customTables: sudokuCustomTablesText
-                    .split(separator: ",")
-                    .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-                    .filter { !$0.isEmpty },
-                enablePureDownlink: sudokuEnablePureDownlink,
-                multiplex: sudokuMultiplex,
-                httpMask: SudokuHTTPMaskConfiguration(
-                    disable: sudokuHTTPMaskDisable,
-                    mode: sudokuHTTPMaskMode,
-                    tls: sudokuHTTPMaskTLS,
-                    host: sudokuHTTPMaskHost,
-                    pathRoot: sudokuHTTPMaskPathRoot
+        case .rfc:
+            let securityLayer: GenericSecurityLayer
+            if isRFCTLS {
+                let sni = rfcSNI.isEmpty ? bareAddress : rfcSNI
+                let alpn: [String]? = rfcALPN.isEmpty ? nil : rfcALPN.split(separator: ",").map { String($0) }
+                let ech = rfcECH.trimmingCharacters(in: .whitespacesAndNewlines)
+                securityLayer = .tls(
+                    TLSConfiguration(
+                        serverName: sni,
+                        alpn: alpn,
+                        echEnabled: rfcECHEnabled,
+                        echConfig: rfcECHEnabled && !ech.isEmpty ? ech : nil,
+                        fingerprint: rfcFingerprint
+                    )
                 )
-            ))
+            } else {
+                securityLayer = .none
+            }
+            outbound = .rfc(
+                username: rfcUsername.isEmpty ? nil : rfcUsername,
+                password: rfcPassword.isEmpty ? nil : rfcPassword,
+                securityLayer: securityLayer
+            )
         }
 
         let configuration = ProxyConfiguration(

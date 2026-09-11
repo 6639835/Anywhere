@@ -40,18 +40,18 @@ nonisolated struct ClashProxyParser {
     }
 
     // MARK: - Dispatch
-
-    /// Clash `type:` values without a matching outbound are silently skipped.
+    
     private static func parseProxy(_ node: YAML.Node) -> ProxyConfiguration? {
         guard let type = getString(node, key: "type") else { return nil }
         switch type {
         case "vless":     return parseVLESSProxy(node)
         case "hysteria2": return parseHysteria2Proxy(node)
+        case "sudoku":    return parseSudokuProxy(node)
         case "trojan":    return parseTrojanProxy(node)
         case "anytls":    return parseAnyTLSProxy(node)
         case "ss":        return parseShadowsocksProxy(node)
         case "socks5":    return parseSOCKS5Proxy(node)
-        case "sudoku":    return parseSudokuProxy(node)
+        case "http":      return parseRFCProxy(node)
         default:          return nil
         }
     }
@@ -107,10 +107,7 @@ nonisolated struct ClashProxyParser {
         case enabled(String)
         case enabledWithoutConfig
     }
-
-    /// mihomo `ech-opts`: `config` is a base64 ECHConfigList; `query-server-name` is
-    /// ignored since the cover SNI comes from the config's public_name. `enable: true`
-    /// without an inline config becomes opportunistic discovery.
+    
     private static func parseECHOpts(_ node: YAML.Node) -> ClashECHOpts {
         let opts = node["ech-opts"]
         guard opts.type == .map, getBool(opts, key: "enable") == true else { return .disabled }
@@ -119,8 +116,7 @@ nonisolated struct ClashProxyParser {
         }
         return .enabledWithoutConfig
     }
-
-    /// `config` is nil when the ECHConfigList is to be discovered opportunistically.
+    
     private static func echSettings(_ node: YAML.Node) -> (config: String?, enabled: Bool) {
         switch parseECHOpts(node) {
         case .disabled:             return (nil, false)
@@ -135,8 +131,7 @@ nonisolated struct ClashProxyParser {
             let uuidString = getString(node, key: "uuid"),
             let uuid = UUID(vlessString: uuidString)
         else { return nil }
-
-        // Transport: tcp (default) or ws; skip h2/grpc which we don't implement.
+        
         let network = getString(node, key: "network") ?? "tcp"
         guard network != "h2" && network != "grpc" else { return nil }
         let transport = (network == "ws") ? "ws" : "tcp"
@@ -201,9 +196,7 @@ nonisolated struct ClashProxyParser {
     }
     
     // MARK: - Hysteria2
-
-    /// Salamander and Gecko obfuscation are supported; a node declaring any other `obfs` type is
-    /// skipped rather than silently connected without it (the server would reject the handshake).
+    
     private static func parseHysteria2Proxy(_ node: YAML.Node) -> ProxyConfiguration? {
         guard let basics = parseBasics(node) else { return nil }
 
@@ -226,7 +219,6 @@ nonisolated struct ClashProxyParser {
         let sni = (rawSNI?.isEmpty == false) ? rawSNI! : basics.server
         let upString = getString(node, key: "up")
         let downString = getString(node, key: "down")
-        // `up`/`down` carry Brutal's bandwidth; a node without either runs BBR.
         let hasBandwidth = (upString?.isEmpty == false) || (downString?.isEmpty == false)
         let congestionControl: HysteriaCongestionControl = hasBandwidth ? .brutal : .bbr
         let uploadMbps = HysteriaCongestionControl.clampUploadMbps(parseBandwidthMbps(upString, default: HysteriaCongestionControl.uploadMbpsDefault))
@@ -246,121 +238,7 @@ nonisolated struct ClashProxyParser {
             )
         )
     }
-
-    // MARK: - Trojan
-
-    /// Nodes using Reality, gRPC, the Trojan-Go SS layer, or any non-TCP transport are
-    /// skipped — silently downgrading would speak a different wire format than the server expects.
-    private static func parseTrojanProxy(_ node: YAML.Node) -> ProxyConfiguration? {
-        guard
-            let basics = parseBasics(node),
-            let password = getString(node, key: "password")
-        else { return nil }
-
-        let network = getString(node, key: "network") ?? "tcp"
-        guard network == "tcp" else { return nil }
-
-        if node["reality-opts"].type == .map { return nil }
-        if node["grpc-opts"].type == .map { return nil }
-        let ssOpts = node["ss-opts"]
-        if ssOpts.type == .map, getBool(ssOpts, key: "enabled") == true { return nil }
-
-        let ech = echSettings(node)
-
-        let tlsConfiguration = TLSConfiguration(
-            serverName: parseSNI(node, server: basics.server),
-            alpn: getStringSequence(node, key: "alpn"),
-            echEnabled: ech.enabled,
-            echConfig: ech.config,
-            fingerprint: parseFingerprint(node)
-        )
-
-        return ProxyConfiguration(
-            name: basics.name,
-            serverAddress: basics.server,
-            serverPort: basics.port,
-            outbound: .trojan(password: password, securityLayer: .tls(tlsConfiguration))
-        )
-    }
-
-    // MARK: - AnyTLS
-
-    /// Warm-pool knobs are stored raw; `AnyTLSMultiplexerPool` clamps them at use time.
-    private static func parseAnyTLSProxy(_ node: YAML.Node) -> ProxyConfiguration? {
-        guard let basics = parseBasics(node) else { return nil }
-
-        let password = getString(node, key: "password") ?? ""
-
-        let idleCheckInterval = getInt(node, key: "idle-session-check-interval") ?? 30
-        let idleTimeout = getInt(node, key: "idle-session-timeout") ?? 30
-        let minIdleSession = getInt(node, key: "min-idle-session") ?? 0
-
-        let ech = echSettings(node)
-
-        let tlsConfiguration = TLSConfiguration(
-            serverName: parseSNI(node, server: basics.server),
-            alpn: getStringSequence(node, key: "alpn"),
-            echEnabled: ech.enabled,
-            echConfig: ech.config,
-            fingerprint: parseFingerprint(node)
-        )
-
-        return ProxyConfiguration(
-            name: basics.name,
-            serverAddress: basics.server,
-            serverPort: basics.port,
-            outbound: .anytls(
-                password: password,
-                idleCheckInterval: idleCheckInterval,
-                idleTimeout: idleTimeout,
-                minIdleSession: minIdleSession,
-                securityLayer: .tls(tlsConfiguration)
-            )
-        )
-    }
-
-    // MARK: - Shadowsocks
-
-    /// Only bare Shadowsocks is supported — nodes with a plugin, non-TCP transport,
-    /// or TLS wrapper are skipped rather than silently downgraded.
-    private static func parseShadowsocksProxy(_ node: YAML.Node) -> ProxyConfiguration? {
-        guard
-            let basics = parseBasics(node),
-            let password = getString(node, key: "password"),
-            let cipher = getString(node, key: "cipher"),
-            ShadowsocksCipher(method: cipher) != nil
-        else { return nil }
-
-        let network = getString(node, key: "network") ?? getString(node, key: "plugin-opts-network") ?? "tcp"
-        guard network == "tcp" else { return nil }
-        if getBool(node, key: "tls") == true { return nil }
-        if let plugin = getString(node, key: "plugin"), !plugin.isEmpty { return nil }
-
-        return ProxyConfiguration(
-            name: basics.name,
-            serverAddress: basics.server,
-            serverPort: basics.port,
-            outbound: .shadowsocks(password: password, method: cipher)
-        )
-    }
-
-    // MARK: - SOCKS5
-
-    private static func parseSOCKS5Proxy(_ node: YAML.Node) -> ProxyConfiguration? {
-        guard let basics = parseBasics(node) else { return nil }
-        // Reject SOCKS5-over-TLS rather than silently downgrading it.
-        if getBool(node, key: "tls") == true { return nil }
-        return ProxyConfiguration(
-            name: basics.name,
-            serverAddress: basics.server,
-            serverPort: basics.port,
-            outbound: .socks5(
-                username: getString(node, key: "username"),
-                password: getString(node, key: "password")
-            )
-        )
-    }
-
+    
     // MARK: - Sudoku
 
     private static func parseSudokuProxy(_ node: YAML.Node) -> ProxyConfiguration? {
@@ -424,9 +302,151 @@ nonisolated struct ClashProxyParser {
         )
     }
 
-    // MARK: - Shared option parsing
+    // MARK: - Trojan
+    
+    private static func parseTrojanProxy(_ node: YAML.Node) -> ProxyConfiguration? {
+        guard
+            let basics = parseBasics(node),
+            let password = getString(node, key: "password")
+        else { return nil }
 
-    /// Clash spells SNI `servername` for VLESS and `sni` for Trojan/Hysteria; accept either on any protocol.
+        let network = getString(node, key: "network") ?? "tcp"
+        guard network == "tcp" else { return nil }
+
+        if node["reality-opts"].type == .map { return nil }
+        if node["grpc-opts"].type == .map { return nil }
+        let ssOpts = node["ss-opts"]
+        if ssOpts.type == .map, getBool(ssOpts, key: "enabled") == true { return nil }
+
+        let ech = echSettings(node)
+
+        let tlsConfiguration = TLSConfiguration(
+            serverName: parseSNI(node, server: basics.server),
+            alpn: getStringSequence(node, key: "alpn"),
+            echEnabled: ech.enabled,
+            echConfig: ech.config,
+            fingerprint: parseFingerprint(node)
+        )
+
+        return ProxyConfiguration(
+            name: basics.name,
+            serverAddress: basics.server,
+            serverPort: basics.port,
+            outbound: .trojan(password: password, securityLayer: .tls(tlsConfiguration))
+        )
+    }
+
+    // MARK: - AnyTLS
+    
+    private static func parseAnyTLSProxy(_ node: YAML.Node) -> ProxyConfiguration? {
+        guard let basics = parseBasics(node) else { return nil }
+
+        let password = getString(node, key: "password") ?? ""
+
+        let idleCheckInterval = getInt(node, key: "idle-session-check-interval") ?? 30
+        let idleTimeout = getInt(node, key: "idle-session-timeout") ?? 30
+        let minIdleSession = getInt(node, key: "min-idle-session") ?? 0
+
+        let ech = echSettings(node)
+
+        let tlsConfiguration = TLSConfiguration(
+            serverName: parseSNI(node, server: basics.server),
+            alpn: getStringSequence(node, key: "alpn"),
+            echEnabled: ech.enabled,
+            echConfig: ech.config,
+            fingerprint: parseFingerprint(node)
+        )
+
+        return ProxyConfiguration(
+            name: basics.name,
+            serverAddress: basics.server,
+            serverPort: basics.port,
+            outbound: .anytls(
+                password: password,
+                idleCheckInterval: idleCheckInterval,
+                idleTimeout: idleTimeout,
+                minIdleSession: minIdleSession,
+                securityLayer: .tls(tlsConfiguration)
+            )
+        )
+    }
+
+    // MARK: - Shadowsocks
+    
+    private static func parseShadowsocksProxy(_ node: YAML.Node) -> ProxyConfiguration? {
+        guard
+            let basics = parseBasics(node),
+            let password = getString(node, key: "password"),
+            let cipher = getString(node, key: "cipher"),
+            ShadowsocksCipher(method: cipher) != nil
+        else { return nil }
+
+        let network = getString(node, key: "network") ?? getString(node, key: "plugin-opts-network") ?? "tcp"
+        guard network == "tcp" else { return nil }
+        if getBool(node, key: "tls") == true { return nil }
+        if let plugin = getString(node, key: "plugin"), !plugin.isEmpty { return nil }
+
+        return ProxyConfiguration(
+            name: basics.name,
+            serverAddress: basics.server,
+            serverPort: basics.port,
+            outbound: .shadowsocks(password: password, method: cipher)
+        )
+    }
+
+    // MARK: - SOCKS5
+
+    private static func parseSOCKS5Proxy(_ node: YAML.Node) -> ProxyConfiguration? {
+        guard let basics = parseBasics(node) else { return nil }
+        // Reject SOCKS5-over-TLS rather than silently downgrading it.
+        if getBool(node, key: "tls") == true { return nil }
+        return ProxyConfiguration(
+            name: basics.name,
+            serverAddress: basics.server,
+            serverPort: basics.port,
+            outbound: .socks5(
+                username: getString(node, key: "username"),
+                password: getString(node, key: "password")
+            )
+        )
+    }
+
+    // MARK: - RFC
+    
+    private static func parseRFCProxy(_ node: YAML.Node) -> ProxyConfiguration? {
+        guard let basics = parseBasics(node) else { return nil }
+
+        let securityLayer: GenericSecurityLayer
+        if getBool(node, key: "tls") == true {
+            let ech = echSettings(node)
+            securityLayer = .tls(TLSConfiguration(
+                serverName: parseSNI(node, server: basics.server),
+                alpn: getStringSequence(node, key: "alpn"),
+                echEnabled: ech.enabled,
+                echConfig: ech.config,
+                fingerprint: parseFingerprint(node)
+            ))
+        } else {
+            securityLayer = .none
+        }
+        
+        let username = getString(node, key: "username")
+        if username?.contains(":") == true { return nil }
+
+        return ProxyConfiguration(
+            name: basics.name,
+            serverAddress: basics.server,
+            serverPort: basics.port,
+            outbound: .rfc(
+                username: username,
+                password: getString(node, key: "password"),
+                securityLayer: securityLayer
+            )
+        )
+    }
+
+    // MARK: - Shared option parsing
+    
     private static func parseSNI(_ node: YAML.Node, server: String) -> String {
         getString(node, key: "servername")
             ?? getString(node, key: "sni")
@@ -437,8 +457,7 @@ nonisolated struct ClashProxyParser {
         let raw = getString(node, key: "client-fingerprint")
         return TLSFingerprint(rawValue: mapFingerprint(raw)) ?? .default
     }
-
-    /// Parses a Clash bandwidth string (e.g. `"30 Mbps"`, `"30"`) into Mbit/s, or `def` if unparseable.
+    
     private static func parseBandwidthMbps(_ raw: String?, default def: Int) -> Int {
         guard let trimmed = raw?.trimmingCharacters(in: .whitespaces), !trimmed.isEmpty else {
             return def

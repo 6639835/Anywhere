@@ -222,12 +222,6 @@ nonisolated final class MITMRewritePolicy: Sendable {
         MITMScriptEngine.purgeRuns(activeIDs: activeIDs)
         MITMParamStore.shared.replaceAll(ruleSets.map { (scope: $0.id, values: $0.parameterValues) })
         MITMScriptTransform.rulesDidReload(scopedRules: scopedRules)
-        let purged = MITMScriptStore.shared.purgeExcept(activeIDs: activeIDs)
-        if purged > 0 {
-            logger.debug("Loaded \(ruleSets.count) rule set(s); purged \(purged) stale script-store bucket(s)")
-        } else {
-            logger.debug("Loaded \(ruleSets.count) rule set(s)")
-        }
     }
     
     private func insert(

@@ -11,11 +11,12 @@ nonisolated enum OutboundProtocol: String, Codable, CaseIterable {
     case nowhere
     case vless
     case hysteria
+    case sudoku
     case trojan
     case anytls
     case shadowsocks
     case socks5
-    case sudoku
+    case rfc
 
     enum InitialDataPolicy: Equatable {
         case none
@@ -37,7 +38,7 @@ nonisolated enum OutboundProtocol: String, Codable, CaseIterable {
             return .limited(32 * 1024)
         case .vless, .sudoku:
             return .unbounded
-        case .hysteria, .trojan, .anytls, .shadowsocks, .socks5:
+        case .hysteria, .trojan, .anytls, .shadowsocks, .socks5, .rfc:
             return .none
         }
     }
@@ -55,12 +56,12 @@ nonisolated enum OutboundProtocol: String, Codable, CaseIterable {
         case .shadowsocks:
             return downstreamCommand == .udp ? .udp : .tcp
         case .socks5:
-            // The UDP-ASSOCIATE relay is opened separately; the link below
-            // only carries the TCP control channel.
             return .tcp
         case .hysteria:
             return .udp
         case .sudoku:
+            return downstreamCommand == .tcp ? .tcp : nil
+        case .rfc:
             return downstreamCommand == .tcp ? .tcp : nil
         }
     }
@@ -73,6 +74,8 @@ nonisolated enum OutboundProtocol: String, Codable, CaseIterable {
             "VLESS"
         case .hysteria:
             "Hysteria"
+        case .sudoku:
+            "Sudoku"
         case .trojan:
             "Trojan"
         case .anytls:
@@ -81,8 +84,8 @@ nonisolated enum OutboundProtocol: String, Codable, CaseIterable {
             "Shadowsocks"
         case .socks5:
             "SOCKS5"
-        case .sudoku:
-            "Sudoku"
+        case .rfc:
+            "RFC"
         }
     }
 }
@@ -112,6 +115,7 @@ nonisolated enum Outbound: Hashable, Sendable {
         obfuscation: HysteriaObfuscation?,
         sni: String
     )
+    case sudoku(SudokuConfiguration)
     case trojan(password: String, securityLayer: GenericSecurityLayer)
     case anytls(
         password: String,
@@ -122,7 +126,11 @@ nonisolated enum Outbound: Hashable, Sendable {
     )
     case shadowsocks(password: String, method: String)
     case socks5(username: String?, password: String?)
-    case sudoku(SudokuConfiguration)
+    case rfc(
+        username: String?,
+        password: String?,
+        securityLayer: GenericSecurityLayer
+    )
 }
 
 // MARK: - Xray Transport Layer Configuration
@@ -195,12 +203,9 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
     let name: String
     let serverAddress: String
     let serverPort: UInt16
-    /// Pre-resolved IP used instead of `serverAddress` to avoid DNS-over-tunnel routing loops;
-    /// populated at connect time, `nil` when the address is already an IP.
     let resolvedIP: String?
     let subscriptionId: UUID?
     let outbound: Outbound
-    /// Proxies to chain through, outermost first; `nil` or empty means a direct connection.
     let chain: [ProxyConfiguration]?
     var updatedAt: Date
     var deletedAt: Date? = nil
@@ -212,11 +217,12 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
         case .nowhere:      .nowhere
         case .vless:        .vless
         case .hysteria:     .hysteria
+        case .sudoku:       .sudoku
         case .trojan:       .trojan
         case .anytls:       .anytls
         case .shadowsocks:  .shadowsocks
         case .socks5:       .socks5
-        case .sudoku:       .sudoku
+        case .rfc:          .rfc
         }
     }
     
@@ -225,6 +231,7 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
         case .nowhere(_, _, _, _, let security): security
         case .trojan(_, let security):           security
         case .anytls(_, _, _, _, let security):  security
+        case .rfc(_, _, let security):           security
         default:                                 .none
         }
     }
@@ -248,11 +255,12 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
             case .xhttp:        tag = nil
             }
         case .hysteria:         tag = "UDP"
+        case .sudoku:           tag = "TCP"
         case .trojan:           tag = "TCP"
         case .anytls:           tag = "TCP"
         case .shadowsocks:      tag = nil
         case .socks5:           tag = nil
-        case .sudoku:           tag = "TCP"
+        case .rfc:              tag = "TCP"
         }
         return tag
     }
@@ -285,7 +293,7 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
             case .reality:      tag = "Reality"
             }
         case .hysteria:         tag = "TLS"
-        case .trojan, .anytls:
+        case .trojan, .anytls, .rfc:
             switch genericSecurityLayer {
             case .none:         tag = nil
             case .tls:          tag = "TLS"
@@ -408,17 +416,17 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
         case hysteriaPassword, hysteriaCongestionControl, hysteriaUploadMbps, hysteriaDownloadMbps
         case hysteriaObfs, hysteriaObfsPassword, hysteriaObfsMinPacketSize, hysteriaObfsMaxPacketSize
         case hysteriaSNI
+        case sudoku
         case trojanPassword, trojanTLS
         case anytlsPassword, anytlsIdleCheckInterval, anytlsIdleTimeout, anytlsMinIdleSession, anytlsTLS
         case ssPassword, ssMethod
         case socks5Username, socks5Password
-        case sudoku
+        case rfcUsername, rfcPassword, rfcSecurity, rfcTLS
         case chain
         case updatedAt
         case deletedAt
     }
-
-    /// Folds the flat JSON transport/security keys into `.vless` associated values.
+    
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
 
@@ -429,9 +437,9 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
         resolvedIP = try container.decodeIfPresent(String.self, forKey: .resolvedIP)
         subscriptionId = try container.decodeIfPresent(UUID.self, forKey: .subscriptionId)
 
-        let proto = try container.decodeIfPresent(OutboundProtocol.self, forKey: .outboundProtocol) ?? .vless
+        let `protocol` = try container.decodeIfPresent(OutboundProtocol.self, forKey: .outboundProtocol) ?? .vless
 
-        switch proto {
+        switch `protocol` {
         case .nowhere:
             let explicitSNI = try container.decodeIfPresent(String.self, forKey: .nowhereSNI)
             let alpnString = try container.decodeIfPresent(String.self, forKey: .nowhereALPN)
@@ -512,8 +520,6 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
             )
 
         case .hysteria:
-            // Absent keys default to Brutal with server-driven downlink; SNI falls
-            // back to serverAddress so it is always populated.
             let congestionControl = try container.decodeIfPresent(HysteriaCongestionControl.self, forKey: .hysteriaCongestionControl) ?? .brutal
             let rawUp = try container.decodeIfPresent(Int.self, forKey: .hysteriaUploadMbps)
                 ?? HysteriaCongestionControl.uploadMbpsDefault
@@ -537,7 +543,10 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
                 ),
                 sni: (explicitSNI?.isEmpty == false ? explicitSNI! : serverAddress)
             )
-
+            
+        case .sudoku:
+            outbound = .sudoku(try container.decode(SudokuConfiguration.self, forKey: .sudoku))
+            
         case .trojan:
             let password = try container.decodeIfPresent(String.self, forKey: .trojanPassword) ?? ""
             // TLS is mandatory; fall back to SNI=serverAddress so partial configs decode cleanly.
@@ -566,21 +575,36 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
                 password: try container.decodeIfPresent(String.self, forKey: .ssPassword) ?? "",
                 method: try container.decodeIfPresent(String.self, forKey: .ssMethod) ?? ""
             )
+            
         case .socks5:
             outbound = .socks5(
                 username: try container.decodeIfPresent(String.self, forKey: .socks5Username),
                 password: try container.decodeIfPresent(String.self, forKey: .socks5Password)
             )
-        case .sudoku:
-            outbound = .sudoku(try container.decode(SudokuConfiguration.self, forKey: .sudoku))
+
+        case .rfc:
+            let securityTag = try container.decodeIfPresent(String.self, forKey: .rfcSecurity) ?? "tls"
+            let securityLayer: GenericSecurityLayer
+            if securityTag == "none" {
+                securityLayer = .none
+            } else {
+                securityLayer = .tls(
+                    try container.decodeIfPresent(TLSConfiguration.self, forKey: .rfcTLS)
+                        ?? TLSConfiguration(serverName: serverAddress, alpn: RFCProtocol.defaultALPN)
+                )
+            }
+            outbound = .rfc(
+                username: try container.decodeIfPresent(String.self, forKey: .rfcUsername),
+                password: try container.decodeIfPresent(String.self, forKey: .rfcPassword),
+                securityLayer: securityLayer
+            )
         }
 
         chain = try container.decodeIfPresent([ProxyConfiguration].self, forKey: .chain)
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? deletedAt ?? .distantPast
         deletedAt = try container.decodeIfPresent(Date.self, forKey: .deletedAt)
     }
-
-    /// Flattens `Outbound` to the flat JSON schema.
+    
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
 
@@ -592,6 +616,7 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
         try container.encodeIfPresent(subscriptionId, forKey: .subscriptionId)
 
         try container.encode(outboundProtocol, forKey: .outboundProtocol)
+        
         switch outbound {
         case .nowhere(let key, let uplink, let downlink, let multiplex, let securityLayer):
             let tls = securityLayer.tlsConfiguration ?? TLSConfiguration(serverName: serverAddress)
@@ -625,7 +650,6 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
             case .tls(let config): try container.encode(config, forKey: .tls)
             case .reality(let config): try container.encode(config, forKey: .reality)
             }
-
         case .hysteria(let password, let congestionControl, let uploadMbps, let downloadMbps, let obfuscation, let sni):
             try container.encode(id, forKey: .uuid)
             try container.encode("none", forKey: .encryption)
@@ -642,6 +666,10 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
                 }
             }
             try container.encode(sni, forKey: .hysteriaSNI)
+        case .sudoku(let configuration):
+            try container.encode(id, forKey: .uuid)
+            try container.encode("none", forKey: .encryption)
+            try container.encode(configuration, forKey: .sudoku)
         case .trojan(let password, let securityLayer):
             let tls = securityLayer.tlsConfiguration ?? TLSConfiguration(serverName: serverAddress)
             try container.encode(id, forKey: .uuid)
@@ -667,10 +695,15 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
             try container.encode("none", forKey: .encryption)
             try container.encodeIfPresent(username, forKey: .socks5Username)
             try container.encodeIfPresent(password, forKey: .socks5Password)
-        case .sudoku(let configuration):
+        case .rfc(let username, let password, let securityLayer):
             try container.encode(id, forKey: .uuid)
             try container.encode("none", forKey: .encryption)
-            try container.encode(configuration, forKey: .sudoku)
+            try container.encodeIfPresent(username, forKey: .rfcUsername)
+            try container.encodeIfPresent(password, forKey: .rfcPassword)
+            try container.encode(securityLayer.tag, forKey: .rfcSecurity)
+            if let tls = securityLayer.tlsConfiguration {
+                try container.encode(tls, forKey: .rfcTLS)
+            }
         }
 
         try container.encodeIfPresent(chain, forKey: .chain)

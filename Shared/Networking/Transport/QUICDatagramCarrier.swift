@@ -198,7 +198,7 @@ actor QUICDatagramCarrier {
         case .connecting(let engine), .ready(let engine):
             engine.send(datagram)
         case .idle, .failed, .finished, .closed:
-            logger.debug("[QUICDatagramCarrier] Dropping datagram; carrier is \(self.phase.label)")
+            return
         }
     }
 

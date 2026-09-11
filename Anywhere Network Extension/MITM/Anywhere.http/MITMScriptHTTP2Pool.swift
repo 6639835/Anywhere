@@ -90,23 +90,22 @@ nonisolated final class MITMScriptHTTP2Pool: TransportPool {
     // MARK: - HTTP/1.1-only origin cache
 
     private func isKnownHTTP1(_ key: String) -> Bool {
-        pool.state.withLock { st in
-            guard let expiry = st.extra[key] else { return false }
+        pool.state.withLock { state in
+            guard let expiry = state.extra[key] else { return false }
             if MonotonicClock.now < expiry { return true }
-            st.extra.removeValue(forKey: key)
+            state.extra.removeValue(forKey: key)
             return false
         }
     }
 
     private func markHTTP1(_ key: String) {
-        pool.state.withLock { st in
-            if st.extra[key] == nil, st.extra.count >= Self.maxHTTP1Origins {
-                if let oldest = st.extra.min(by: { $0.value < $1.value })?.key {
-                    st.extra.removeValue(forKey: oldest)
+        pool.state.withLock { state in
+            if state.extra[key] == nil, state.extra.count >= Self.maxHTTP1Origins {
+                if let oldest = state.extra.min(by: { $0.value < $1.value })?.key {
+                    state.extra.removeValue(forKey: oldest)
                 }
             }
-            st.extra[key] = MonotonicClock.now + Self.http1TTL
+            state.extra[key] = MonotonicClock.now + Self.http1TTL
         }
-        logger.debug("[MITMScriptHTTP2Pool] cached HTTP/1.1-only origin \(key)")
     }
 }

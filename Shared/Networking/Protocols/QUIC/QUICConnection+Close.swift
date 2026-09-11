@@ -63,7 +63,6 @@ extension QUICConnection {
         let closeError: Error
         if let error {
             if wasEstablished, case AnywhereError.quic(.connectionFailed(let detail)) = error {
-                logger.debug("[QUIC] Established connection to \(self.host) lost: \(detail)")
                 closeError = AnywhereError.quic(.closed(graceful: false))
             } else {
                 closeError = error

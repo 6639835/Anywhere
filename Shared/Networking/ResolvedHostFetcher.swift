@@ -49,7 +49,6 @@ nonisolated enum ResolvedHostFetcher {
                 throw AnywhereError.subscription(.invalidURL)
             }
             redirects += 1
-            logger.debug("[ResolvedHostFetcher] \(result.status) → \(next.host ?? "?")")
             request.url = next
         }
     }

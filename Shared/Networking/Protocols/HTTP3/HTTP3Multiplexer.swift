@@ -271,11 +271,8 @@ nonisolated final class HTTP3Multiplexer: Multiplexer, Sendable {
             if outcome.ready {
                 readySignal.finish()
             }
-            if let goaway = outcome.goaway {
-                logger.debug("[HTTP3Multiplexer] Received GOAWAY, draining \(goaway.activeStreams) active streams")
-                if goaway.shouldClose {
-                    close()
-                }
+            if let goaway = outcome.goaway, goaway.shouldClose {
+                close()
             }
         }
     }
@@ -366,8 +363,7 @@ nonisolated final class HTTP3Multiplexer: Multiplexer, Sendable {
             switch effect {
             case .fail(let error):
                 failSession(error)
-            case .goaway(let activeStreams, let shouldClose):
-                logger.debug("[HTTP3Multiplexer] Received GOAWAY, draining \(activeStreams) active streams")
+            case .goaway(let _, let shouldClose):
                 if shouldClose {
                     close()
                 }

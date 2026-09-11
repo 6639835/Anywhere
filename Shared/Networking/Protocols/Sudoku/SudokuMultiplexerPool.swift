@@ -36,7 +36,6 @@ nonisolated final class SudokuMultiplexerRegistry: Sendable {
 
     func pool(for configuration: ProxyConfiguration, directDialHost: String) -> SudokuMultiplexerPool? {
         guard case .sudoku = configuration.outbound else {
-            logger.debug("[SudokuMultiplexerRegistry] outbound is not .sudoku — refusing to create pool")
             return nil
         }
         let key = Key(
@@ -45,25 +44,17 @@ nonisolated final class SudokuMultiplexerRegistry: Sendable {
             directDialHost: directDialHost,
             outbound: configuration.outbound
         )
-        var reused = true
         let pool = state.withLock { state -> SudokuMultiplexerPool? in
             if let existing = state.pools[key] {
                 return existing
             }
             guard !state.sealed else { return nil }
-            reused = false
             let created = SudokuMultiplexerPool(configuration: configuration, directDialHost: directDialHost)
             state.pools[key] = created
             return created
         }
         guard let pool else {
-            logger.debug("[SudokuMultiplexerRegistry] sealed — refusing to create pool \(configuration.serverAddress):\(configuration.serverPort)")
             return nil
-        }
-        if reused {
-            logger.debug("[SudokuMultiplexerRegistry] reuse pool \(configuration.serverAddress):\(configuration.serverPort)")
-        } else {
-            logger.debug("[SudokuMultiplexerRegistry] created pool \(configuration.serverAddress):\(configuration.serverPort)")
         }
         return pool
     }
@@ -73,9 +64,6 @@ nonisolated final class SudokuMultiplexerRegistry: Sendable {
             let values = Array(state.pools.values)
             state.pools.removeAll(keepingCapacity: false)
             return values
-        }
-        if !snapshot.isEmpty {
-            logger.debug("[SudokuMultiplexerRegistry] closeAll(\(snapshot.count) pools)")
         }
         for pool in snapshot {
             pool.closeAll()
@@ -212,7 +200,6 @@ nonisolated final class SudokuMultiplexerPool: TransportPool {
             multiplexer.close(error: nil)
             throw AnywhereError.proxy(.sudoku, .connectionClosed(detail: nil))
         }
-        logger.debug("[SudokuMultiplexerPool] new session \(configuration.serverAddress):\(configuration.serverPort)")
         return multiplexer
     }
 }

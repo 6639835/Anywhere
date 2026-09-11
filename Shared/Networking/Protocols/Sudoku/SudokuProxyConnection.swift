@@ -1360,7 +1360,7 @@ nonisolated final class SudokuHTTPMaskTransport: Sendable {
             throw AnywhereError.proxy(.sudoku, .protocolViolation(detail: "HTTPMask session control path is empty"))
         }
         var lastError: Error = AnywhereError.proxy(.sudoku, .connectionClosed(detail: "HTTPMask session control failed"))
-        for attempt in 0..<max(1, attempts) {
+        for _ in 0..<max(1, attempts) {
             do {
                 let opened = try await Self.request(
                     config: config,

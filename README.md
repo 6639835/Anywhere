@@ -62,11 +62,12 @@ Every protocol, transport, and crypto layer below is implemented natively in Swi
 | **Nowhere** | TLS / TCP · QUIC / UDP | Split upload/download paths · optional TLS multiplexing · QUIC DATAGRAM · UDP-over-TCP |
 | **VLESS** | TCP · WebSocket · HTTP Upgrade · gRPC · XHTTP | XTLS-RPRX-Vision flow control with adaptive padding · post-quantum encryption · Mux + XUDP |
 | **Hysteria2** | QUIC | Brutal and BBR congestion control · Salamander/Gecko obfuscation |
+| **Sudoku** | TCP | X25519 key exchange · AEAD records · obfuscation tables with padding · optional HTTP-masquerade tunneling |
 | **Trojan** | TLS / TCP | SHA-224 password auth · UDP-over-TCP relay |
 | **AnyTLS** | TLS / TCP | Stream multiplexing over pooled TLS sessions · server-driven padding · warm idle-session pool · UDP-over-TCP |
 | **Shadowsocks** | TCP | AEAD ciphers and Shadowsocks 2022 (BLAKE3) |
-| **Sudoku** | TCP | X25519 key exchange · AEAD records · obfuscation tables with padding · optional HTTP-masquerade tunneling |
 | **SOCKS5** | TCP | Optional username / password authentication |
+| **RFC** | TLS / TCP · TCP | Standard `CONNECT` tunnelling · Basic proxy authentication |
 
 #### Transports & Multiplexing
 
@@ -128,7 +129,7 @@ Import one or more routing (`.arrs`) and MITM (`.amrs`) rule sets from remote li
 
 Tapping any of the following links on iOS will open Anywhere and pre-fill the full URI in the Add Proxy view for import:
 
-`nowhere://` · `vless://` · `hysteria2://` (`hy2://`) · `trojan://` · `anytls://` · `ss://` · `socks5://` (`socks://`) · `sudoku://` · `https://` · `quic://`
+`nowhere://` · `vless://` · `hysteria2://` (`hy2://`) · `sudoku://` · `trojan://` · `anytls://` · `ss://` · `socks5://` (`socks://`) · `rfc://`
 
 ### Integration Example
 

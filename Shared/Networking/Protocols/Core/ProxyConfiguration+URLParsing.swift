@@ -7,14 +7,24 @@
 
 import Foundation
 
-// MARK: - URL Parsing
-
 nonisolated extension ProxyConfiguration {
-
-    static let parsableURLPrefixes = ["nowhere://", "vless://", "hysteria2://", "hy2://", "trojan://", "anytls://", "ss://", "socks5://", "socks://", "sudoku://"]
+    static let parsableURLPrefixes = ["nowhere://", "vless://", "hysteria2://", "hy2://", "trojan://", "anytls://", "ss://", "socks5://", "socks://", "sudoku://", "rfc://"]
+    static let subscriptionOnlyURLPrefixes = ["https://", "http://"]
+    static let subscriptionEntryPrefixes = parsableURLPrefixes + subscriptionOnlyURLPrefixes
 
     static func canParseURL(_ string: String) -> Bool {
         parsableURLPrefixes.contains { string.hasPrefix($0) }
+    }
+
+    static func canParseSubscriptionEntry(_ string: String) -> Bool {
+        subscriptionEntryPrefixes.contains { string.hasPrefix($0) }
+    }
+    
+    static func parseSubscriptionEntry(url: String) throws -> ProxyConfiguration {
+        guard subscriptionOnlyURLPrefixes.contains(where: { url.hasPrefix($0) }) else {
+            return try parse(url: url)
+        }
+        return try parseRFCOverWebScheme(url: url)
     }
     
     static func parse(url: String) throws -> ProxyConfiguration {
@@ -26,6 +36,9 @@ nonisolated extension ProxyConfiguration {
         }
         if url.hasPrefix("hysteria2://") || url.hasPrefix("hy2://") {
             return try parseHysteria(url: url)
+        }
+        if url.hasPrefix("sudoku://") {
+            return try parseSudoku(url: url)
         }
         if url.hasPrefix("trojan://") {
             return try parseTrojan(url: url)
@@ -39,10 +52,10 @@ nonisolated extension ProxyConfiguration {
         if url.hasPrefix("socks5://") || url.hasPrefix("socks://") {
             return try parseSOCKS5(url: url)
         }
-        if url.hasPrefix("sudoku://") {
-            return try parseSudoku(url: url)
+        if url.hasPrefix("rfc://") {
+            return try parseRFC(url: url)
         }
-        throw AnywhereError.parse(.invalidURL("URL must start with nowhere://, vless://, hysteria2://, trojan://, anytls://, ss://, socks5://, or sudoku://"))
+        throw AnywhereError.parse(.invalidURL("URL must start with nowhere://, vless://, hysteria2://, sudoku://, trojan://, anytls://, ss://, socks5://, or rfc://"))
     }
 
     // MARK: - Per-Scheme Parsers
@@ -175,8 +188,7 @@ nonisolated extension ProxyConfiguration {
 
         let password = body.userInfo.removingPercentEncoding ?? body.userInfo
         let sni = (parameters["sni"]?.isEmpty == false) ? parameters["sni"]! : body.host
-
-        // Presence of upmbps/downmbps selects Brutal; a link without either runs BBR.
+        
         let rawUp = parameters["upmbps"].flatMap { Int($0) }
         let rawDown = parameters["downmbps"].flatMap { Int($0) }
         let congestionControl: HysteriaCongestionControl = (rawUp != nil || rawDown != nil) ? .brutal : .bbr
@@ -211,10 +223,79 @@ nonisolated extension ProxyConfiguration {
         )
     }
     
+    private static func parseSudoku(url: String) throws -> ProxyConfiguration {
+        let encoded = String(url.dropFirst("sudoku://".count))
+        guard let payload = Data(base64URLEncoded: encoded),
+              let json = try JSONSerialization.jsonObject(with: payload) as? [String: Any] else {
+            throw AnywhereError.parse(.invalidURL("Invalid Sudoku short link payload"))
+        }
+
+        guard let host = json["h"] as? String,
+              let portValue = json["p"],
+              let key = json["k"] as? String,
+              !host.isEmpty,
+              !key.isEmpty else {
+            throw AnywhereError.parse(.invalidURL("Sudoku short link is missing required fields"))
+        }
+
+        let portInt: Int
+        if let number = portValue as? NSNumber {
+            portInt = number.intValue
+        } else {
+            portInt = Int("\(portValue)") ?? 0
+        }
+        guard let port = UInt16(exactly: portInt), port > 0 else {
+            throw AnywhereError.parse(.invalidURL("Invalid Sudoku short link port"))
+        }
+
+        let aead = SudokuAEADMethod(rawValue: (json["e"] as? String) ?? SudokuAEADMethod.none.rawValue) ?? .none
+        let asciiMode = SudokuASCIIMode(normalized: (json["a"] as? String) ?? SudokuASCIIMode.preferEntropy.shortLinkToken) ?? .preferEntropy
+        let name = (json["n"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayName = name.flatMap { $0.isEmpty ? nil : $0 } ?? host
+        let legacyCustomTable = (
+            (json["t"] as? String)
+                ?? (json["table"] as? String)
+                ?? (json["custom_table"] as? String)
+                ?? ""
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawCustomTables = json["ts"] as? [String]
+        let customTables = SudokuConfiguration.normalizeCustomTables(
+            rawCustomTables ?? [],
+            legacy: legacyCustomTable,
+            legacyFallback: true
+        )
+        let enablePureDownlink = !((json["x"] as? Bool) ?? false)
+        let httpMask = SudokuHTTPMaskConfiguration(
+            disable: (json["hd"] as? Bool) ?? false,
+            mode: SudokuHTTPMaskMode(rawValue: (json["hm"] as? String) ?? SudokuHTTPMaskMode.legacy.rawValue) ?? .legacy,
+            tls: (json["ht"] as? Bool) ?? false,
+            host: (json["hh"] as? String) ?? "",
+            pathRoot: (json["hy"] as? String) ?? ""
+        )
+
+        let config = SudokuConfiguration(
+            key: key,
+            aeadMethod: aead,
+            paddingMin: 5,
+            paddingMax: 15,
+            asciiMode: asciiMode,
+            customTables: customTables,
+            enablePureDownlink: enablePureDownlink,
+            multiplex: SudokuMultiplex(normalized: (json["hx"] as? String) ?? ""),
+            httpMask: httpMask
+        )
+
+        return ProxyConfiguration(
+            name: displayName,
+            serverAddress: host,
+            serverPort: port,
+            outbound: .sudoku(config)
+        )
+    }
+    
     private static func parseTrojan(url: String) throws -> ProxyConfiguration {
         let body = try splitLinkBody(url, scheme: "trojan://", label: "trojan")
-
-        // Whole userinfo is the password (no user:pass split per trojan-gfw spec).
+        
         let password = body.userInfo.removingPercentEncoding ?? body.userInfo
         let tlsConfiguration = standardTLSConfiguration(from: body.parameters, host: body.host)
 
@@ -250,7 +331,7 @@ nonisolated extension ProxyConfiguration {
             )
         )
     }
-    
+
     private static func parseShadowsocks(url: String) throws -> ProxyConfiguration {
         var urlWithoutScheme = String(url.dropFirst("ss://".count))
         let fragmentName = extractFragment(&urlWithoutScheme)
@@ -261,11 +342,9 @@ nonisolated extension ProxyConfiguration {
         let port: UInt16
 
         if let atIndex = urlWithoutScheme.lastIndex(of: "@") {
-            // SIP002 form: userinfo@host:port/?params
             let userInfo = String(urlWithoutScheme[..<atIndex])
             var serverPart = String(urlWithoutScheme[urlWithoutScheme.index(after: atIndex)...])
-
-            // We don't carry SS plugin params.
+            
             if let questionIndex = serverPart.firstIndex(of: "?") {
                 serverPart = String(serverPart[..<questionIndex])
             }
@@ -276,7 +355,6 @@ nonisolated extension ProxyConfiguration {
             (method, password) = try decodeShadowsocksUserInfo(userInfo)
             (host, port) = try parseHostPort(serverPart)
         } else {
-            // Legacy pre-SIP002 form: base64(method:password@host:port)
             guard let decoded = Data(base64URLEncoded: urlWithoutScheme),
                   let decodedString = String(data: decoded, encoding: .utf8) else {
                 throw AnywhereError.parse(.invalidURL("Invalid SS URL encoding"))
@@ -369,75 +447,106 @@ nonisolated extension ProxyConfiguration {
             outbound: .socks5(username: username, password: password)
         )
     }
+
+    private struct RFCLink {
+        let username: String?
+        let password: String?
+        let host: String
+        let port: UInt16
+        let parameters: [String: String]
+        let fragment: String?
+
+        func configuration(securityLayer: GenericSecurityLayer) -> ProxyConfiguration {
+            ProxyConfiguration(
+                name: fragment ?? "Untitled",
+                serverAddress: host,
+                serverPort: port,
+                outbound: .rfc(username: username, password: password, securityLayer: securityLayer)
+            )
+        }
+    }
+
+    private static func splitRFCLink(
+        _ url: String,
+        scheme: String,
+        defaultPort: UInt16? = nil,
+        rejectsPath: Bool = false
+    ) throws -> RFCLink {
+        var remaining = String(url.dropFirst(scheme.count))
+        var fragmentName = extractFragment(&remaining)
+        DeviceCensorship.deCensor(&fragmentName)
+
+        var queryString: String?
+        if let questionIndex = remaining.firstIndex(of: "?") {
+            queryString = String(remaining[remaining.index(after: questionIndex)...])
+            remaining = String(remaining[..<questionIndex])
+        }
+        let parameters = parseQueryParams(queryString)
+
+        var username: String?
+        var password: String?
+        var serverPart = remaining
+
+        if let atIndex = remaining.lastIndex(of: "@") {
+            let userInfo = String(remaining[..<atIndex])
+            serverPart = String(remaining[remaining.index(after: atIndex)...])
+            if let colonIndex = userInfo.firstIndex(of: ":") {
+                let rawUser = String(userInfo[..<colonIndex])
+                let rawPassword = String(userInfo[userInfo.index(after: colonIndex)...])
+                username = rawUser.removingPercentEncoding ?? rawUser
+                password = rawPassword.removingPercentEncoding ?? rawPassword
+            } else if !userInfo.isEmpty {
+                username = userInfo.removingPercentEncoding ?? userInfo
+            }
+            if let username, username.contains(":") {
+                throw AnywhereError.parse(.invalidURL("RFC username may not contain a colon"))
+            }
+            if username?.isEmpty == true, password?.isEmpty == true {
+                username = nil
+                password = nil
+            }
+        }
+
+        if serverPart.hasSuffix("/") { serverPart.removeLast() }
+        if let slashIndex = serverPart.firstIndex(of: "/") {
+            guard !rejectsPath else {
+                throw AnywhereError.parse(.invalidURL("RFC URL may not carry a path"))
+            }
+            serverPart = String(serverPart[..<slashIndex])
+        }
+
+        let (host, port) = try parseHostPort(serverPart, defaultPort: defaultPort)
+
+        return RFCLink(
+            username: username,
+            password: password,
+            host: host,
+            port: port,
+            parameters: parameters,
+            fragment: fragmentName
+        )
+    }
     
-    private static func parseSudoku(url: String) throws -> ProxyConfiguration {
-        let encoded = String(url.dropFirst("sudoku://".count))
-        guard let payload = Data(base64URLEncoded: encoded),
-              let json = try JSONSerialization.jsonObject(with: payload) as? [String: Any] else {
-            throw AnywhereError.parse(.invalidURL("Invalid Sudoku short link payload"))
-        }
-
-        guard let host = json["h"] as? String,
-              let portValue = json["p"],
-              let key = json["k"] as? String,
-              !host.isEmpty,
-              !key.isEmpty else {
-            throw AnywhereError.parse(.invalidURL("Sudoku short link is missing required fields"))
-        }
-
-        let portInt: Int
-        if let number = portValue as? NSNumber {
-            portInt = number.intValue
-        } else {
-            portInt = Int("\(portValue)") ?? 0
-        }
-        guard let port = UInt16(exactly: portInt), port > 0 else {
-            throw AnywhereError.parse(.invalidURL("Invalid Sudoku short link port"))
-        }
-
-        let aead = SudokuAEADMethod(rawValue: (json["e"] as? String) ?? SudokuAEADMethod.none.rawValue) ?? .none
-        let asciiMode = SudokuASCIIMode(normalized: (json["a"] as? String) ?? SudokuASCIIMode.preferEntropy.shortLinkToken) ?? .preferEntropy
-        let name = (json["n"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let displayName = name.flatMap { $0.isEmpty ? nil : $0 } ?? host
-        let legacyCustomTable = (
-            (json["t"] as? String)
-                ?? (json["table"] as? String)
-                ?? (json["custom_table"] as? String)
-                ?? ""
-        ).trimmingCharacters(in: .whitespacesAndNewlines)
-        let rawCustomTables = json["ts"] as? [String]
-        let customTables = SudokuConfiguration.normalizeCustomTables(
-            rawCustomTables ?? [],
-            legacy: legacyCustomTable,
-            legacyFallback: true
+    private static func parseRFC(url: String) throws -> ProxyConfiguration {
+        let link = try splitRFCLink(url, scheme: "rfc://")
+        let securityLayer: GenericSecurityLayer = link.parameters["security"] == "none"
+            ? .none
+            : .tls(standardTLSConfiguration(from: link.parameters, host: link.host))
+        return link.configuration(securityLayer: securityLayer)
+    }
+    
+    private static func parseRFCOverWebScheme(url: String) throws -> ProxyConfiguration {
+        let isSecure = url.hasPrefix("https://")
+        let link = try splitRFCLink(
+            url,
+            scheme: isSecure ? "https://" : "http://",
+            defaultPort: isSecure ? 443 : 80,
+            rejectsPath: true
         )
-        let enablePureDownlink = !((json["x"] as? Bool) ?? false)
-        let httpMask = SudokuHTTPMaskConfiguration(
-            disable: (json["hd"] as? Bool) ?? false,
-            mode: SudokuHTTPMaskMode(rawValue: (json["hm"] as? String) ?? SudokuHTTPMaskMode.legacy.rawValue) ?? .legacy,
-            tls: (json["ht"] as? Bool) ?? false,
-            host: (json["hh"] as? String) ?? "",
-            pathRoot: (json["hy"] as? String) ?? ""
-        )
-
-        let config = SudokuConfiguration(
-            key: key,
-            aeadMethod: aead,
-            paddingMin: 5,
-            paddingMax: 15,
-            asciiMode: asciiMode,
-            customTables: customTables,
-            enablePureDownlink: enablePureDownlink,
-            multiplex: SudokuMultiplex(normalized: (json["hx"] as? String) ?? ""),
-            httpMask: httpMask
-        )
-
-        return ProxyConfiguration(
-            name: displayName,
-            serverAddress: host,
-            serverPort: port,
-            outbound: .sudoku(config)
-        )
+        let securityLayer: GenericSecurityLayer = isSecure
+            ? .tls(standardTLSConfiguration(from: link.parameters, host: link.host))
+            : .none
+        return link.configuration(securityLayer: securityLayer)
     }
 
     // MARK: - Shared Link Decomposition
@@ -460,9 +569,7 @@ nonisolated extension ProxyConfiguration {
         var remaining = String(url.dropFirst(scheme.count))
 
         var fragment = extractFragment(&remaining)
-
-        // Some providers base64-encode the whole body after the scheme. When the plain text
-        // carries no `@`, decode it and re-extract the fragment before giving up.
+        
         if allowBase64Body, !remaining.contains("@"),
            let decoded = base64DecodedBody(remaining), decoded.contains("@") {
             remaining = decoded
@@ -594,27 +701,39 @@ nonisolated extension ProxyConfiguration {
         if remainder == 0 { return string }
         return string + String(repeating: "=", count: 4 - remainder)
     }
-
-    /// Parses a host:port string, handling IPv6 brackets.
-    static func parseHostPort(_ string: String) throws -> (String, UInt16) {
+    
+    static func parseHostPort(_ string: String, defaultPort: UInt16? = nil) throws -> (String, UInt16) {
         let host: String
-        let portString: String
+        let portString: String?
         if string.hasPrefix("[") {
             guard let closeBracket = string.firstIndex(of: "]") else {
                 throw AnywhereError.parse(.invalidURL("Missing closing bracket for IPv6"))
             }
             host = String(string[string.index(after: string.startIndex)..<closeBracket])
             let afterBracket = string[string.index(after: closeBracket)...]
-            guard afterBracket.hasPrefix(":") else {
-                throw AnywhereError.parse(.invalidURL("Missing port after IPv6 address"))
+            if afterBracket.hasPrefix(":") {
+                portString = String(afterBracket.dropFirst())
+            } else {
+                guard afterBracket.isEmpty, defaultPort != nil else {
+                    throw AnywhereError.parse(.invalidURL("Missing port after IPv6 address"))
+                }
+                portString = nil
             }
-            portString = String(afterBracket.dropFirst())
-        } else {
-            guard let colonIndex = string.lastIndex(of: ":") else {
-                throw AnywhereError.parse(.invalidURL("Missing port"))
-            }
+        } else if let colonIndex = string.lastIndex(of: ":") {
             host = String(string[..<colonIndex])
             portString = String(string[string.index(after: colonIndex)...])
+        } else {
+            host = string
+            portString = nil
+        }
+        guard !host.isEmpty else {
+            throw AnywhereError.parse(.invalidURL("Missing host"))
+        }
+        guard let portString else {
+            guard let defaultPort else {
+                throw AnywhereError.parse(.invalidURL("Missing port"))
+            }
+            return (host, defaultPort)
         }
         guard let port = UInt16(portString) else {
             throw AnywhereError.parse(.invalidURL("Invalid port: \(portString)"))

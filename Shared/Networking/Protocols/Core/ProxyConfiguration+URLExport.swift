@@ -7,8 +7,6 @@
 
 import Foundation
 
-// MARK: - URL Export
-
 extension ProxyConfiguration {
     private var bracketedServerAddress: String {
         serverAddress.contains(":") ? "[\(serverAddress)]" : serverAddress
@@ -28,6 +26,8 @@ extension ProxyConfiguration {
             return toVLESSURL()
         case .hysteria:
             return toHysteriaURL()
+        case .sudoku:
+            return toSudokuURL()
         case .trojan:
             return toTrojanURL()
         case .anytls:
@@ -36,8 +36,8 @@ extension ProxyConfiguration {
             return toShadowsocksURL()
         case .socks5:
             return toSOCKS5URL()
-        case .sudoku:
-            return toSudokuURL()
+        case .rfc:
+            return toRFCURL()
         }
     }
 
@@ -113,6 +113,55 @@ extension ProxyConfiguration {
         return "vless://\(uuid.uuidString.lowercased())@\(bracketedServerAddress):\(serverPort)/\(query)#\(fragment)"
     }
     
+    private func appendTransportParams(to params: inout [String]) {
+        switch xrayTransportLayer {
+        case .ws(let ws):
+            if ws.host != serverAddress {
+                params.append("host=\(ws.host)")
+            }
+            if ws.path != "/" {
+                params.append("path=\(ws.path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ws.path)")
+            }
+            if ws.maxEarlyData > 0 {
+                params.append("ed=\(ws.maxEarlyData)")
+            }
+        case .httpUpgrade(let hu):
+            if hu.host != serverAddress {
+                params.append("host=\(hu.host)")
+            }
+            if hu.path != "/" {
+                params.append("path=\(hu.path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? hu.path)")
+            }
+        case .grpc(let grpc):
+            if !grpc.serviceName.isEmpty {
+                let encoded = grpc.serviceName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? grpc.serviceName
+                params.append("serviceName=\(encoded)")
+            }
+            if !grpc.authority.isEmpty {
+                let encoded = grpc.authority.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? grpc.authority
+                params.append("authority=\(encoded)")
+            }
+            if grpc.multiMode {
+                params.append("mode=multi")
+            }
+        case .xhttp(let xhttp):
+            if xhttp.host != serverAddress {
+                params.append("host=\(xhttp.host)")
+            }
+            if xhttp.path != "/" {
+                params.append("path=\(xhttp.path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? xhttp.path)")
+            }
+            if xhttp.mode != .auto {
+                params.append("mode=\(xhttp.mode.rawValue)")
+            }
+            if let extra = xhttp.urlExtraParam {
+                params.append("extra=\(extra)")
+            }
+        case .raw:
+            break
+        }
+    }
+    
     private func toHysteriaURL() -> String {
         guard case .hysteria(let password, let congestionControl, let uploadMbps, let downloadMbps, let obfuscation, let sni) = outbound else {
             return ""
@@ -137,6 +186,32 @@ extension ProxyConfiguration {
         }
         let query = parameters.isEmpty ? "" : "?\(parameters.joined(separator: "&"))"
         return "hysteria2://\(encodedPassword)@\(bracketedServerAddress):\(serverPort)/\(query)#\(fragment)"
+    }
+    
+    private func toSudokuURL() -> String {
+        guard case .sudoku(let sudoku) = outbound else { return "sudoku://" }
+        var payload: [String: Any] = [
+            "h": serverAddress,
+            "p": Int(serverPort),
+            "k": sudoku.key,
+            "a": sudoku.asciiMode.shortLinkToken,
+            "e": sudoku.aeadMethod.rawValue,
+            "x": !sudoku.enablePureDownlink
+        ]
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedName.isEmpty { payload["n"] = trimmedName }
+        if !sudoku.customTables.isEmpty { payload["ts"] = sudoku.customTables }
+        if sudoku.httpMask.disable { payload["hd"] = true }
+        if sudoku.httpMask.mode != .legacy { payload["hm"] = sudoku.httpMask.mode.rawValue }
+        if sudoku.httpMask.tls { payload["ht"] = true }
+        if !sudoku.httpMask.host.isEmpty { payload["hh"] = sudoku.httpMask.host }
+        if sudoku.multiplex != .off { payload["hx"] = sudoku.multiplex.rawValue }
+        if !sudoku.httpMask.pathRoot.isEmpty { payload["hy"] = sudoku.httpMask.pathRoot }
+
+        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else {
+            return "sudoku://"
+        }
+        return "sudoku://\(data.base64URLEncodedString())"
     }
 
     private func toTrojanURL() -> String {
@@ -181,7 +256,6 @@ extension ProxyConfiguration {
         if let ech = tls.echQueryValue {
             parameters.append("ech=\(ech)")
         }
-        // Emit pool tuners only when they differ from the sing-anytls defaults (30/30/0).
         if idleCheckInterval != 30 { parameters.append("ici=\(idleCheckInterval)") }
         if idleTimeout != 30 { parameters.append("it=\(idleTimeout)") }
         if minIdleSession != 0 { parameters.append("mis=\(minIdleSession)") }
@@ -210,81 +284,40 @@ extension ProxyConfiguration {
         }
         return "socks5://\(bracketedServerAddress):\(serverPort)#\(fragment)"
     }
-
-    private func toSudokuURL() -> String {
-        guard case .sudoku(let sudoku) = outbound else { return "sudoku://" }
-        var payload: [String: Any] = [
-            "h": serverAddress,
-            "p": Int(serverPort),
-            "k": sudoku.key,
-            "a": sudoku.asciiMode.shortLinkToken,
-            "e": sudoku.aeadMethod.rawValue,
-            "x": !sudoku.enablePureDownlink
-        ]
-        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedName.isEmpty { payload["n"] = trimmedName }
-        if !sudoku.customTables.isEmpty { payload["ts"] = sudoku.customTables }
-        if sudoku.httpMask.disable { payload["hd"] = true }
-        if sudoku.httpMask.mode != .legacy { payload["hm"] = sudoku.httpMask.mode.rawValue }
-        if sudoku.httpMask.tls { payload["ht"] = true }
-        if !sudoku.httpMask.host.isEmpty { payload["hh"] = sudoku.httpMask.host }
-        if sudoku.multiplex != .off { payload["hx"] = sudoku.multiplex.rawValue }
-        if !sudoku.httpMask.pathRoot.isEmpty { payload["hy"] = sudoku.httpMask.pathRoot }
-
-        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else {
-            return "sudoku://"
+    
+    private func toRFCURL() -> String {
+        guard case .rfc(let username, let password, let securityLayer) = outbound else { return "" }
+        let fragment = name.addingPercentEncoding(withAllowedCharacters: .urlFragmentAllowed) ?? name
+        
+        var userInfo = ""
+        let user = username ?? ""
+        let secret = password ?? ""
+        if !user.isEmpty || !secret.isEmpty {
+            let encodedUser = user.addingPercentEncoding(withAllowedCharacters: .urlUserAllowed) ?? user
+            let encodedPassword = secret.addingPercentEncoding(withAllowedCharacters: .urlPasswordAllowed) ?? secret
+            userInfo = "\(encodedUser):\(encodedPassword)@"
         }
-        return "sudoku://\(data.base64URLEncodedString())"
-    }
 
-    private func appendTransportParams(to params: inout [String]) {
-        switch xrayTransportLayer {
-        case .ws(let ws):
-            if ws.host != serverAddress {
-                params.append("host=\(ws.host)")
+        var parameters: [String] = []
+        switch securityLayer {
+        case .none:
+            parameters.append("security=none")
+        case .tls(let tls):
+            if tls.serverName != serverAddress {
+                parameters.append("sni=\(encodedQueryValue(tls.serverName))")
             }
-            if ws.path != "/" {
-                params.append("path=\(ws.path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ws.path)")
+            if let alpn = tls.alpn, !alpn.isEmpty {
+                let joined = alpn.joined(separator: ",")
+                parameters.append("alpn=\(encodedQueryValue(joined))")
             }
-            if ws.maxEarlyData > 0 {
-                params.append("ed=\(ws.maxEarlyData)")
+            if tls.fingerprint != .default {
+                parameters.append("fp=\(tls.fingerprint.rawValue)")
             }
-        case .httpUpgrade(let hu):
-            if hu.host != serverAddress {
-                params.append("host=\(hu.host)")
+            if let ech = tls.echQueryValue {
+                parameters.append("ech=\(ech)")
             }
-            if hu.path != "/" {
-                params.append("path=\(hu.path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? hu.path)")
-            }
-        case .grpc(let grpc):
-            if !grpc.serviceName.isEmpty {
-                let encoded = grpc.serviceName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? grpc.serviceName
-                params.append("serviceName=\(encoded)")
-            }
-            if !grpc.authority.isEmpty {
-                let encoded = grpc.authority.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? grpc.authority
-                params.append("authority=\(encoded)")
-            }
-            if grpc.multiMode {
-                params.append("mode=multi")
-            }
-        case .xhttp(let xhttp):
-            if xhttp.host != serverAddress {
-                params.append("host=\(xhttp.host)")
-            }
-            if xhttp.path != "/" {
-                params.append("path=\(xhttp.path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? xhttp.path)")
-            }
-            if xhttp.mode != .auto {
-                params.append("mode=\(xhttp.mode.rawValue)")
-            }
-            // All non-default advanced fields and the up/download detach blob travel as the
-            // `extra` JSON the importer reads back; host/path/mode stay as their own params.
-            if let extra = xhttp.urlExtraParam {
-                params.append("extra=\(extra)")
-            }
-        case .raw:
-            break
         }
+        let query = parameters.isEmpty ? "" : "?\(parameters.joined(separator: "&"))"
+        return "rfc://\(userInfo)\(bracketedServerAddress):\(serverPort)\(query)#\(fragment)"
     }
 }

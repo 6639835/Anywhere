@@ -116,7 +116,6 @@ nonisolated final class TLSServer {
 
     func feed(_ data: Data) {
         guard phase != .failed, phase != .established else {
-            logger.debug("[TLSServer] Dropping \(data.count) B fed in state \(String(describing: phase))")
             return
         }
         rxBuffer.append(data)

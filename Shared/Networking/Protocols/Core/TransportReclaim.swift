@@ -18,6 +18,7 @@ nonisolated enum TransportReclaim {
             case .hysteria: HysteriaClient.pool.reclaim()
             case .anytls:   AnyTLSMultiplexerRegistry.shared.reclaim()
             case .sudoku:   SudokuMultiplexerRegistry.shared.reclaim()
+            case .rfc:      RFCMultiplexerRegistry.shared.reclaim()
             case .trojan, .shadowsocks, .socks5:
                 break
             }
@@ -29,6 +30,7 @@ nonisolated enum TransportReclaim {
         NowhereMultiplexerRegistry.shared.seal()
         AnyTLSMultiplexerRegistry.shared.seal()
         SudokuMultiplexerRegistry.shared.seal()
+        RFCMultiplexerRegistry.shared.seal()
     }
 
     static func unsealAll() {
@@ -36,5 +38,6 @@ nonisolated enum TransportReclaim {
         NowhereMultiplexerRegistry.shared.unseal()
         AnyTLSMultiplexerRegistry.shared.unseal()
         SudokuMultiplexerRegistry.shared.unseal()
+        RFCMultiplexerRegistry.shared.unseal()
     }
 }

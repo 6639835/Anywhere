@@ -72,7 +72,6 @@ nonisolated final class RuleResolver: Sendable {
             return true
         }
         guard changed else { return }
-        logger.debug("[RuleResolver] Upstream changed; cache flushed")
     }
 
     // MARK: - Internal
@@ -123,9 +122,6 @@ nonisolated final class RuleResolver: Sendable {
             if let ip {
                 Self.store(&state, key: key, ip: ip)
             }
-        }
-        if let ip {
-            logger.debug("[RuleResolver] Resolved \(key) → \(ip) for IP-rule matching")
         }
         return ip
     }

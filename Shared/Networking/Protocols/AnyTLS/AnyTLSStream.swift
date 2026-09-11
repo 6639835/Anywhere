@@ -11,15 +11,11 @@ import Synchronization
 nonisolated private let logger = AnywhereLogger(category: "AnyTLSStream")
 
 actor AnyTLSStream {
-
     nonisolated let sid: UInt32
     private weak var multiplexer: AnyTLSMultiplexer?
-
-    /// Captured at construction so `outerTLSVersion` keeps working after the multiplexer goes away.
+    
     private nonisolated let cachedTLSVersion: TLSVersion?
-
-    /// Inbound cmdPSH payloads / EOF / error from the multiplexer's demux loop. Single consumer
-    /// (`receiveRaw`); `Sendable` producer via `yield`/`finish`.
+    
     private let inbox = AsyncInbox<Data>()
 
     private enum Phase: PhaseTransitionable {
@@ -75,14 +71,13 @@ actor AnyTLSStream {
     // MARK: - Cancel
 
     nonisolated func cancel() {
-        let outcome: (proceed: Bool, hook: (@Sendable () -> Void)?) = state.withLock { s in
-            guard s.transition(to: .localCancelled) else { return (false, nil) }
-            let hook = s.onEnd
-            s.onEnd = nil
+        let outcome: (proceed: Bool, hook: (@Sendable () -> Void)?) = state.withLock { state in
+            guard state.transition(to: .localCancelled) else { return (false, nil) }
+            let hook = state.onEnd
+            state.onEnd = nil
             return (true, hook)
         }
         guard outcome.proceed else { return }
-        logger.debug("[AnyTLSStream] cancel sid=\(sid)")
         inbox.finish()
         outcome.hook?()
         Task { await self.removeFromMultiplexer() }
@@ -91,25 +86,19 @@ actor AnyTLSStream {
     private func removeFromMultiplexer() {
         multiplexer?.removeStream(sid: sid)
     }
-
-    // MARK: - Called by AnyTLSMultiplexer on the recv loop (nonisolated)
-
-    /// Delivers a payload chunk from a cmdPSH frame addressed to this stream.
+    
     nonisolated func deliverData(_ data: Data) {
         inbox.yield(data)
     }
-
-    /// Delivers a clean EOF (`nil`) or transport failure; further reads are rejected.
+    
     nonisolated func deliverClose(error: Error?) {
-        let outcome: (proceed: Bool, hook: (@Sendable () -> Void)?) = state.withLock { s in
-            guard s.transition(to: .ended) else { return (false, nil) }
-            let hook = s.onEnd
-            s.onEnd = nil
+        let outcome: (proceed: Bool, hook: (@Sendable () -> Void)?) = state.withLock { state in
+            guard state.transition(to: .ended) else { return (false, nil) }
+            let hook = state.onEnd
+            state.onEnd = nil
             return (true, hook)
         }
         guard outcome.proceed else { return }
-        let kind = error.map { "error=\($0.localizedDescription)" } ?? "EOF"
-        logger.debug("[AnyTLSStream] deliverClose sid=\(sid) \(kind)")
         if let error { inbox.finish(throwing: error) } else { inbox.finish() }
         outcome.hook?()
     }

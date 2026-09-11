@@ -434,6 +434,13 @@ nonisolated final class ProxyClient: Sendable {
                 command: command, destinationHost: destinationHost, destinationPort: destinationPort
             )
         }
+        
+        if configuration.outboundProtocol == .sudoku {
+            return try await connectWithSudoku(
+                command: command, destinationHost: destinationHost,
+                destinationPort: destinationPort, initialData: initialData
+            )
+        }
 
         if configuration.outboundProtocol == .trojan {
             return try await connectWithTrojan(
@@ -467,15 +474,13 @@ nonisolated final class ProxyClient: Sendable {
             )
         }
 
-        if configuration.outboundProtocol == .sudoku {
-            return try await connectWithSudoku(
+        if configuration.outboundProtocol == .rfc {
+            return try await connectWithRFC(
                 command: command, destinationHost: destinationHost,
                 destinationPort: destinationPort, initialData: initialData
             )
         }
-
-        // Only VLESS reaches this point; Vision needs a TLS-record-like layer
-        // (VLESS Encryption, or a raw TCP transport carrying TLS/Reality).
+        
         switch configuration.xrayTransportLayer {
         case .ws:
             return try await connectWithWebSocket(command: command, destinationHost: destinationHost, destinationPort: destinationPort, initialData: initialData)
@@ -1326,11 +1331,12 @@ nonisolated extension OutboundProtocol {
         case .nowhere: .nowhere
         case .vless: .vless
         case .hysteria: .hysteria
+        case .sudoku: .sudoku
         case .trojan: .trojan
         case .anytls: .anyTLS
         case .shadowsocks: .shadowsocks
         case .socks5: .socks5
-        case .sudoku: .sudoku
+        case .rfc: .rfc
         }
     }
 }
