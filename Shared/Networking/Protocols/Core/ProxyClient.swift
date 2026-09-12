@@ -275,8 +275,18 @@ nonisolated final class ProxyClient: Sendable {
         finalDestination: (host: String, port: UInt16)? = nil,
         track: ((ProxyClient) -> Void)? = nil
     ) async throws -> ProxyConnection {
-        let resolvedDestination: (host: String, port: UInt16) = finalDestination
-            ?? (host: configuration.serverAddress, port: configuration.serverPort)
+        let resolvedDestination: (host: String, port: UInt16)
+        if let finalDestination {
+            resolvedDestination = finalDestination
+        } else {
+            guard let command = hopCommands.last,
+                  let port = configuration.endpointPort(for: command) else {
+                throw AnywhereError.proxy(configuration.outboundProtocol.wire, .protocolViolation(
+                    detail: "Chain command cannot reach \(configuration.outboundProtocol.name) endpoint"
+                ))
+            }
+            resolvedDestination = (configuration.serverAddress, port)
+        }
         let resolvedTrack: (ProxyClient) -> Void = track ?? { _ in }
         return try await Self.dialChain(
             chain: chain,
@@ -323,8 +333,14 @@ nonisolated final class ProxyClient: Sendable {
                 let nextHost: String
                 let nextPort: UInt16
                 if !isLastHop {
-                    nextHost = chain[hopIndex + 1].serverAddress
-                    nextPort = chain[hopIndex + 1].serverPort
+                    let nextConfiguration = chain[hopIndex + 1]
+                    nextHost = nextConfiguration.serverAddress
+                    guard let port = nextConfiguration.endpointPort(for: hopCommands[hopIndex]) else {
+                        throw AnywhereError.proxy(nextConfiguration.outboundProtocol.wire, .protocolViolation(
+                            detail: "Chain command cannot reach \(nextConfiguration.outboundProtocol.name) endpoint"
+                        ))
+                    }
+                    nextPort = port
                 } else {
                     nextHost = finalDestination.host
                     nextPort = finalDestination.port

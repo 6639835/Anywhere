@@ -358,6 +358,16 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
         return outboundProtocol.upstreamCommand(for: downstreamCommand)
     }
 
+    func endpointPort(for command: ProxyCommand) -> UInt16? {
+        guard case .nowhere(let configuration) = outbound else { return serverPort }
+        let ports = configuration.resolvedPorts(serverPort: serverPort)
+        switch command {
+        case .tcp: return ports.tcp
+        case .udp: return ports.udp
+        case .mux: return nil
+        }
+    }
+
     init(
         id: UUID = UUID(),
         name: String,
