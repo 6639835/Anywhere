@@ -200,8 +200,7 @@ nonisolated private final class NowhereMultiplexerPool: Sendable {
                 }
                 return left.activeStreams < right.activeStreams
             }
-            let candidates = sorted.filter { $0.activeStreamCount == 0 }
-            for multiplexer in candidates {
+            for multiplexer in sorted {
                 let onEnd: @Sendable () -> Void = { [weak self, weak multiplexer] in
                     guard let self, let multiplexer else { return }
                     self.noteStreamEnded(multiplexer)
@@ -222,20 +221,6 @@ nonisolated private final class NowhereMultiplexerPool: Sendable {
             }
 
             if live.count + state.extra.pendingBuilds.count >= NowhereMultiplexerConstants.maximumMultiplexers {
-                for multiplexer in sorted {
-                    let onEnd: @Sendable () -> Void = { [weak self, weak multiplexer] in
-                        guard let self, let multiplexer else { return }
-                        self.noteStreamEnded(multiplexer)
-                    }
-                    if let reservation = try multiplexer.reserveStream(
-                        flowID: flowID,
-                        maximumActiveFlows: NowhereMultiplexerConstants.maximumActiveFlowsPerMultiplexer,
-                        onEnd: onEnd
-                    ) {
-                        state.lastActivity[ObjectIdentifier(multiplexer)] = MonotonicClock.now
-                        return .reserved((multiplexer, reservation))
-                    }
-                }
                 if let pending = state.extra.pendingBuilds.values.min(by: { $0.identifier < $1.identifier }) {
                     return .build(pending)
                 }

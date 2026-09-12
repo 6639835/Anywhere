@@ -96,7 +96,9 @@ nonisolated struct NowhereMultiplexerFrameHeader: Equatable, Sendable {
             try validateNonzeroFlowID()
         case .data:
             try validateNonzeroFlowID()
-            guard value != 0 else { throw NowhereMultiplexerWireError.invalidData }
+            guard value != 0, Int(value) <= NowhereMultiplexerConstants.maximumFramePayload else {
+                throw NowhereMultiplexerWireError.invalidData
+            }
         case .window:
             guard flowID <= NowhereProtocol.maximumFlowID else { throw NowhereMultiplexerWireError.invalidFlowID }
             guard value != 0 else { throw NowhereMultiplexerWireError.invalidWindow }
