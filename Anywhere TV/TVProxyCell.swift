@@ -99,13 +99,6 @@ class TVProxyCell: UITableViewCell {
         for (index, pair) in tagContainers.enumerated() {
             if index < tags.count {
                 pair.label.text = tags[index]
-                if tags[index] == "Morph" {
-                    pair.label.textColor = .systemIndigo
-                    pair.container.backgroundColor = .systemIndigo.withAlphaComponent(0.15)
-                } else {
-                    pair.label.textColor = .secondaryLabel
-                    pair.container.backgroundColor = UIColor { $0.userInterfaceStyle == .light ? UIColor.black.withAlphaComponent(0.1) : UIColor.white.withAlphaComponent(0.1) }
-                }
                 pair.container.isHidden = false
             } else {
                 pair.container.isHidden = true
