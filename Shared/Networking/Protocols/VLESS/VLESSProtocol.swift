@@ -7,10 +7,21 @@
 
 import Foundation
 
-nonisolated enum ProxyCommand: UInt8 {
+nonisolated enum VLESSCommand: UInt8 {
     case tcp = 0x01
     case udp = 0x02
     case mux = 0x03
+    
+    init(_ network: ProxyNetwork, isVLESSMultiplexerCarrier: Bool) {
+        guard !isVLESSMultiplexerCarrier else {
+            self = .mux
+            return
+        }
+        self = switch network {
+        case .tcp: .tcp
+        case .udp: .udp
+        }
+    }
 }
 
 nonisolated enum VLESSAddressType: UInt8 {
@@ -22,43 +33,42 @@ nonisolated enum VLESSAddressType: UInt8 {
 nonisolated struct VLESSProtocol {
 
     static let version: UInt8 = 0
-
-    /// Encode VLESS addons. Protobuf schema: `{ string Flow = 1; bytes Seed = 2; }`
+    
+    static let muxCoolHost = "v1.mux.cool"
+    static let muxCoolPort: UInt16 = 666
+    
     private static func encodeAddons(flow: String?) -> Data {
         guard let flow = flow, !flow.isEmpty else {
             return Data()
         }
 
         var data = Data()
-        // Field 1 (Flow): wire type 2 (length-delimited), tag = 0x0A
         data.append(0x0A)
         let flowBytes = flow.data(using: .utf8) ?? Data()
         data.append(UInt8(flowBytes.count))
         data.append(flowBytes)
         return data
     }
-
-    /// Encode a VLESS request header.
-    ///
-    /// Wire format: version(1) | uuid(16) | addons-len(1) | addons(N) |
-    /// command(1) | port-BE(2) | addr-type(1) | addr(variable)
-    /// Mux command omits port and address.
+    
     static func encodeRequestHeader(
         uuid: UUID,
-        command: ProxyCommand,
+        command: VLESSCommand,
         destinationAddress: String,
         destinationPort: UInt16,
         flow: String? = nil
     ) -> Data {
-        return encodeRequestHeaderSwift(uuid: uuid, command: command,
-                                        destinationAddress: destinationAddress,
-                                        destinationPort: destinationPort,
-                                        flow: flow)
+        return encodeRequestHeaderSwift(
+            uuid: uuid,
+            command: command,
+            destinationAddress: destinationAddress,
+            destinationPort: destinationPort,
+            flow: flow
+        )
     }
 
     private static func encodeRequestHeaderSwift(
         uuid: UUID,
-        command: ProxyCommand,
+        command: VLESSCommand,
         destinationAddress: String,
         destinationPort: UInt16,
         flow: String?
@@ -103,9 +113,7 @@ nonisolated struct VLESSProtocol {
 
         return data
     }
-
-    /// Decode a VLESS response header. Returns bytes consumed, or 0 if absent.
-    /// Wire format: version(1) | addons-len(1) | addons(N)
+    
     static func decodeResponseHeader(data: Data) throws -> Int {
         guard data.count >= 2 else {
             return 0
@@ -113,8 +121,7 @@ nonisolated struct VLESSProtocol {
 
         let startIdx = data.startIndex
         let version = data[startIdx]
-
-        // Non-zero version means no response header — the server sends data directly (Reality/XTLS).
+        
         guard version == Self.version else {
             return 0
         }
@@ -134,8 +141,7 @@ nonisolated struct VLESSProtocol {
         guard inet_pton(AF_INET, address, &addr) == 1 else { return nil }
         return withUnsafeBytes(of: &addr) { Array($0) }
     }
-
-    /// Strips surrounding brackets (e.g. "[::1]") before parsing.
+    
     private static func parseIPv6(_ address: String) -> [UInt8]? {
         var clean = address
         if clean.hasPrefix("[") && clean.hasSuffix("]") {

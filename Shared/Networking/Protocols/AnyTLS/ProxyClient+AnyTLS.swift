@@ -10,20 +10,12 @@ import Foundation
 nonisolated private let logger = AnywhereLogger(category: "ProxyClient+AnyTLS")
 
 extension ProxyClient {
-    func connectWithAnyTLS(
-        command: ProxyCommand,
-        destinationHost: String,
-        destinationPort: UInt16,
-        initialData: Data?
-    ) async throws -> ProxyConnection {
+    func connectWithAnyTLS(_ request: ProxyRequest) async throws -> ProxyConnection {
         guard case .anytls(let password, _, _, _, let securityLayer) = configuration.outbound, !password.isEmpty,
               let tlsConfig = securityLayer.tlsConfiguration else {
             throw AnywhereError.proxy(.anyTLS, .protocolViolation(detail: "AnyTLS password not set"))
         }
-        if command == .mux {
-            throw AnywhereError.proxy(.anyTLS, .protocolViolation(detail: "Mux is not supported with AnyTLS"))
-        }
-        
+
         let directHost = directDialHost
         let directPort = configuration.serverPort
         let tunnel = self.tunnel
@@ -49,10 +41,10 @@ extension ProxyClient {
             throw AnywhereError.transport(.terminated)
         }
 
-        switch command {
+        switch request.network {
         case .tcp:
-            var bootstrap = AnyTLSProtocol.encodeAddrPort(host: destinationHost, port: destinationPort)
-            if let initialData, !initialData.isEmpty {
+            var bootstrap = AnyTLSProtocol.encodeAddrPort(host: request.host, port: request.port)
+            if let initialData = request.initialData, !initialData.isEmpty {
                 bootstrap.append(initialData)
             }
             do {
@@ -66,7 +58,7 @@ extension ProxyClient {
         case .udp:
             var bootstrap = AnyTLSProtocol.encodeAddrPort(host: AnyTLSProtocol.uotMagicAddress, port: 0)
             bootstrap.append(0x01)
-            bootstrap.append(AnyTLSProtocol.encodeAddrPort(host: destinationHost, port: destinationPort))
+            bootstrap.append(AnyTLSProtocol.encodeAddrPort(host: request.host, port: request.port))
             do {
                 try await stream.send(bootstrap)
             } catch {
@@ -74,10 +66,6 @@ extension ProxyClient {
                 throw error
             }
             return AnyTLSUDPConnection(inner: stream)
-
-        case .mux:
-            stream.cancel()
-            throw AnywhereError.proxy(.anyTLS, .protocolViolation(detail: "Mux is not supported with AnyTLS"))
         }
     }
 }

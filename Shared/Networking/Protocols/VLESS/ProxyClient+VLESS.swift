@@ -7,11 +7,19 @@
 
 import Foundation
 
+nonisolated extension ProxyRequest {
+    static let vlessMultiplexerCarrier = ProxyRequest(
+        network: .tcp,
+        host: VLESSProtocol.muxCoolHost,
+        port: VLESSProtocol.muxCoolPort,
+        isVLESSMultiplexerCarrier: true
+    )
+}
+
 nonisolated extension ProxyClient {
 
     // MARK: - Vision flow
-
-    /// Base Vision flow on the wire (suffix stripped).
+    
     fileprivate static let visionFlow = "xtls-rprx-vision"
 
     var isVisionFlow: Bool {
@@ -23,9 +31,7 @@ nonisolated extension ProxyClient {
         guard case .vless(_, let encryption, _, _, _) = configuration.outbound else { return false }
         return !encryption.isEmpty && encryption != "none"
     }
-
-    /// Vision needs TLS-1.3-record framing: VLESS encryption provides it over any
-    /// transport; otherwise only raw TCP carrying TLS/REALITY qualifies.
+    
     var transportSupportsVision: Bool {
         if hasVLESSEncryption { return true }
         if case .raw = configuration.xrayTransportLayer { return true }
@@ -33,19 +39,12 @@ nonisolated extension ProxyClient {
     }
 
     // MARK: - VLESS protocol handshake
-
-    /// VLESS protocol handshake on top of an established transport; runs the
-    /// `mlkem768x25519plus` handshake first when encryption is configured.
+    
     func sendVLESSProtocolHandshake(
         over connection: ProxyConnection,
-        command: ProxyCommand,
-        destinationHost: String,
-        destinationPort: UInt16,
-        initialData: Data?,
+        request: ProxyRequest,
         supportsVision: Bool
     ) async throws -> ProxyConnection {
-        // A nil config means "none"/empty → plaintext VLESS. On iOS < 26 the encrypted
-        // scheme must refuse, not silently downgrade and expose the plaintext UUID.
         let vlessEncryption: String
         if case .vless(_, let encryption, _, _, _) = configuration.outbound {
             vlessEncryption = encryption
@@ -74,30 +73,21 @@ nonisolated extension ProxyClient {
             let encryptedConnection = try await client.handshake(over: connection)
             return try await continueVLESSHandshake(
                 over: encryptedConnection,
-                command: command,
-                destinationHost: destinationHost,
-                destinationPort: destinationPort,
-                initialData: initialData,
+                request: request,
                 supportsVision: supportsVision
             )
         }
 
         return try await continueVLESSHandshake(
             over: connection,
-            command: command,
-            destinationHost: destinationHost,
-            destinationPort: destinationPort,
-            initialData: initialData,
+            request: request,
             supportsVision: supportsVision
         )
     }
 
     fileprivate func continueVLESSHandshake(
         over connection: ProxyConnection,
-        command: ProxyCommand,
-        destinationHost: String,
-        destinationPort: UInt16,
-        initialData: Data?,
+        request: ProxyRequest,
         supportsVision: Bool
     ) async throws -> ProxyConnection {
         let vlessUUID: UUID
@@ -106,38 +96,37 @@ nonisolated extension ProxyClient {
         } else {
             vlessUUID = configuration.id
         }
-        let isVision = supportsVision && isVisionFlow && (command == .tcp || command == .mux)
+        let command = VLESSCommand(request.network, isVLESSMultiplexerCarrier: request.isVLESSMultiplexerCarrier)
+        let isVision = supportsVision && isVisionFlow && command != .udp
 
         let requestHeader = VLESSProtocol.encodeRequestHeader(
             uuid: vlessUUID,
             command: command,
-            destinationAddress: destinationHost,
-            destinationPort: destinationPort,
+            destinationAddress: request.host,
+            destinationPort: request.port,
             flow: isVision ? Self.visionFlow : nil
         )
 
-        let vless = VLESSConnection(inner: connection)
-        // For Vision flow, initial data needs separate padding — don't append to the header.
-        let handshakeInitialData = isVision ? nil : initialData
+        let vlessConnection = VLESSConnection(inner: connection)
+        
+        let handshakeInitialData = isVision ? nil : request.initialData
         do {
-            try await vless.sendHandshake(requestHeader: requestHeader, initialData: handshakeInitialData)
+            try await vlessConnection.sendHandshake(requestHeader: requestHeader, initialData: handshakeInitialData)
         } catch {
             throw AnywhereError.capture(error, context: "VLESS handshake")
         }
 
         let proxyConnection: ProxyConnection = (command == .udp)
-            ? VLESSUDPConnection(inner: vless)
-            : vless
+            ? VLESSUDPConnection(inner: vlessConnection)
+            : vlessConnection
 
         if isVision {
             if let tlsError = validateOuterTLSForVision(proxyConnection) {
                 throw tlsError
             }
             let vision = wrapWithVision(proxyConnection)
-            // Await the Vision-padded intro before returning; a racing first send
-            // could otherwise precede it and corrupt the byte stream.
             do {
-                if let initialData {
+                if let initialData = request.initialData {
                     try await vision.sendRaw(initialData)
                 } else {
                     try await vision.sendEmptyPadding()
@@ -152,9 +141,7 @@ nonisolated extension ProxyClient {
     }
 
     // MARK: - Vision
-
-    /// Vision requires outer TLS 1.3; VLESS encryption is exempt because its AEAD
-    /// records already use TLS 1.3 `application_data` framing.
+    
     fileprivate func validateOuterTLSForVision(_ connection: ProxyConnection) -> Error? {
         if hasVLESSEncryption {
             return nil

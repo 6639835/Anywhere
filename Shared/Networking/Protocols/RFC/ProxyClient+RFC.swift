@@ -10,26 +10,17 @@ import Foundation
 nonisolated private let logger = AnywhereLogger(category: "ProxyClient+RFC")
 
 extension ProxyClient {
-    func connectWithRFC(
-        command: ProxyCommand,
-        destinationHost: String,
-        destinationPort: UInt16,
-        initialData: Data?
-    ) async throws -> ProxyConnection {
+    func connectWithRFC(_ request: ProxyRequest) async throws -> ProxyConnection {
         guard case .rfc(let username, let password, let securityLayer) = configuration.outbound else {
             throw AnywhereError.proxy(.rfc, .invalidConfiguration(detail: "RFC outbound expected"))
         }
 
-        switch command {
-        case .tcp:
-            break
-        case .udp:
+        guard request.network == .tcp else {
             throw AnywhereError.proxy(.rfc, .unsupported(feature: "UDP over CONNECT"))
-        case .mux:
-            throw AnywhereError.proxy(.rfc, .protocolViolation(detail: "Mux is not supported with RFC"))
         }
 
-        let authority = RFCProtocol.authority(host: destinationHost, port: destinationPort)
+        let initialData = request.initialData
+        let authority = RFCProtocol.authority(host: request.host, port: request.port)
         let credentials = RFCProtocol.basicCredentials(username: username, password: password)
 
         let pool = RFCMultiplexerRegistry.shared.pool(for: configuration)

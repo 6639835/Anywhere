@@ -97,7 +97,7 @@ nonisolated final class VLESSVisionUDPMultiplexer: Multiplexer, Sendable {
 
         let connection: ProxyConnection
         do {
-            connection = try await client.connectMultiplexer()
+            connection = try await client.connectVLESSMultiplexerCarrier()
         } catch {
             close(error: error)
             throw error
@@ -315,7 +315,7 @@ nonisolated final class VLESSVisionUDPMultiplexer: Multiplexer, Sendable {
         for (stream, deliver) in actions {
             switch deliver {
             case .data(let payload): stream.deliverData(payload)
-            case .close:            stream.deliverClose(error: nil)
+            case .close:             stream.deliverClose(error: nil)
             }
         }
     }

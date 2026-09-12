@@ -67,12 +67,7 @@ nonisolated private final class NowhereLeasedConnection: ProxyConnection {
 }
 
 nonisolated extension ProxyClient {
-    func connectWithNowhere(
-        command: ProxyCommand,
-        destinationHost: String,
-        destinationPort: UInt16,
-        initialData: Data?
-    ) async throws -> ProxyConnection {
+    func connectWithNowhere(_ request: ProxyRequest) async throws -> ProxyConnection {
         guard case .nowhere(let nowhere) = configuration.outbound else {
             throw AnywhereError.proxy(.nowhere, .protocolViolation(detail: "Invalid Nowhere configuration"))
         }
@@ -108,7 +103,7 @@ nonisolated extension ProxyClient {
             serverName: nowhere.serverName
         )
 
-        let destination = try NowhereProtocol.Target(host: destinationHost, port: destinationPort)
+        let destination = try NowhereProtocol.Target(host: request.host, port: request.port)
 
         let asymmetric = uplink != downlink
         if asymmetric, !nwConfig.multiplex,
@@ -123,9 +118,9 @@ nonisolated extension ProxyClient {
 
         return try await connectLogicalNowhere(
             nwConfig: nwConfig,
-            command: command,
+            network: request.network,
             destination: destination,
-            initialData: command == .tcp ? initialData : nil,
+            initialData: request.network == .tcp ? request.initialData : nil,
             identityKey: identityKey,
             deadline: deadline,
             retriesLeft: retries
@@ -134,7 +129,7 @@ nonisolated extension ProxyClient {
 
     private func connectLogicalNowhere(
         nwConfig: NowhereRuntimeConfiguration,
-        command: ProxyCommand,
+        network: ProxyNetwork,
         destination: NowhereProtocol.Target,
         initialData: Data?,
         identityKey: NowhereTransportIdentityKey,
@@ -165,7 +160,7 @@ nonisolated extension ProxyClient {
                     if nwConfig.uplink != nwConfig.downlink {
                         return try await self.connectAsymmetricNowhere(
                             nwConfig: nwConfig,
-                            command: command,
+                            network: network,
                             destination: destination,
                             initialData: initialData,
                             flowID: flowID,
@@ -174,7 +169,7 @@ nonisolated extension ProxyClient {
                     }
                     return try await self.connectDuplexNowhere(
                         nwConfig: nwConfig,
-                        command: command,
+                        network: network,
                         destination: destination,
                         initialData: initialData,
                         flowID: flowID,
@@ -254,15 +249,13 @@ nonisolated extension ProxyClient {
 
     private func connectDuplexNowhere(
         nwConfig: NowhereRuntimeConfiguration,
-        command: ProxyCommand,
+        network: ProxyNetwork,
         destination: NowhereProtocol.Target,
         initialData: Data?,
         flowID: UInt32,
         attempt: NowhereFlowOpenAttempt
     ) async throws -> ProxyConnection {
-        guard let (kind, mode) = Self.flowKindAndMode(command) else {
-            throw AnywhereError.routing(.dropped)
-        }
+        let (kind, mode) = Self.flowKindAndMode(network)
         let header = NowhereProtocol.FlowHeader(
             role: .duplex,
             flowID: flowID,
@@ -372,15 +365,13 @@ nonisolated extension ProxyClient {
 
     private func connectAsymmetricNowhere(
         nwConfig: NowhereRuntimeConfiguration,
-        command: ProxyCommand,
+        network: ProxyNetwork,
         destination: NowhereProtocol.Target,
         initialData: Data?,
         flowID: UInt32,
         attempt: NowhereFlowOpenAttempt
     ) async throws -> ProxyConnection {
-        guard let (kind, mode) = Self.flowKindAndMode(command) else {
-            throw AnywhereError.routing(.dropped)
-        }
+        let (kind, mode) = Self.flowKindAndMode(network)
         let open = NowhereProtocol.FlowHeader(
             role: .open, flowID: flowID, kind: kind,
             uplink: nwConfig.uplink, downlink: nwConfig.downlink
@@ -411,8 +402,8 @@ nonisolated extension ProxyClient {
                 : [nwConfig.downlink]
             do {
                 for carrier in carriersToRebuild {
-                    let deliver: ProxyCommand = carrier == .tcp ? .tcp : .udp
-                    _ = try Self.computeChainHopCommands(
+                    let deliver: ProxyNetwork = carrier == .tcp ? .tcp : .udp
+                    _ = try Self.computeChainHopNetworks(
                         chain: rebuiltChain,
                         lastDeliver: deliver
                     ).get()
@@ -485,11 +476,11 @@ nonisolated extension ProxyClient {
     }
 
     private static func flowKindAndMode(
-        _ command: ProxyCommand
-    ) -> (NowhereProtocol.FlowKind, NowhereTCPRelayMode)? {
-        switch command {
-        case .tcp, .mux: return (.tcp, .tcp)
-        case .udp: return (.udp, .udp)
+        _ network: ProxyNetwork
+    ) -> (NowhereProtocol.FlowKind, NowhereTCPRelayMode) {
+        switch network {
+        case .tcp: (.tcp, .tcp)
+        case .udp: (.udp, .udp)
         }
     }
 
@@ -650,7 +641,7 @@ nonisolated extension ProxyClient {
             let connectHost = directDialHost
 
             if let chain, !chain.isEmpty {
-                let cascadeCommands = try Self.computeChainHopCommands(
+                let cascadeNetworks = try Self.computeChainHopNetworks(
                     chain: chain,
                     lastDeliver: .tcp
                 ).get()
@@ -663,7 +654,7 @@ nonisolated extension ProxyClient {
                     do {
                         let tunnel = try await ProxyClient.buildDetachedChainTunnel(
                             chain: chain,
-                            hopCommands: cascadeCommands,
+                            hopNetworks: cascadeNetworks,
                             finalDestination: (proxyHost, proxyPort),
                             useResolvedAddressForDirectDial: useResolvedAddress,
                             track: { client in holders.withLock { $0.append(client) } }
@@ -836,9 +827,9 @@ nonisolated extension ProxyClient {
     private func acquireChainedNowhereClient(
         nwConfig: NowhereRuntimeConfiguration,
         chain: [ProxyConfiguration],
-        lastDeliver: ProxyCommand
+        lastDeliver: ProxyNetwork
     ) async throws -> NowhereClient {
-        let cascadeCommands = try Self.computeChainHopCommands(
+        let cascadeNetworks = try Self.computeChainHopNetworks(
             chain: chain,
             lastDeliver: lastDeliver
         ).get()
@@ -854,7 +845,7 @@ nonisolated extension ProxyClient {
                 do {
                     let chainTunnel = try await ProxyClient.buildDetachedChainTunnel(
                         chain: chain,
-                        hopCommands: cascadeCommands,
+                        hopNetworks: cascadeNetworks,
                         finalDestination: (nwServerAddress, nwServerPort),
                         useResolvedAddressForDirectDial: useResolvedAddress,
                         track: { client in holders.withLock { $0.append(client) } }

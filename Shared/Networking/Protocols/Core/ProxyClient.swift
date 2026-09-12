@@ -125,70 +125,35 @@ nonisolated final class ProxyClient: Sendable {
         port destinationPort: UInt16,
         initialData: Data? = nil
     ) async throws -> ProxyConnection {
-        try await withOutboundMetrics {
-            try await self.deliver {
-                try await self.connectThroughChainIfNeeded(
-                    command: .tcp,
-                    destinationHost: destinationHost,
-                    destinationPort: destinationPort,
-                    initialData: initialData
-                )
-            }
-        }
+        try await dial(.tcp(destinationHost, port: destinationPort, initialData: initialData))
     }
 
     func connectUDP(
         to destinationHost: String,
         port destinationPort: UInt16
     ) async throws -> ProxyConnection {
+        try await dial(.udp(destinationHost, port: destinationPort))
+    }
+    
+    func connectVLESSMultiplexerCarrier() async throws -> ProxyConnection {
+        try await dial(.vlessMultiplexerCarrier)
+    }
+
+    private func dial(_ request: ProxyRequest) async throws -> ProxyConnection {
         try await withOutboundMetrics {
             try await self.deliver {
-                try await self.connectThroughChainIfNeeded(
-                    command: .udp,
-                    destinationHost: destinationHost,
-                    destinationPort: destinationPort,
-                    initialData: nil
-                )
+                try await self.connectThroughChainIfNeeded(request)
             }
         }
     }
 
-    func connectMultiplexer() async throws -> ProxyConnection {
-        try await withOutboundMetrics {
-            try await self.deliver {
-                try await self.connectThroughChainIfNeeded(
-                    command: .mux,
-                    destinationHost: "v1.mux.cool",
-                    destinationPort: 666,
-                    initialData: nil
-                )
-            }
-        }
-    }
-
-    private func connectThroughChainIfNeeded(
-        command: ProxyCommand,
-        destinationHost: String,
-        destinationPort: UInt16,
-        initialData: Data?
-    ) async throws -> ProxyConnection {
+    private func connectThroughChainIfNeeded(_ request: ProxyRequest) async throws -> ProxyConnection {
         guard let chain = configuration.chain, !chain.isEmpty, tunnel == nil else {
-            return try await connectWithCommand(
-                command: command,
-                destinationHost: destinationHost,
-                destinationPort: destinationPort,
-                initialData: initialData
-            )
+            return try await connectWithOutbound(request)
         }
-
-        if configuration.outboundProtocol == .nowhere,
-           configuration.nowhereMultiplex {
-            return try await connectWithCommand(
-                command: command,
-                destinationHost: destinationHost,
-                destinationPort: destinationPort,
-                initialData: initialData
-            )
+        
+        if configuration.outboundProtocol == .nowhere, configuration.nowhereMultiplex {
+            return try await connectWithOutbound(request)
         }
 
         if configuration.outboundProtocol == .nowhere,
@@ -197,73 +162,62 @@ nonisolated final class ProxyClient: Sendable {
         }
 
         if isQUICTransport {
-            return try await connectWithCommand(
-                command: command,
-                destinationHost: destinationHost,
-                destinationPort: destinationPort,
-                initialData: initialData
-            )
+            return try await connectWithOutbound(request)
         }
 
-        guard let lastDeliver = configuration.upstreamCommand(for: command) else {
+        guard let lastDeliver = configuration.upstreamNetwork(for: request.network) else {
             throw AnywhereError.proxy(configuration.outboundProtocol.wire, .protocolViolation(
-                detail: "\(configuration.outboundProtocol.name) doesn't support \(command)"
+                detail: "\(configuration.outboundProtocol.name) doesn't support \(request.network)"
             ))
         }
 
-        let hopCommands = try Self.computeChainHopCommands(chain: chain, lastDeliver: lastDeliver).get()
+        let hopNetworks = try Self.computeChainHopNetworks(chain: chain, lastDeliver: lastDeliver).get()
 
         let chainTunnel = try await buildChainTunnel(
-            chain: chain, index: 0, currentTunnel: nil, hopCommands: hopCommands
+            chain: chain, index: 0, currentTunnel: nil, hopNetworks: hopNetworks
         )
         setChainTunnel(chainTunnel)
-        return try await connectWithCommand(
-            command: command,
-            destinationHost: destinationHost,
-            destinationPort: destinationPort,
-            initialData: initialData
-        )
+        return try await connectWithOutbound(request)
     }
 
-    static func computeChainHopCommands(
+    static func computeChainHopNetworks(
         chain: [ProxyConfiguration],
         outerProtocol: OutboundProtocol,
-        outerCommand: ProxyCommand
-    ) -> Result<[ProxyCommand], Error> {
+        outerNetwork: ProxyNetwork
+    ) -> Result<[ProxyNetwork], Error> {
         guard !chain.isEmpty else { return .success([]) }
 
-        guard let lastDeliver = outerProtocol.upstreamCommand(for: outerCommand) else {
+        guard let lastDeliver = outerProtocol.upstreamNetwork(for: outerNetwork) else {
             return .failure(AnywhereError.proxy(outerProtocol.wire, .protocolViolation(
-                detail: "\(outerProtocol.name) doesn't support \(outerCommand)"
+                detail: "\(outerProtocol.name) doesn't support \(outerNetwork)"
             )))
         }
 
-        return computeChainHopCommands(chain: chain, lastDeliver: lastDeliver)
+        return computeChainHopNetworks(chain: chain, lastDeliver: lastDeliver)
     }
-
-    static func computeChainHopCommands(
+    
+    static func computeChainHopNetworks(
         chain: [ProxyConfiguration],
-        lastDeliver: ProxyCommand
-    ) -> Result<[ProxyCommand], Error> {
+        lastDeliver: ProxyNetwork
+    ) -> Result<[ProxyNetwork], Error> {
         guard !chain.isEmpty else { return .success([]) }
 
-        var commands = [ProxyCommand](repeating: .tcp, count: chain.count)
-        commands[chain.count - 1] = lastDeliver
+        var networks = [ProxyNetwork](repeating: .tcp, count: chain.count)
+        networks[chain.count - 1] = lastDeliver
 
         if chain.count > 1 {
             for i in stride(from: chain.count - 2, through: 0, by: -1) {
                 let nextHop = chain[i + 1]
-                let downstreamCmd = commands[i + 1]
-                // Config-aware: a VLESS hop over XHTTP-h3 rides QUIC, so it needs .udp from below.
-                guard let request = nextHop.upstreamCommand(for: downstreamCmd) else {
+                let downstream = networks[i + 1]
+                guard let upstream = nextHop.upstreamNetwork(for: downstream) else {
                     return .failure(AnywhereError.proxy(nextHop.outboundProtocol.wire, .protocolViolation(
-                        detail: "Chain hop \(nextHop.outboundProtocol.name) doesn't support \(downstreamCmd) downstream — needed by the hop above it"
+                        detail: "Chain hop \(nextHop.outboundProtocol.name) doesn't support \(downstream) downstream — needed by the hop above it"
                     )))
                 }
-                commands[i] = request
+                networks[i] = upstream
             }
         }
-        return .success(commands)
+        return .success(networks)
     }
 
     @discardableResult
@@ -271,7 +225,7 @@ nonisolated final class ProxyClient: Sendable {
         chain: [ProxyConfiguration],
         index: Int,
         currentTunnel: ProxyConnection?,
-        hopCommands: [ProxyCommand],
+        hopNetworks: [ProxyNetwork],
         finalDestination: (host: String, port: UInt16)? = nil,
         track: ((ProxyClient) -> Void)? = nil
     ) async throws -> ProxyConnection {
@@ -279,8 +233,8 @@ nonisolated final class ProxyClient: Sendable {
         if let finalDestination {
             resolvedDestination = finalDestination
         } else {
-            guard let command = hopCommands.last,
-                  let port = configuration.endpointPort(for: command) else {
+            guard let network = hopNetworks.last,
+                  let port = configuration.endpointPort(for: network) else {
                 throw AnywhereError.proxy(configuration.outboundProtocol.wire, .protocolViolation(
                     detail: "Chain command cannot reach \(configuration.outboundProtocol.name) endpoint"
                 ))
@@ -292,7 +246,7 @@ nonisolated final class ProxyClient: Sendable {
             chain: chain,
             index: index,
             currentTunnel: currentTunnel,
-            hopCommands: hopCommands,
+            hopNetworks: hopNetworks,
             finalDestination: resolvedDestination,
             useResolvedAddressForDirectDial: useResolvedAddressForDirectDial,
             track: resolvedTrack
@@ -301,7 +255,7 @@ nonisolated final class ProxyClient: Sendable {
 
     static func buildDetachedChainTunnel(
         chain: [ProxyConfiguration],
-        hopCommands: [ProxyCommand],
+        hopNetworks: [ProxyNetwork],
         finalDestination: (host: String, port: UInt16),
         useResolvedAddressForDirectDial: Bool,
         track: @escaping (ProxyClient) -> Void
@@ -310,7 +264,7 @@ nonisolated final class ProxyClient: Sendable {
             chain: chain,
             index: 0,
             currentTunnel: nil,
-            hopCommands: hopCommands,
+            hopNetworks: hopNetworks,
             finalDestination: finalDestination,
             useResolvedAddressForDirectDial: useResolvedAddressForDirectDial,
             track: track
@@ -321,7 +275,7 @@ nonisolated final class ProxyClient: Sendable {
         chain: [ProxyConfiguration],
         index: Int,
         currentTunnel: ProxyConnection?,
-        hopCommands: [ProxyCommand],
+        hopNetworks: [ProxyNetwork],
         finalDestination: (host: String, port: UInt16),
         useResolvedAddressForDirectDial: Bool,
         track: @escaping (ProxyClient) -> Void
@@ -335,7 +289,7 @@ nonisolated final class ProxyClient: Sendable {
                 if !isLastHop {
                     let nextConfiguration = chain[hopIndex + 1]
                     nextHost = nextConfiguration.serverAddress
-                    guard let port = nextConfiguration.endpointPort(for: hopCommands[hopIndex]) else {
+                    guard let port = nextConfiguration.endpointPort(for: hopNetworks[hopIndex]) else {
                         throw AnywhereError.proxy(nextConfiguration.outboundProtocol.wire, .protocolViolation(
                             detail: "Chain command cannot reach \(nextConfiguration.outboundProtocol.name) endpoint"
                         ))
@@ -354,14 +308,14 @@ nonisolated final class ProxyClient: Sendable {
                 )
                 track(chainClient)
 
-                if hopCommands[hopIndex] == .udp {
-                    currentTunnel = try await chainClient.connectUDP(to: nextHost, port: nextPort)
-                } else {
+                switch hopNetworks[hopIndex] {
+                case .tcp:
                     currentTunnel = try await chainClient.connect(to: nextHost, port: nextPort)
+                case .udp:
+                    currentTunnel = try await chainClient.connectUDP(to: nextHost, port: nextPort)
                 }
             }
         } catch {
-            // Tear down the hops built so far (the delivered chain prefix cascades to its transports).
             currentTunnel?.cancel()
             throw error
         }
@@ -399,156 +353,93 @@ nonisolated final class ProxyClient: Sendable {
 
     private func sendProtocolHandshake(
         over connection: ProxyConnection,
-        command: ProxyCommand,
-        destinationHost: String,
-        destinationPort: UInt16,
-        initialData: Data?,
+        request: ProxyRequest,
         supportsVision: Bool
     ) async throws -> ProxyConnection {
         if isShadowsocks {
-            return try await sendShadowsocksProtocolHandshake(
-                over: connection, command: command,
-                destinationHost: destinationHost, destinationPort: destinationPort
-            )
+            return try await sendShadowsocksProtocolHandshake(over: connection, request: request)
         } else {
             return try await sendVLESSProtocolHandshake(
-                over: connection, command: command,
-                destinationHost: destinationHost, destinationPort: destinationPort,
-                initialData: initialData, supportsVision: supportsVision
+                over: connection, request: request, supportsVision: supportsVision
             )
         }
     }
 
     // MARK: - Connection Routing
 
-    private func connectWithCommand(
-        command: ProxyCommand,
-        destinationHost: String,
-        destinationPort: UInt16,
-        initialData: Data?
-    ) async throws -> ProxyConnection {
-        // Vision silently drops UDP/443 (QUIC).
-        if command == .udp && destinationPort == 443 && isVisionFlow {
-            throw AnywhereError.routing(.dropped)
-        }
-
-        if command == .mux, !configuration.outboundProtocol.supportsMux {
+    private func connectWithOutbound(_ request: ProxyRequest) async throws -> ProxyConnection {
+        if request.isVLESSMultiplexerCarrier, configuration.outboundProtocol != .vless {
             throw AnywhereError.proxy(configuration.outboundProtocol.wire, .protocolViolation(
                 detail: "Mux is not supported with \(configuration.outboundProtocol.name)"
             ))
         }
 
-        if configuration.outboundProtocol == .nowhere {
-            return try await connectWithNowhere(
-                command: command, destinationHost: destinationHost,
-                destinationPort: destinationPort, initialData: initialData
-            )
-        }
-
-        if configuration.outboundProtocol == .hysteria {
-            return try await connectWithHysteria(
-                command: command, destinationHost: destinationHost, destinationPort: destinationPort
-            )
-        }
-        
-        if configuration.outboundProtocol == .sudoku {
-            return try await connectWithSudoku(
-                command: command, destinationHost: destinationHost,
-                destinationPort: destinationPort, initialData: initialData
-            )
-        }
-
-        if configuration.outboundProtocol == .trojan {
-            return try await connectWithTrojan(
-                command: command, destinationHost: destinationHost,
-                destinationPort: destinationPort, initialData: initialData
-            )
-        }
-
-        if configuration.outboundProtocol == .anytls {
-            return try await connectWithAnyTLS(
-                command: command, destinationHost: destinationHost,
-                destinationPort: destinationPort, initialData: initialData
-            )
-        }
-
-        if isShadowsocks {
-            if command == .udp {
+        switch configuration.outboundProtocol {
+        case .nowhere:
+            return try await connectWithNowhere(request)
+        case .vless:
+            switch configuration.xrayTransportLayer {
+            case .ws:
+                return try await connectWithWebSocket(request)
+            case .httpUpgrade:
+                return try await connectWithHTTPUpgrade(request)
+            case .grpc:
+                return try await connectWithGRPC(request)
+            case .xhttp:
+                return try await connectWithXHTTP(request)
+            case .raw:
+                switch configuration.xraySecurityLayer {
+                case .tls(let tlsConfig):
+                    return try await connectWithTLS(tlsConfig: tlsConfig, request: request)
+                case .reality(let realityConfig):
+                    return try await connectWithReality(realityConfig: realityConfig, request: request)
+                case .none:
+                    return try await connectDirect(request)
+                }
+            }
+        case .hysteria:
+            return try await connectWithHysteria(request)
+        case .sudoku:
+            return try await connectWithSudoku(request)
+        case .trojan:
+            return try await connectWithTrojan(request)
+        case .anytls:
+            return try await connectWithAnyTLS(request)
+        case .socks5:
+            return try await connectWithSOCKS5(request)
+        case .rfc:
+            return try await connectWithRFC(request)
+        case .shadowsocks:
+            if request.network == .udp {
                 return try await connectShadowsocksRealUDP(
-                    destinationHost: destinationHost, destinationPort: destinationPort
+                    destinationHost: request.host, destinationPort: request.port
                 )
             }
-            return try await connectDirect(
-                command: command, destinationHost: destinationHost,
-                destinationPort: destinationPort, initialData: initialData
-            )
-        }
-
-        if configuration.outboundProtocol == .socks5 {
-            return try await connectWithSOCKS5(
-                command: command, destinationHost: destinationHost, destinationPort: destinationPort
-            )
-        }
-
-        if configuration.outboundProtocol == .rfc {
-            return try await connectWithRFC(
-                command: command, destinationHost: destinationHost,
-                destinationPort: destinationPort, initialData: initialData
-            )
-        }
-        
-        switch configuration.xrayTransportLayer {
-        case .ws:
-            return try await connectWithWebSocket(command: command, destinationHost: destinationHost, destinationPort: destinationPort, initialData: initialData)
-        case .httpUpgrade:
-            return try await connectWithHTTPUpgrade(command: command, destinationHost: destinationHost, destinationPort: destinationPort, initialData: initialData)
-        case .grpc:
-            return try await connectWithGRPC(command: command, destinationHost: destinationHost, destinationPort: destinationPort, initialData: initialData)
-        case .xhttp:
-            return try await connectWithXHTTP(command: command, destinationHost: destinationHost, destinationPort: destinationPort, initialData: initialData)
-        case .raw:
-            switch configuration.xraySecurityLayer {
-            case .tls(let tlsConfig):
-                return try await connectWithTLS(tlsConfig: tlsConfig, command: command, destinationHost: destinationHost, destinationPort: destinationPort, initialData: initialData)
-            case .reality(let realityConfig):
-                return try await connectWithReality(realityConfig: realityConfig, command: command, destinationHost: destinationHost, destinationPort: destinationPort, initialData: initialData)
-            case .none:
-                return try await connectDirect(command: command, destinationHost: destinationHost, destinationPort: destinationPort, initialData: initialData)
-            }
+            return try await connectDirect(request)
         }
     }
 
-    // MARK: - Async dispatch bridges
-
     private func connectWithTLS(
         tlsConfig: TLSConfiguration,
-        command: ProxyCommand,
-        destinationHost: String,
-        destinationPort: UInt16,
-        initialData: Data?
+        request: ProxyRequest
     ) async throws -> ProxyConnection {
         let tlsClient = TLSClient(configuration: tlsConfig)
         let tlsConnection = try await connectTLSRecord(tlsClient)
         let tlsProxyConnection = TLSProxyConnection(tlsConnection: tlsConnection)
         return try await sendProtocolHandshake(
-            over: tlsProxyConnection, command: command, destinationHost: destinationHost,
-            destinationPort: destinationPort, initialData: initialData, supportsVision: true
+            over: tlsProxyConnection, request: request, supportsVision: true
         )
     }
 
     private func connectWithReality(
         realityConfig: RealityConfiguration,
-        command: ProxyCommand,
-        destinationHost: String,
-        destinationPort: UInt16,
-        initialData: Data?
+        request: ProxyRequest
     ) async throws -> ProxyConnection {
         let realityClient = RealityClient(configuration: realityConfig)
         let realityConnection = try await connectRealityRecord(realityClient)
         let realityProxyConnection = RealityProxyConnection(realityConnection: realityConnection)
         return try await sendProtocolHandshake(
-            over: realityProxyConnection, command: command, destinationHost: destinationHost,
-            destinationPort: destinationPort, initialData: initialData, supportsVision: true
+            over: realityProxyConnection, request: request, supportsVision: true
         )
     }
 
@@ -570,12 +461,7 @@ nonisolated final class ProxyClient: Sendable {
 
     // MARK: - WebSocket Connection
 
-    private func connectWithWebSocket(
-        command: ProxyCommand,
-        destinationHost: String,
-        destinationPort: UInt16,
-        initialData: Data?
-    ) async throws -> ProxyConnection {
+    private func connectWithWebSocket(_ request: ProxyRequest) async throws -> ProxyConnection {
         guard case .ws(let wsConfig) = configuration.xrayTransportLayer else {
             throw AnywhereError.proxy(.webSocket, .invalidConfiguration(detail: "WebSocket transport specified but no WebSocket configuration"))
         }
@@ -604,8 +490,7 @@ nonisolated final class ProxyClient: Sendable {
             try await wsConnection.performUpgrade()
             let webSocketProxyConnection = WebSocketProxyConnection(wsConnection: wsConnection)
             return try await sendProtocolHandshake(
-                over: webSocketProxyConnection, command: command, destinationHost: destinationHost,
-                destinationPort: destinationPort, initialData: initialData, supportsVision: transportSupportsVision
+                over: webSocketProxyConnection, request: request, supportsVision: transportSupportsVision
             )
         } catch {
             wsConnection.cancel()
@@ -615,12 +500,7 @@ nonisolated final class ProxyClient: Sendable {
 
     // MARK: - HTTP Upgrade Connection
 
-    private func connectWithHTTPUpgrade(
-        command: ProxyCommand,
-        destinationHost: String,
-        destinationPort: UInt16,
-        initialData: Data?
-    ) async throws -> ProxyConnection {
+    private func connectWithHTTPUpgrade(_ request: ProxyRequest) async throws -> ProxyConnection {
         guard case .httpUpgrade(let huConfig) = configuration.xrayTransportLayer else {
             throw AnywhereError.proxy(.httpUpgrade, .invalidConfiguration(detail: "HTTP upgrade transport specified but no configuration"))
         }
@@ -642,8 +522,7 @@ nonisolated final class ProxyClient: Sendable {
             try await huConnection.performUpgrade()
             let httpUpgradeProxyConnection = HTTPUpgradeProxyConnection(huConnection: huConnection)
             return try await sendProtocolHandshake(
-                over: httpUpgradeProxyConnection, command: command, destinationHost: destinationHost,
-                destinationPort: destinationPort, initialData: initialData, supportsVision: transportSupportsVision
+                over: httpUpgradeProxyConnection, request: request, supportsVision: transportSupportsVision
             )
         } catch {
             huConnection.cancel()
@@ -651,17 +530,11 @@ nonisolated final class ProxyClient: Sendable {
         }
     }
 
-    private func connectWithGRPC(
-        command: ProxyCommand,
-        destinationHost: String,
-        destinationPort: UInt16,
-        initialData: Data?
-    ) async throws -> ProxyConnection {
+    private func connectWithGRPC(_ request: ProxyRequest) async throws -> ProxyConnection {
         guard case .grpc(let grpcConfig) = configuration.xrayTransportLayer else {
             throw AnywhereError.proxy(.grpc, .invalidConfiguration(detail: "gRPC transport specified but no gRPC configuration"))
         }
-
-        // The :authority falls back to the TLS/Reality SNI when no override is configured.
+        
         let tlsServerName: String?
         if case .tls(let tls) = configuration.xraySecurityLayer { tlsServerName = tls.serverName } else { tlsServerName = nil }
         let realityServerName: String?
@@ -674,7 +547,6 @@ nonisolated final class ProxyClient: Sendable {
 
         let grpcConnection: GRPCConnection
         if case .reality(let realityConfig) = configuration.xraySecurityLayer {
-            // Reality handles its own ALPN internally; layer gRPC on top.
             let realityClient = RealityClient(configuration: realityConfig)
             let realityConnection = try await connectRealityRecord(realityClient)
             grpcConnection = GRPCConnection(tlsConnection: realityConnection, configuration: grpcConfig, authority: authority)
@@ -695,8 +567,7 @@ nonisolated final class ProxyClient: Sendable {
             try await grpcConnection.performSetup()
             let grpcProxyConnection = GRPCProxyConnection(grpcConnection: grpcConnection)
             return try await sendProtocolHandshake(
-                over: grpcProxyConnection, command: command, destinationHost: destinationHost,
-                destinationPort: destinationPort, initialData: initialData, supportsVision: transportSupportsVision
+                over: grpcProxyConnection, request: request, supportsVision: transportSupportsVision
             )
         } catch {
             grpcConnection.cancel()
@@ -706,12 +577,7 @@ nonisolated final class ProxyClient: Sendable {
 
     // MARK: - Direct Connection
 
-    private func connectDirect(
-        command: ProxyCommand,
-        destinationHost: String,
-        destinationPort: UInt16,
-        initialData: Data?
-    ) async throws -> ProxyConnection {
+    private func connectDirect(_ request: ProxyRequest) async throws -> ProxyConnection {
         let directProxyConnection: ProxyConnection
         let supportsVision = transportSupportsVision
         if let tunnel = self.tunnel {
@@ -723,9 +589,7 @@ nonisolated final class ProxyClient: Sendable {
         }
         do {
             return try await sendProtocolHandshake(
-                over: directProxyConnection, command: command, destinationHost: destinationHost,
-                destinationPort: destinationPort, initialData: initialData,
-                supportsVision: supportsVision
+                over: directProxyConnection, request: request, supportsVision: supportsVision
             )
         } catch {
             directProxyConnection.cancel()
@@ -734,8 +598,7 @@ nonisolated final class ProxyClient: Sendable {
     }
 
     // MARK: - gRPC Connection
-
-    /// ALPN is forced to `h2` because gRPC requires HTTP/2.
+    
     private func sanitizedGRPCTLSConfiguration(from base: TLSConfiguration) -> TLSConfiguration {
         TLSConfiguration(
             serverName: base.serverName,
@@ -826,12 +689,7 @@ nonisolated final class ProxyClient: Sendable {
         )
     }
 
-    private func connectWithXHTTP(
-        command: ProxyCommand,
-        destinationHost: String,
-        destinationPort: UInt16,
-        initialData: Data?
-    ) async throws -> ProxyConnection {
+    private func connectWithXHTTP(_ request: ProxyRequest) async throws -> ProxyConnection {
         guard case .xhttp(let xhttpConfig) = configuration.xrayTransportLayer else {
             throw AnywhereError.proxy(.xhttp, .invalidConfiguration(detail: "XHTTP transport specified but no XHTTP configuration"))
         }
@@ -848,9 +706,7 @@ nonisolated final class ProxyClient: Sendable {
         } else {
             resolvedMode = xhttpConfig.mode
         }
-
-        // Up/download detach splits GET and POST across servers, correlated by a shared
-        // session ID; stream-one can't split, so promote it to stream-up.
+        
         if let downloadSettings = xhttpConfig.downloadSettings {
             if resolvedMode == .streamOne { resolvedMode = .streamUp }
             let downloadHTTPVersion = decideXHTTPHTTPVersion(for: downloadSettings.xraySecurityLayer)
@@ -858,16 +714,14 @@ nonisolated final class ProxyClient: Sendable {
                 xhttpConfig: xhttpConfig, downloadSettings: downloadSettings,
                 mode: resolvedMode, sessionId: xhttpConfig.generateSessionID(),
                 mainHTTPVersion: httpVersion, downloadHTTPVersion: downloadHTTPVersion,
-                command: command, destinationHost: destinationHost, destinationPort: destinationPort,
-                initialData: initialData
+                request: request
             )
         }
 
         let sessionId = (resolvedMode == .packetUp || resolvedMode == .streamUp) ? xhttpConfig.generateSessionID() : ""
         return try await connectXHTTPCombined(
-            xhttpConfig: xhttpConfig, mode: resolvedMode, sessionId: sessionId, httpVersion: httpVersion,
-            command: command, destinationHost: destinationHost, destinationPort: destinationPort,
-            initialData: initialData
+            xhttpConfig: xhttpConfig, mode: resolvedMode, sessionId: sessionId,
+            httpVersion: httpVersion, request: request
         )
     }
 
@@ -878,44 +732,45 @@ nonisolated final class ProxyClient: Sendable {
         mode: XHTTPMode,
         sessionId: String,
         httpVersion: XHTTPHTTPVersion,
-        command: ProxyCommand,
-        destinationHost: String,
-        destinationPort: UInt16,
-        initialData: Data?
+        request: ProxyRequest
     ) async throws -> ProxyConnection {
         let route = consumeMainXHTTPRoute()
         let needsUploadFactory = httpVersion == .http11 && (mode == .packetUp || mode == .streamUp)
         let uploadFactory = needsUploadFactory
-            ? makeXHTTPUploadFactory(security: configuration.xraySecurityLayer, httpVersion: httpVersion,
-                                     mode: mode, xmux: xhttpConfig.effectiveXMUX)
+            ? makeXHTTPUploadFactory(
+                security: configuration.xraySecurityLayer,
+                httpVersion: httpVersion,
+                mode: mode,
+                xmux: xhttpConfig.effectiveXMUX
+            )
             : nil
         let xhttpConnection = try await dialXHTTPLeg(
-            endpoint: mainXHTTPEndpoint(), httpVersion: httpVersion, route: route,
-            xhttp: xhttpConfig, mode: mode, sessionId: sessionId, role: .combined, uploadFactory: uploadFactory
+            endpoint: mainXHTTPEndpoint(),
+            httpVersion: httpVersion,
+            route: route,
+            xhttp: xhttpConfig,
+            mode: mode,
+            sessionId: sessionId,
+            role: .combined,
+            uploadFactory: uploadFactory
         )
         do {
-            return try await performXHTTPSetup(
-                xhttpConnection: xhttpConnection, command: command, destinationHost: destinationHost,
-                destinationPort: destinationPort, initialData: initialData
-            )
+            return try await performXHTTPSetup(xhttpConnection: xhttpConnection, request: request)
         } catch {
-            xhttpConnection.cancel()   // releases the xmux lease / closes the leg
+            xhttpConnection.cancel()
             throw error
         }
     }
 
     private func performXHTTPSetup(
         xhttpConnection: XHTTPConnection,
-        command: ProxyCommand,
-        destinationHost: String,
-        destinationPort: UInt16,
-        initialData: Data?
+        request: ProxyRequest
     ) async throws -> ProxyConnection {
         try await xhttpConnection.performSetup()
         let xhttpProxyConnection = XHTTPProxyConnection(xhttpConnection: xhttpConnection)
         return try await sendProtocolHandshake(
-            over: xhttpProxyConnection, command: command, destinationHost: destinationHost,
-            destinationPort: destinationPort, initialData: initialData,
+            over: xhttpProxyConnection,
+            request: request,
             supportsVision: self.transportSupportsVision
         )
     }
@@ -929,22 +784,30 @@ nonisolated final class ProxyClient: Sendable {
         sessionId: String,
         mainHTTPVersion: XHTTPHTTPVersion,
         downloadHTTPVersion: XHTTPHTTPVersion,
-        command: ProxyCommand,
-        destinationHost: String,
-        destinationPort: UInt16,
-        initialData: Data?
+        request: ProxyRequest
     ) async throws -> ProxyConnection {
         let uploadRoute = consumeMainXHTTPRoute()
         let uploadLeg = try await dialXHTTPLeg(
-            endpoint: mainXHTTPEndpoint(), httpVersion: mainHTTPVersion, route: uploadRoute,
-            xhttp: xhttpConfig, mode: mode, sessionId: sessionId, role: .uploadOnly, uploadFactory: nil
+            endpoint: mainXHTTPEndpoint(),
+            httpVersion: mainHTTPVersion,
+            route: uploadRoute,
+            xhttp: xhttpConfig,
+            mode: mode,
+            sessionId: sessionId,
+            role: .uploadOnly,
+            uploadFactory: nil
         )
         let downloadLeg: XHTTPConnection
         do {
             downloadLeg = try await dialXHTTPLeg(
-                endpoint: self.downloadXHTTPEndpoint(downloadSettings), httpVersion: downloadHTTPVersion,
-                route: .direct, xhttp: downloadSettings.xhttp, mode: mode, sessionId: sessionId,
-                role: .downloadOnly, uploadFactory: nil
+                endpoint: self.downloadXHTTPEndpoint(downloadSettings),
+                httpVersion: downloadHTTPVersion,
+                route: .direct,
+                xhttp: downloadSettings.xhttp,
+                mode: mode,
+                sessionId: sessionId,
+                role: .downloadOnly,
+                uploadFactory: nil
             )
         } catch {
             uploadLeg.cancel()
@@ -952,11 +815,7 @@ nonisolated final class ProxyClient: Sendable {
         }
         downloadLeg.attachUploadChannel(uploadLeg)
         do {
-            return try await performXHTTPSetup(
-                xhttpConnection: downloadLeg, command: command,
-                destinationHost: destinationHost, destinationPort: destinationPort,
-                initialData: initialData
-            )
+            return try await performXHTTPSetup(xhttpConnection: downloadLeg, request: request)
         } catch {
             downloadLeg.cancel()
             throw error
@@ -1074,7 +933,6 @@ nonisolated final class ProxyClient: Sendable {
         let key = "h3|\(host)|\(port)|\(serverName)"
         let manager = XHTTPXMUXMultiplexerRegistry.shared.manager(key: key, config: xmux) {
             { () async -> XHTTPXMUXMultiplexerPoolable? in
-                // QUIC connects lazily, so a fresh session never fails at creation.
                 HTTP3Multiplexer(host: host, port: port, serverName: serverName)
             }
         }
@@ -1179,16 +1037,31 @@ nonisolated final class ProxyClient: Sendable {
         }
         switch route {
         case .direct:
-            return try await dialXHTTPByteStream(host: endpoint.directHost, port: endpoint.port, security: endpoint.security,
-                                httpVersion: httpVersion, overTunnel: nil)
+            return try await dialXHTTPByteStream(
+                host: endpoint.directHost,
+                port: endpoint.port,
+                security: endpoint.security,
+                httpVersion: httpVersion,
+                overTunnel: nil
+            )
         case .overTunnel(let tunnel):
-            return try await dialXHTTPByteStream(host: endpoint.chainHost, port: endpoint.port, security: endpoint.security,
-                                httpVersion: httpVersion, overTunnel: tunnel)
+            return try await dialXHTTPByteStream(
+                host: endpoint.chainHost,
+                port: endpoint.port,
+                security: endpoint.security,
+                httpVersion: httpVersion,
+                overTunnel: tunnel
+            )
         case .buildChain(let chain):
-            let hopCommands = [ProxyCommand](repeating: .tcp, count: chain.count)
-            let tunnel = try await self.buildChainTunnel(chain: chain, index: 0, currentTunnel: nil, hopCommands: hopCommands)
-            return try await dialXHTTPByteStream(host: endpoint.chainHost, port: endpoint.port, security: endpoint.security,
-                                     httpVersion: httpVersion, overTunnel: tunnel)
+            let hopNetworks = [ProxyNetwork](repeating: .tcp, count: chain.count)
+            let tunnel = try await self.buildChainTunnel(chain: chain, index: 0, currentTunnel: nil, hopNetworks: hopNetworks)
+            return try await dialXHTTPByteStream(
+                host: endpoint.chainHost,
+                port: endpoint.port,
+                security: endpoint.security,
+                httpVersion: httpVersion,
+                overTunnel: tunnel
+            )
         }
     }
 
@@ -1242,8 +1115,8 @@ nonisolated final class ProxyClient: Sendable {
         case .overTunnel(let tunnel):
             return makeSession(endpoint.chainHost, ProxyConnectionDatagramTransport(connection: tunnel))
         case .buildChain(let chain):
-            let hopCommands = try Self.computeChainHopCommands(chain: chain, lastDeliver: .udp).get()
-            let tunnel = try await self.buildChainTunnel(chain: chain, index: 0, currentTunnel: nil, hopCommands: hopCommands)
+            let hopNetworks = try Self.computeChainHopNetworks(chain: chain, lastDeliver: .udp).get()
+            let tunnel = try await self.buildChainTunnel(chain: chain, index: 0, currentTunnel: nil, hopNetworks: hopNetworks)
             return makeSession(endpoint.chainHost, ProxyConnectionDatagramTransport(connection: tunnel))
         }
     }

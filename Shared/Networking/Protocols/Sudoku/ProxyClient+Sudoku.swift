@@ -7,33 +7,17 @@
 
 import Foundation
 
-nonisolated private enum SudokuConnectCommand {
-    case tcp
-    case udp
-}
-
 extension ProxyClient {
-    func connectWithSudoku(
-        command: ProxyCommand,
-        destinationHost: String,
-        destinationPort: UInt16,
-        initialData: Data?
-    ) async throws -> ProxyConnection {
-        let sudokuCommand: SudokuConnectCommand
-        switch command {
-        case .tcp:
-            sudokuCommand = .tcp
-        case .udp:
-            sudokuCommand = .udp
-        case .mux:
-            throw AnywhereError.proxy(.sudoku, .protocolViolation(detail: "Sudoku does not use the host mux manager"))
-        }
-
+    func connectWithSudoku(_ request: ProxyRequest) async throws -> ProxyConnection {
         guard case .sudoku(let sudoku) = configuration.outbound else {
             throw AnywhereError.proxy(.sudoku, .protocolViolation(detail: "missing Sudoku protocol settings"))
         }
 
-        if case .tcp = sudokuCommand, sudoku.multiplex == .on, tunnel == nil {
+        let destinationHost = request.host
+        let destinationPort = request.port
+        let initialData = request.initialData
+
+        if request.network == .tcp, sudoku.multiplex == .on, tunnel == nil {
             return try await connectWithPooledSudokuMux(
                 destinationHost: destinationHost,
                 destinationPort: destinationPort,
@@ -51,7 +35,7 @@ extension ProxyClient {
         do {
             let client = try SudokuNativeClient(configuration: configuration, factory: factory)
             let connection: ProxyConnection
-            switch sudokuCommand {
+            switch request.network {
             case .tcp where client.shouldUseNativeMux:
                 let multiplexer = try await client.openMux()
                 let stream = try await multiplexer.dialTCP(host: destinationHost, port: destinationPort)

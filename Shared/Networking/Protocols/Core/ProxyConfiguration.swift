@@ -43,26 +43,16 @@ nonisolated enum OutboundProtocol: String, Codable, CaseIterable {
         }
     }
     
-    var supportsMux: Bool {
-        self == .vless
-    }
-    
-    func upstreamCommand(for downstreamCommand: ProxyCommand) -> ProxyCommand? {
+    func upstreamNetwork(for downstream: ProxyNetwork) -> ProxyNetwork? {
         switch self {
-        case .nowhere:
+        case .nowhere, .hysteria:
             return .udp
-        case .vless, .trojan, .anytls:
+        case .vless, .trojan, .anytls, .socks5:
             return .tcp
         case .shadowsocks:
-            return downstreamCommand == .udp ? .udp : .tcp
-        case .socks5:
-            return .tcp
-        case .hysteria:
-            return .udp
-        case .sudoku:
-            return downstreamCommand == .tcp ? .tcp : nil
-        case .rfc:
-            return downstreamCommand == .tcp ? .tcp : nil
+            return downstream
+        case .sudoku, .rfc:
+            return downstream == .tcp ? .tcp : nil
         }
     }
 
@@ -343,28 +333,20 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
         return alpn.count == 1 && alpn[0].caseInsensitiveCompare("h3") == .orderedSame
     }
     
-    func upstreamCommand(for downstreamCommand: ProxyCommand) -> ProxyCommand? {
+    func upstreamNetwork(for downstream: ProxyNetwork) -> ProxyNetwork? {
         if isXHTTPOverHTTP3 { return .udp }
         if outboundProtocol == .nowhere {
-            switch nowhereUplink {
-            case .udp:
-                return .udp
-            case .tcp:
-                if downstreamCommand == .tcp { return .tcp }
-                if downstreamCommand == .udp { return .tcp }
-                return nil
-            }
+            return nowhereUplink == .udp ? .udp : .tcp
         }
-        return outboundProtocol.upstreamCommand(for: downstreamCommand)
+        return outboundProtocol.upstreamNetwork(for: downstream)
     }
 
-    func endpointPort(for command: ProxyCommand) -> UInt16? {
+    func endpointPort(for network: ProxyNetwork) -> UInt16? {
         guard case .nowhere(let configuration) = outbound else { return serverPort }
         let ports = configuration.resolvedPorts(serverPort: serverPort)
-        switch command {
+        switch network {
         case .tcp: return ports.tcp
         case .udp: return ports.udp
-        case .mux: return nil
         }
     }
 
