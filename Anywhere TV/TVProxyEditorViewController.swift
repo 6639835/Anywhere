@@ -22,6 +22,7 @@ class TVProxyEditorViewController: UITableViewController {
     private var nowhereKey = ""
     private var nowhereTCPPort = ""
     private var nowhereUDPPort = ""
+    private var nowhereSeparatePorts = false
     private var nowhereUplink: NowhereNetwork = .tcp
     private var nowhereDownlink: NowhereNetwork = .tcp
     private var nowhereMultiplex = false
@@ -157,7 +158,7 @@ class TVProxyEditorViewController: UITableViewController {
     private enum FieldKey {
         case name, address, port
         case outboundProtocol
-        case nowhereKey, nowhereTCPPort, nowhereUDPPort, nowhereUplink, nowhereDownlink, nowhereMultiplex, nowhereMorph, nowhereSNI
+        case nowhereKey, nowhereTCPPort, nowhereUDPPort, nowhereSeparatePorts, nowhereUplink, nowhereDownlink, nowhereMultiplex, nowhereMorph, nowhereSNI
         case vlessUUID, vlessEncryption, vlessTransport, vlessFlow, vlessSecurity
         case vlessWebSocketHost, vlessWebSocketPath
         case vlessHTTPUpgradeHost, vlessHTTPUpgradePath
@@ -211,8 +212,9 @@ class TVProxyEditorViewController: UITableViewController {
             .text(label: String(localized: "Address"), value: serverAddress, placeholder: String(localized: "Address"), key: .address),
         ]
         if isNowhere {
-            serverRows.append(.text(label: String(localized: "TCP Port"), value: nowhereTCPPort, placeholder: String(localized: "TCP Port"), key: .nowhereTCPPort))
-            serverRows.append(.text(label: String(localized: "UDP Port"), value: nowhereUDPPort, placeholder: String(localized: "UDP Port"), key: .nowhereUDPPort))
+            if !nowhereSeparatePorts {
+                serverRows.append(.text(label: String(localized: "Port"), value: serverPort, placeholder: "443", key: .port))
+            }
             serverRows.append(.text(label: String(localized: "Key"), value: nowhereKey, placeholder: String(localized: "Key"), key: .nowhereKey, secure: true))
         } else {
             serverRows.append(.text(label: String(localized: "Port"), value: serverPort, placeholder: "443", key: .port))
@@ -271,30 +273,34 @@ class TVProxyEditorViewController: UITableViewController {
         sections.append((String(localized: "Server"), serverRows))
 
         if isNowhere {
-            let carrierOptions: [(String, String)]
-            if validNowherePort(nowhereTCPPort) != nil && validNowherePort(nowhereUDPPort) != nil {
-                carrierOptions = [("TCP", "tcp"), ("UDP", "udp")]
-            } else if validNowherePort(nowhereUDPPort) != nil {
-                carrierOptions = [("UDP", "udp")]
-            } else {
-                carrierOptions = [("TCP", "tcp")]
-            }
+            let carrierOptions = [("TCP", "tcp"), ("UDP", "udp")]
             var transportRows: [RowType] = [
                 .selection(
                     label: String(localized: "Upload"),
                     value: nowhereUplink.rawValue.uppercased(),
                     options: carrierOptions,
                     key: .nowhereUplink,
-                    isEnabled: hasBothNowhereCarriers
+                    isEnabled: true
                 ),
                 .selection(
                     label: String(localized: "Download"),
                     value: nowhereDownlink.rawValue.uppercased(),
                     options: carrierOptions,
                     key: .nowhereDownlink,
-                    isEnabled: hasBothNowhereCarriers
+                    isEnabled: true
                 ),
             ]
+            if nowhereUplink != nowhereDownlink {
+                transportRows.append(.toggle(
+                    label: String(localized: "Separate Ports"),
+                    isOn: nowhereSeparatePorts,
+                    key: .nowhereSeparatePorts
+                ))
+            }
+            if nowhereSeparatePorts {
+                transportRows.append(.text(label: String(localized: "TCP Port"), value: nowhereTCPPort, placeholder: "443", key: .nowhereTCPPort))
+                transportRows.append(.text(label: String(localized: "UDP Port"), value: nowhereUDPPort, placeholder: "443", key: .nowhereUDPPort))
+            }
             transportRows.append(.toggle(
                 label: String(localized: "Multiplex"),
                 isOn: nowhereUplink == .tcp || nowhereDownlink == .tcp ? nowhereMultiplex : true,
@@ -584,6 +590,11 @@ class TVProxyEditorViewController: UITableViewController {
     private var isValid: Bool {
         guard !name.isEmpty, !serverAddress.isEmpty else { return false }
         if isNowhere {
+            if !nowhereSeparatePorts {
+                return !nowhereKey.isEmpty
+                    && nowhereKey.utf8.count <= 255
+                    && validNowherePort(serverPort) != nil
+            }
             let tcpPort = validNowherePort(nowhereTCPPort)
             let udpPort = validNowherePort(nowhereUDPPort)
             return !nowhereKey.isEmpty
@@ -591,6 +602,10 @@ class TVProxyEditorViewController: UITableViewController {
                 && (nowhereTCPPort.isEmpty || tcpPort != nil)
                 && (nowhereUDPPort.isEmpty || udpPort != nil)
                 && (tcpPort != nil || udpPort != nil)
+                && (nowhereUplink != .tcp || tcpPort != nil)
+                && (nowhereUplink != .udp || udpPort != nil)
+                && (nowhereDownlink != .tcp || tcpPort != nil)
+                && (nowhereDownlink != .udp || udpPort != nil)
         }
         guard UInt16(serverPort) != nil else { return false }
         if isVLESS {
@@ -787,14 +802,24 @@ class TVProxyEditorViewController: UITableViewController {
         case .nowhereKey: nowhereKey = value
         case .nowhereTCPPort:
             nowhereTCPPort = value
-            reconcileNowhereCarriers()
         case .nowhereUDPPort:
             nowhereUDPPort = value
-            reconcileNowhereCarriers()
+        case .nowhereSeparatePorts:
+            setNowherePortSeparation(value == "true")
         case .nowhereUplink:
-            if let network = NowhereNetwork(rawValue: value) { nowhereUplink = network }
+            if let network = NowhereNetwork(rawValue: value) {
+                nowhereUplink = network
+                if nowhereUplink == nowhereDownlink {
+                    setNowherePortSeparation(false)
+                }
+            }
         case .nowhereDownlink:
-            if let network = NowhereNetwork(rawValue: value) { nowhereDownlink = network }
+            if let network = NowhereNetwork(rawValue: value) {
+                nowhereDownlink = network
+                if nowhereUplink == nowhereDownlink {
+                    setNowherePortSeparation(false)
+                }
+            }
         case .nowhereMultiplex: nowhereMultiplex = value == "true"
         case .nowhereMorph: nowhereMorph = value == "true"
         case .nowhereSNI: nowhereSNI = value
@@ -904,6 +929,7 @@ class TVProxyEditorViewController: UITableViewController {
             nowhereKey = nowhere.key
             nowhereTCPPort = nowhere.tcpPort.map { String($0) } ?? ""
             nowhereUDPPort = nowhere.udpPort.map { String($0) } ?? ""
+            nowhereSeparatePorts = nowhere.tcpPort != nowhere.udpPort
             nowhereUplink = nowhere.uplink
             nowhereDownlink = nowhere.downlink
             nowhereMultiplex = nowhere.multiplex
@@ -1098,8 +1124,9 @@ class TVProxyEditorViewController: UITableViewController {
     }
 
     private func save() {
-        let nowhereTCP = validNowherePort(nowhereTCPPort)
-        let nowhereUDP = validNowherePort(nowhereUDPPort)
+        let sharedNowherePort = validNowherePort(serverPort)
+        let nowhereTCP = nowhereSeparatePorts ? validNowherePort(nowhereTCPPort) : sharedNowherePort
+        let nowhereUDP = nowhereSeparatePorts ? validNowherePort(nowhereUDPPort) : sharedNowherePort
         let port: UInt16
         if isNowhere {
             guard let canonicalPort = nowhereTCP ?? nowhereUDP else { return }
@@ -1348,20 +1375,15 @@ class TVProxyEditorViewController: UITableViewController {
         return port
     }
 
-    private var hasBothNowhereCarriers: Bool {
-        validNowherePort(nowhereTCPPort) != nil && validNowherePort(nowhereUDPPort) != nil
-    }
-
-    private func reconcileNowhereCarriers() {
-        let hasTCP = validNowherePort(nowhereTCPPort) != nil
-        let hasUDP = validNowherePort(nowhereUDPPort) != nil
-        if hasTCP && !hasUDP {
-            nowhereUplink = .tcp
-            nowhereDownlink = .tcp
-        } else if hasUDP && !hasTCP {
-            nowhereUplink = .udp
-            nowhereDownlink = .udp
-            nowhereMultiplex = false
+    private func setNowherePortSeparation(_ enabled: Bool) {
+        if enabled {
+            if let port = validNowherePort(serverPort) {
+                nowhereTCPPort = String(port)
+                nowhereUDPPort = String(port)
+            }
+        } else if let port = validNowherePort(nowhereTCPPort) ?? validNowherePort(nowhereUDPPort) {
+            serverPort = String(port)
         }
+        nowhereSeparatePorts = enabled
     }
 }
