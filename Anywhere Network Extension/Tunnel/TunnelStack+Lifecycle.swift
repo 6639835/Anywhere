@@ -233,9 +233,9 @@ extension TunnelStack {
     }
 
     private func reclaimInstanceTransports(rebuildMultiplexerPool: Bool) {
-        let rebuiltMultiplexerPool: VLESSVisionUDPMultiplexerPool?
-        if rebuildMultiplexerPool, let configuration, configuration.outboundProtocol == .vless {
-            rebuiltMultiplexerPool = VLESSVisionUDPMultiplexerPool(configuration: configuration)
+        let rebuiltMultiplexerPool: (any UDPMultiplexerPool)?
+        if rebuildMultiplexerPool, let configuration {
+            rebuiltMultiplexerPool = configuration.makeUDPMultiplexerPool()
         } else {
             rebuiltMultiplexerPool = nil
         }

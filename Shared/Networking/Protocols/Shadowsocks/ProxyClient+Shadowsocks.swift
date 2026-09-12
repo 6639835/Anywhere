@@ -9,10 +9,21 @@ import Foundation
 
 nonisolated extension ProxyClient {
 
-    var isShadowsocks: Bool {
-        configuration.outboundProtocol == .shadowsocks
+    func connectWithShadowsocks(_ request: ProxyRequest) async throws -> ProxyConnection {
+        if request.network == .udp {
+            return try await connectShadowsocksRealUDP(
+                destinationHost: request.host, destinationPort: request.port
+            )
+        }
+        let directProxyConnection = try await dialDirectProxyConnection()
+        do {
+            return try await sendShadowsocksProtocolHandshake(over: directProxyConnection, request: request)
+        } catch {
+            directProxyConnection.cancel()
+            throw error
+        }
     }
-    
+
     func sendShadowsocksProtocolHandshake(
         over connection: ProxyConnection,
         request: ProxyRequest

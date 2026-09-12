@@ -11,8 +11,8 @@ import Synchronization
 nonisolated private let logger = AnywhereLogger(category: "UDPPlane")
 
 nonisolated enum UDPPlaneCommand {
-    case setMultiplexerPool(VLESSVisionUDPMultiplexerPool?)
-    case reclaim(replacementMultiplexerPool: VLESSVisionUDPMultiplexerPool?)
+    case setMultiplexerPool((any UDPMultiplexerPool)?)
+    case reclaim(replacementMultiplexerPool: (any UDPMultiplexerPool)?)
 }
 
 actor UDPPlane {
@@ -36,7 +36,7 @@ actor UDPPlane {
 
     private var ssSessions: [UUID: ShadowsocksUDPSession] = [:]
 
-    private var multiplexerPoolStorage: VLESSVisionUDPMultiplexerPool?
+    private var multiplexerPoolStorage: (any UDPMultiplexerPool)?
 
     private var pendingResolutionCapWarned = false
 
@@ -46,7 +46,7 @@ actor UDPPlane {
 
     // MARK: - Multiplexer pool
 
-    var multiplexerPool: VLESSVisionUDPMultiplexerPool? { multiplexerPoolStorage }
+    var multiplexerPool: (any UDPMultiplexerPool)? { multiplexerPoolStorage }
 
     func apply(_ command: UDPPlaneCommand) {
         switch command {
@@ -523,7 +523,7 @@ actor UDPPlane {
 
     // MARK: - Reclaim
 
-    private func reclaim(replacementMultiplexerPool: VLESSVisionUDPMultiplexerPool?) {
+    private func reclaim(replacementMultiplexerPool: (any UDPMultiplexerPool)?) {
         multiplexerPoolStorage?.closeAll()
         multiplexerPoolStorage = replacementMultiplexerPool
         purgeShadowsocksUDPSessions()

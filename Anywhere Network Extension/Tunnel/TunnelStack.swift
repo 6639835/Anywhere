@@ -371,10 +371,7 @@ actor TunnelStack {
         publishReflector()
         publishOutboundRoutingContext(configuration: configuration)
 
-        let multiplexerPool = configuration.outboundProtocol == .vless
-        ? VLESSVisionUDPMultiplexerPool(configuration: configuration)
-        : nil
-        submitPlaneCommand(.setMultiplexerPool(multiplexerPool))
+        submitPlaneCommand(.setMultiplexerPool(configuration.makeUDPMultiplexerPool()))
 
         if proxyMode == .rule {
             if let precompiledRouting {

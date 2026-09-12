@@ -258,11 +258,13 @@ nonisolated extension ProxyConfiguration {
             serverAddress: body.host,
             serverPort: body.port,
             outbound: .vless(
-                uuid: uuid,
-                encryption: encryption,
-                flow: flow,
-                transport: xrayTransportLayer,
-                security: xraySecurityLayer
+                VLESSConfiguration(
+                    uuid: uuid,
+                    encryption: encryption,
+                    flow: flow,
+                    transport: xrayTransportLayer,
+                    security: xraySecurityLayer
+                )
             )
         )
     }

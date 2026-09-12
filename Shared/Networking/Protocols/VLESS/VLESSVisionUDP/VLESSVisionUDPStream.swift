@@ -149,4 +149,4 @@ actor VLESSVisionUDPStream {
     }
 }
 
-extension VLESSVisionUDPStream: MultiplexerStreamSink {}
+extension VLESSVisionUDPStream: MultiplexerStreamSink, UDPMultiplexerStream {}

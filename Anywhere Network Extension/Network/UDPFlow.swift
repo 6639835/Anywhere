@@ -86,7 +86,7 @@ actor UDPFlow {
     private enum Outbound {
         case direct(UDPTransport)
         case shadowsocks(session: ShadowsocksUDPSession, token: ShadowsocksUDPSession.Token)
-        case mux(VLESSVisionUDPStream)
+        case multiplexer(any UDPMultiplexerStream)
         case proxy(ProxyConnection)
     }
     private var outbound: Outbound?
@@ -308,7 +308,7 @@ actor UDPFlow {
             } catch {
                 noteTransientSendFailure(error)
             }
-        case .mux(let stream):
+        case .multiplexer(let stream):
             do { try await stream.send(data: payload) } catch { noteTransientSendFailure(error) }
         case .proxy(let connection):
             do { try await connection.send(payload) } catch { await handleProxySendError(error, connection: connection) }
@@ -327,10 +327,9 @@ actor UDPFlow {
 
         if !hasChain {
             let isDefaultConfiguration = stack?.isDefaultConfiguration(configuration.id) ?? false
-            if configuration.outboundProtocol == .vless, isDefaultConfiguration,
-               let pool = await plane?.multiplexerPool {
+            if isDefaultConfiguration, let pool = await plane?.multiplexerPool {
                 guard phase != .closed else { return }
-                await runMuxLifecycle(pool: pool)
+                await runMultiplexerLifecycle(pool: pool)
                 return
             }
             if configuration.outboundProtocol == .shadowsocks {
@@ -387,41 +386,39 @@ actor UDPFlow {
         }
     }
 
-    // MARK: Mux
+    // MARK: Multiplexer
 
-    private func runMuxLifecycle(pool: VLESSVisionUDPMultiplexerPool) async {
-        let globalID = VLESSVisionUDPGlobalID.generateGlobalID(sourceAddress: "udp:\(srcHost):\(srcPort)")
-
-        let result: Result<VLESSVisionUDPStream, Error>
+    private func runMultiplexerLifecycle(pool: any UDPMultiplexerPool) async {
+        let result: Result<any UDPMultiplexerStream, Error>
         do {
-            result = .success(try await pool.acquireStream(
-                network: .udp, host: dstHost, port: dstPort, globalID: globalID))
+            result = .success(try await pool.acquireUDPStream(
+                host: dstHost, port: dstPort, sourceAddress: "udp:\(srcHost):\(srcPort)"))
         } catch {
             result = .failure(error)
         }
         guard phase != .closed else {
-            if case .success(let session) = result { session.close() }
+            if case .success(let stream) = result { stream.close() }
             return
         }
 
         switch result {
-        case .success(let session):
-            guard !session.closed else {
+        case .success(let stream):
+            guard !stream.closed else {
                 await closeAndRemove()
                 return
             }
-            guard establish(.mux(session)) else {
-                session.close()
+            guard establish(.multiplexer(stream)) else {
+                stream.close()
                 return
             }
 
             do {
-                while let data = try await session.receive() {
+                while let data = try await stream.receive() {
                     handleProxyData(data)
                 }
-                await receiveClosed(operation: "Mux", error: nil)
+                await receiveClosed(operation: "Multiplexer", error: nil)
             } catch {
-                await receiveClosed(operation: "Mux", error: error)
+                await receiveClosed(operation: "Multiplexer", error: error)
             }
 
         case .failure(let error):
@@ -592,7 +589,7 @@ actor UDPFlow {
             transport.cancel()
         case .shadowsocks(let session, let token):
             Task { await session.unregister(token: token) }
-        case .mux(let stream):
+        case .multiplexer(let stream):
             stream.close()
         case .proxy(let connection):
             connection.cancel()

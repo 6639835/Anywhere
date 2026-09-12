@@ -10,12 +10,8 @@ import Foundation
 // MARK: - Multiplexer
 
 nonisolated protocol Multiplexer: AnyObject {
-    /// Closed multiplexers are evicted by their pool.
     var isClosed: Bool { get }
-
     var activeStreamCount: Int { get }
-
-    /// `error` non-nil for transport failure, nil for clean close.
     func close(error: Error?)
 }
 
@@ -23,7 +19,19 @@ nonisolated protocol Multiplexer: AnyObject {
 
 protocol MultiplexerStreamSink: AnyObject {
     nonisolated func deliverData(_ data: Data)
-
-    /// `error` non-nil for abnormal termination, nil for clean EOF.
     nonisolated func deliverClose(error: Error?)
+}
+
+// MARK: - UDP Multiplexer
+
+nonisolated protocol UDPMultiplexerPool: Sendable {
+    func acquireUDPStream(host: String, port: UInt16, sourceAddress: String) async throws -> any UDPMultiplexerStream
+    func closeAll()
+}
+
+nonisolated protocol UDPMultiplexerStream: Sendable {
+    nonisolated var closed: Bool { get }
+    func send(data: Data) async throws
+    func receive() async throws -> Data?
+    nonisolated func close()
 }

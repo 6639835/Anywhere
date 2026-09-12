@@ -26,11 +26,13 @@ nonisolated enum SampleData {
         security: XraySecurityLayer
     ) -> Outbound {
         .vless(
-            uuid: UUID(),
-            encryption: "none",
-            flow: flow,
-            transport: transport,
-            security: security
+            VLESSConfiguration(
+                uuid: UUID(),
+                encryption: "none",
+                flow: flow,
+                transport: transport,
+                security: security
+            )
         )
     }
 

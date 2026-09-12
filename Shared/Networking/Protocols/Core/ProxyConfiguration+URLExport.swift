@@ -75,23 +75,21 @@ extension ProxyConfiguration {
     }
 
     private func toVLESSURL() -> String {
-        guard case .vless(let uuid, let encryption, let flow, let transport, let security) = outbound else {
-            return ""
-        }
+        guard case .vless(let vless) = outbound else { return "" }
         var parameters: [String] = []
 
-        if encryption != "none" {
-            parameters.append("encryption=\(encryption)")
+        if vless.encryption != "none" {
+            parameters.append("encryption=\(vless.encryption)")
         }
-        if let flow, !flow.isEmpty {
+        if let flow = vless.flow, !flow.isEmpty {
             parameters.append("flow=\(flow)")
         }
-        parameters.append("security=\(security.tag)")
-        if transport.tag != "tcp" {
-            parameters.append("type=\(transport.tag)")
+        parameters.append("security=\(vless.security.tag)")
+        if vless.transport.tag != "tcp" {
+            parameters.append("type=\(vless.transport.tag)")
         }
         
-        if case .tls(let tls) = security {
+        if case .tls(let tls) = vless.security {
             if tls.serverName != serverAddress {
                 parameters.append("sni=\(tls.serverName)")
             }
@@ -106,7 +104,7 @@ extension ProxyConfiguration {
             }
         }
 
-        if case .reality(let reality) = security {
+        if case .reality(let reality) = vless.security {
             parameters.append("sni=\(reality.serverName)")
             parameters.append("pbk=\(reality.publicKey.base64URLEncodedString())")
             if !reality.shortId.isEmpty {
@@ -121,7 +119,7 @@ extension ProxyConfiguration {
 
         let query = parameters.isEmpty ? "" : "?\(parameters.joined(separator: "&"))"
         let fragment = name.addingPercentEncoding(withAllowedCharacters: .urlFragmentAllowed) ?? name
-        return "vless://\(uuid.uuidString.lowercased())@\(bracketedServerAddress):\(serverPort)/\(query)#\(fragment)"
+        return "vless://\(vless.uuid.uuidString.lowercased())@\(bracketedServerAddress):\(serverPort)/\(query)#\(fragment)"
     }
     
     private func appendTransportParams(to params: inout [String]) {

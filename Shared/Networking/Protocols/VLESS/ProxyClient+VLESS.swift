@@ -12,31 +12,30 @@ nonisolated extension ProxyRequest {
         network: .tcp,
         host: VLESSProtocol.muxCoolHost,
         port: VLESSProtocol.muxCoolPort,
-        isVLESSMultiplexerCarrier: true
+        isMultiplexerCarrier: true
     )
 }
 
 nonisolated extension ProxyClient {
 
+    // MARK: - Mux carrier
+    
+    func connectVLESSMultiplexerCarrier() async throws -> ProxyConnection {
+        guard configuration.outboundProtocol == .vless else {
+            throw AnywhereError.proxy(configuration.outboundProtocol.wire, .protocolViolation(
+                detail: "Mux is not supported with \(configuration.outboundProtocol.name)"
+            ))
+        }
+        return try await dial(.vlessMultiplexerCarrier)
+    }
+
     // MARK: - Vision flow
-    
-    fileprivate static let visionFlow = "xtls-rprx-vision"
 
-    var isVisionFlow: Bool {
-        guard case .vless(_, _, let flow, _, _) = configuration.outbound else { return false }
-        return flow == Self.visionFlow
-    }
+    var isVisionFlow: Bool { configuration.vless?.isVisionFlow ?? false }
 
-    var hasVLESSEncryption: Bool {
-        guard case .vless(_, let encryption, _, _, _) = configuration.outbound else { return false }
-        return !encryption.isEmpty && encryption != "none"
-    }
-    
-    var transportSupportsVision: Bool {
-        if hasVLESSEncryption { return true }
-        if case .raw = configuration.xrayTransportLayer { return true }
-        return false
-    }
+    var hasVLESSEncryption: Bool { configuration.vless?.hasEncryption ?? false }
+
+    var transportSupportsVision: Bool { configuration.vless?.transportSupportsVision ?? false }
 
     // MARK: - VLESS protocol handshake
     
@@ -45,12 +44,7 @@ nonisolated extension ProxyClient {
         request: ProxyRequest,
         supportsVision: Bool
     ) async throws -> ProxyConnection {
-        let vlessEncryption: String
-        if case .vless(_, let encryption, _, _, _) = configuration.outbound {
-            vlessEncryption = encryption
-        } else {
-            vlessEncryption = "none"
-        }
+        let vlessEncryption = configuration.vless?.encryption ?? "none"
         let encryptionConfig: VLESSEncryptionConfig?
         do {
             encryptionConfig = try VLESSEncryptionConfig.parse(vlessEncryption)
@@ -90,13 +84,8 @@ nonisolated extension ProxyClient {
         request: ProxyRequest,
         supportsVision: Bool
     ) async throws -> ProxyConnection {
-        let vlessUUID: UUID
-        if case .vless(let uuid, _, _, _, _) = configuration.outbound {
-            vlessUUID = uuid
-        } else {
-            vlessUUID = configuration.id
-        }
-        let command = VLESSCommand(request.network, isVLESSMultiplexerCarrier: request.isVLESSMultiplexerCarrier)
+        let vlessUUID = configuration.vless?.uuid ?? configuration.id
+        let command = VLESSCommand(request.network, isMultiplexerCarrier: request.isMultiplexerCarrier)
         let isVision = supportsVision && isVisionFlow && command != .udp
 
         let requestHeader = VLESSProtocol.encodeRequestHeader(
@@ -104,7 +93,7 @@ nonisolated extension ProxyClient {
             command: command,
             destinationAddress: request.host,
             destinationPort: request.port,
-            flow: isVision ? Self.visionFlow : nil
+            flow: isVision ? VLESSConfiguration.visionFlow : nil
         )
 
         let vlessConnection = VLESSConnection(inner: connection)
@@ -156,12 +145,7 @@ nonisolated extension ProxyClient {
     }
 
     fileprivate func wrapWithVision(_ connection: ProxyConnection) -> VLESSVisionConnection {
-        let vlessUUID: UUID
-        if case .vless(let uuid, _, _, _, _) = configuration.outbound {
-            vlessUUID = uuid
-        } else {
-            vlessUUID = configuration.id
-        }
+        let vlessUUID = configuration.vless?.uuid ?? configuration.id
         let uuidBytes = vlessUUID.uuid
         let uuidData = Data([
             uuidBytes.0, uuidBytes.1, uuidBytes.2, uuidBytes.3,

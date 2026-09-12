@@ -1111,10 +1111,10 @@ struct ProxyEditorView: View {
             nowhereMorph = nowhere.morph
             nowhereSNI = nowhere.serverName
         }
-        if case .vless(let vlessUUID, let vlessEncryption, let vlessFlow, _, _) = configuration.outbound {
-            self.vlessUUID = vlessUUID.uuidString
-            self.vlessEncryption = vlessEncryption
-            self.vlessFlow = vlessFlow ?? ""
+        if let vless = configuration.vless {
+            vlessUUID = vless.uuid.uuidString
+            vlessEncryption = vless.encryption
+            vlessFlow = vless.flow ?? ""
         } else {
             vlessUUID = configuration.id.uuidString
             vlessEncryption = "none"
@@ -1426,11 +1426,13 @@ struct ProxyEditorView: View {
             else { vlessXraySecurityLayer = .none }
             
             outbound = .vless(
-                uuid: parsedUUID,
-                encryption: vlessEncryption,
-                flow: vlessFlow.isEmpty ? nil : vlessFlow,
-                transport: vlessXrayTransportLayer,
-                security: vlessXraySecurityLayer
+                VLESSConfiguration(
+                    uuid: parsedUUID,
+                    encryption: vlessEncryption,
+                    flow: vlessFlow.isEmpty ? nil : vlessFlow,
+                    transport: vlessXrayTransportLayer,
+                    security: vlessXraySecurityLayer
+                )
             )
         case .hysteria:
             let up = HysteriaCongestionControl.clampUploadMbps(Int(hysteriaUploadMbpsText) ?? HysteriaCongestionControl.uploadMbpsDefault)

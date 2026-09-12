@@ -306,9 +306,9 @@ nonisolated final class HTTP3Multiplexer: Multiplexer, Sendable {
         quic.shutdownStream(streamID, appErrorCode: code.rawValue)
     }
 
-    // MARK: - Stream Data Demux
+    // MARK: - Stream Data Demultiplex
 
-    private enum DemuxEffect {
+    private enum DemultiplexEffect {
         case fail(Error)
         case goaway(activeStreams: Int, shouldClose: Bool)
         case abortStream(Int64, HTTP3ErrorCode)
@@ -325,7 +325,7 @@ nonisolated final class HTTP3Multiplexer: Multiplexer, Sendable {
 
         quic.extendStreamOffset(streamID, count: data.count)
 
-        let effects: [DemuxEffect] = state.withLock { session in
+        let effects: [DemultiplexEffect] = state.withLock { session in
             if streamID == session.serverControlStreamID {
                 session.serverControlBuffer.append(data)
                 return Self.processServerControlFrames(&session)
@@ -358,7 +358,7 @@ nonisolated final class HTTP3Multiplexer: Multiplexer, Sendable {
         perform(effects)
     }
 
-    private func perform(_ effects: [DemuxEffect]) {
+    private func perform(_ effects: [DemultiplexEffect]) {
         for effect in effects {
             switch effect {
             case .fail(let error):
@@ -377,8 +377,8 @@ nonisolated final class HTTP3Multiplexer: Multiplexer, Sendable {
         streamType >= 0x21 && (UInt64(streamType) - 0x21) % 0x1f == 0
     }
 
-    private static func processServerControlFrames(_ session: inout State) -> [DemuxEffect] {
-        var effects: [DemuxEffect] = []
+    private static func processServerControlFrames(_ session: inout State) -> [DemultiplexEffect] {
+        var effects: [DemultiplexEffect] = []
         while !session.serverControlBuffer.isEmpty {
             guard let (frame, consumed) = HTTP3Framer.parseFrame(from: session.serverControlBuffer) else {
                 break

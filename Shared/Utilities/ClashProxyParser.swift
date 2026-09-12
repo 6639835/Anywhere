@@ -186,11 +186,13 @@ nonisolated struct ClashProxyParser {
             serverAddress: basics.server,
             serverPort: basics.port,
             outbound: .vless(
-                uuid: uuid,
-                encryption: encryption,
-                flow: flow,
-                transport: xrayTransportLayer,
-                security: xraySecurityLayer
+                VLESSConfiguration(
+                    uuid: uuid,
+                    encryption: encryption,
+                    flow: flow,
+                    transport: xrayTransportLayer,
+                    security: xraySecurityLayer
+                )
             )
         )
     }

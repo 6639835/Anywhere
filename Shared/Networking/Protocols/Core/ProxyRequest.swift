@@ -27,23 +27,21 @@ nonisolated struct ProxyRequest: Sendable {
     var network: ProxyNetwork
     var host: String
     var port: UInt16
-    
     var initialData: Data?
-    
-    var isVLESSMultiplexerCarrier: Bool
+    var isMultiplexerCarrier: Bool
 
     init(
         network: ProxyNetwork,
         host: String,
         port: UInt16,
         initialData: Data? = nil,
-        isVLESSMultiplexerCarrier: Bool = false
+        isMultiplexerCarrier: Bool = false
     ) {
         self.network = network
         self.host = host
         self.port = port
         self.initialData = initialData
-        self.isVLESSMultiplexerCarrier = isVLESSMultiplexerCarrier
+        self.isMultiplexerCarrier = isMultiplexerCarrier
     }
 
     static func tcp(_ host: String, port: UInt16, initialData: Data? = nil) -> ProxyRequest {

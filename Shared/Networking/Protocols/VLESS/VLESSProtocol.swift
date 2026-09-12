@@ -12,8 +12,8 @@ nonisolated enum VLESSCommand: UInt8 {
     case udp = 0x02
     case mux = 0x03
     
-    init(_ network: ProxyNetwork, isVLESSMultiplexerCarrier: Bool) {
-        guard !isVLESSMultiplexerCarrier else {
+    init(_ network: ProxyNetwork, isMultiplexerCarrier: Bool) {
+        guard !isMultiplexerCarrier else {
             self = .mux
             return
         }
