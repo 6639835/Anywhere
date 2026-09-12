@@ -471,18 +471,19 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
             }
             let rawUp = try container.decodeIfPresent(String.self, forKey: .up)
             let rawDown = try container.decodeIfPresent(String.self, forKey: .down)
-            let uplink = rawUp.flatMap(NowhereNetwork.init(rawValue:)) ?? .tcp
-            let downlink = rawDown.flatMap(NowhereNetwork.init(rawValue:)) ?? .tcp
-            if let rawUp, !rawUp.isEmpty, NowhereNetwork(rawValue: rawUp) == nil {
-                throw DecodingError.dataCorruptedError(
-                    forKey: .up, in: container, debugDescription: "Invalid Nowhere up value"
-                )
+            func decodeCarrier(_ value: String?, forKey key: CodingKeys) throws -> NowhereNetwork {
+                guard let value else { return .tcp }
+                guard let network = NowhereNetwork(rawValue: value) else {
+                    throw DecodingError.dataCorruptedError(
+                        forKey: key,
+                        in: container,
+                        debugDescription: "Invalid Nowhere \(key.stringValue) value"
+                    )
+                }
+                return network
             }
-            if let rawDown, !rawDown.isEmpty, NowhereNetwork(rawValue: rawDown) == nil {
-                throw DecodingError.dataCorruptedError(
-                    forKey: .down, in: container, debugDescription: "Invalid Nowhere down value"
-                )
-            }
+            let uplink = try decodeCarrier(rawUp, forKey: .up)
+            let downlink = try decodeCarrier(rawDown, forKey: .down)
             let decodedMultiplex: Bool
             if !container.contains(.mux) {
                 decodedMultiplex = false

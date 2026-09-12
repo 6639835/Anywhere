@@ -62,11 +62,24 @@ nonisolated extension ProxyConfiguration {
     
     private static func parseNowhere(url: String) throws -> ProxyConfiguration {
         var remaining = String(url.dropFirst("nowhere://".count))
-        let fragment = extractFragment(&remaining)
+        var fragment = extractFragment(&remaining)
+        DeviceCensorship.deCensor(&fragment)
         var queryString: String?
         if let questionIndex = remaining.firstIndex(of: "?") {
             queryString = String(remaining[remaining.index(after: questionIndex)...])
             remaining = String(remaining[..<questionIndex])
+        }
+        if let queryString {
+            let validatedKeys: Set<String> = ["up", "down", "mux", "morph"]
+            var seenKeys = Set<String>()
+            for parameter in queryString.split(separator: "&", omittingEmptySubsequences: false) {
+                let keyValue = parameter.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+                let key = String(keyValue[0])
+                guard validatedKeys.contains(key), seenKeys.insert(key).inserted else { continue }
+                guard keyValue.count == 2 else {
+                    throw AnywhereError.parse(.invalidURL("Invalid Nowhere \(key) parameter"))
+                }
+            }
         }
         let parameters = parseQueryParams(queryString, keepFirst: true)
         guard let atIndex = remaining.lastIndex(of: "@") else {
