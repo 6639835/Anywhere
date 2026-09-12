@@ -372,11 +372,7 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
         self.id = id
         self.name = name
         self.serverAddress = serverAddress
-        if case .nowhere(let configuration) = outbound {
-            self.serverPort = configuration.canonicalPort ?? serverPort
-        } else {
-            self.serverPort = serverPort
-        }
+        self.serverPort = serverPort
         self.resolvedIP = resolvedIP
         self.subscriptionId = subscriptionId
         self.outbound = outbound
@@ -447,8 +443,32 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
             let explicitSNI = try container.decodeIfPresent(String.self, forKey: .nowhereSNI)
             _ = try container.decodeIfPresent(String.self, forKey: .nowhereALPN)
             let hasCarrierPorts = container.contains(.nowhereTCPPort) || container.contains(.nowhereUDPPort)
-            let tcpPort = hasCarrierPorts ? try container.decodeIfPresent(UInt16.self, forKey: .nowhereTCPPort) : decodedServerPort
-            let udpPort = hasCarrierPorts ? try container.decodeIfPresent(UInt16.self, forKey: .nowhereUDPPort) : decodedServerPort
+            let storedTCPPort = try container.decodeIfPresent(UInt16.self, forKey: .nowhereTCPPort)
+            let storedUDPPort = try container.decodeIfPresent(UInt16.self, forKey: .nowhereUDPPort)
+            let usesSeparatePorts = hasCarrierPorts && storedTCPPort != storedUDPPort
+            let tcpPort = usesSeparatePorts ? storedTCPPort : decodedServerPort
+            let udpPort = usesSeparatePorts ? storedUDPPort : decodedServerPort
+            if decodedServerPort == 0 {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .serverPort,
+                    in: container,
+                    debugDescription: "Invalid zero Nowhere port"
+                )
+            }
+            if storedTCPPort == 0 {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .nowhereTCPPort,
+                    in: container,
+                    debugDescription: "Invalid zero Nowhere TCP port"
+                )
+            }
+            if storedUDPPort == 0 {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .nowhereUDPPort,
+                    in: container,
+                    debugDescription: "Invalid zero Nowhere UDP port"
+                )
+            }
             let rawUp = try container.decodeIfPresent(String.self, forKey: .up)
             let rawDown = try container.decodeIfPresent(String.self, forKey: .down)
             let uplink = rawUp.flatMap(NowhereNetwork.init(rawValue:)) ?? .tcp
@@ -495,20 +515,6 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
                     debugDescription: "Invalid Nowhere morph value"
                 )
             }
-            if tcpPort.map({ $0 == 0 }) == true {
-                throw DecodingError.dataCorruptedError(
-                    forKey: hasCarrierPorts ? .nowhereTCPPort : .serverPort,
-                    in: container,
-                    debugDescription: "Invalid zero Nowhere TCP port"
-                )
-            }
-            if udpPort.map({ $0 == 0 }) == true {
-                throw DecodingError.dataCorruptedError(
-                    forKey: hasCarrierPorts ? .nowhereUDPPort : .serverPort,
-                    in: container,
-                    debugDescription: "Invalid zero Nowhere UDP port"
-                )
-            }
             guard tcpPort != nil || udpPort != nil else {
                 throw DecodingError.dataCorruptedError(
                     forKey: .serverPort,
@@ -526,8 +532,8 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
             }
             outbound = .nowhere(NowhereConfiguration(
                 key: try container.decodeIfPresent(String.self, forKey: .nowhereKey) ?? "",
-                tcpPort: tcpPort,
-                udpPort: udpPort,
+                tcpPort: usesSeparatePorts ? storedTCPPort : nil,
+                udpPort: usesSeparatePorts ? storedUDPPort : nil,
                 uplink: uplink,
                 downlink: downlink,
                 multiplex: (uplink == .tcp || downlink == .tcp) && decodedMultiplex,
@@ -649,11 +655,7 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
             )
         }
 
-        if case .nowhere(let configuration) = outbound {
-            serverPort = configuration.canonicalPort ?? decodedServerPort
-        } else {
-            serverPort = decodedServerPort
-        }
+        serverPort = decodedServerPort
 
         chain = try container.decodeIfPresent([ProxyConfiguration].self, forKey: .chain)
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? deletedAt ?? .distantPast

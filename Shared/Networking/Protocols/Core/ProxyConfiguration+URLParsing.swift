@@ -127,6 +127,7 @@ nonisolated extension ProxyConfiguration {
         } else {
             sni = parsedEndpoint.host
         }
+        let usesSeparatePorts = parsedEndpoint.tcpPort != parsedEndpoint.udpPort
 
         return ProxyConfiguration(
             name: fragment ?? "Nowhere",
@@ -134,8 +135,8 @@ nonisolated extension ProxyConfiguration {
             serverPort: parsedEndpoint.tcpPort ?? parsedEndpoint.udpPort!,
             outbound: .nowhere(NowhereConfiguration(
                 key: key,
-                tcpPort: parsedEndpoint.tcpPort,
-                udpPort: parsedEndpoint.udpPort,
+                tcpPort: usesSeparatePorts ? parsedEndpoint.tcpPort : nil,
+                udpPort: usesSeparatePorts ? parsedEndpoint.udpPort : nil,
                 uplink: uplink,
                 downlink: downlink,
                 multiplex: multiplex,

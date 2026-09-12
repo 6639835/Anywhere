@@ -59,7 +59,9 @@ extension ProxyConfiguration {
             parameters.append("morph=1")
         }
         let endpoint: String
-        if let tcpPort = configuration.tcpPort,
+        if configuration.tcpPort == nil && configuration.udpPort == nil {
+            endpoint = "\(bracketedServerAddress):\(serverPort)"
+        } else if let tcpPort = configuration.tcpPort,
            let udpPort = configuration.udpPort,
            tcpPort == udpPort {
             endpoint = "\(bracketedServerAddress):\(tcpPort)"

@@ -1299,11 +1299,14 @@ struct ProxyEditorView: View {
     
     private func save() {
         let sharedNowherePort = validNowherePort(serverPort)
-        let nowhereTCP = nowhereSeparatePorts ? validNowherePort(nowhereTCPPort) : sharedNowherePort
-        let nowhereUDP = nowhereSeparatePorts ? validNowherePort(nowhereUDPPort) : sharedNowherePort
+        let enteredNowhereTCP = nowhereSeparatePorts ? validNowherePort(nowhereTCPPort) : nil
+        let enteredNowhereUDP = nowhereSeparatePorts ? validNowherePort(nowhereUDPPort) : nil
+        let usesSeparateNowherePorts = nowhereSeparatePorts && enteredNowhereTCP != enteredNowhereUDP
+        let nowhereTCP = usesSeparateNowherePorts ? enteredNowhereTCP : nil
+        let nowhereUDP = usesSeparateNowherePorts ? enteredNowhereUDP : nil
         let port: UInt16
         if isNowhere {
-            guard let canonicalPort = nowhereTCP ?? nowhereUDP else { return }
+            guard let canonicalPort = enteredNowhereTCP ?? enteredNowhereUDP ?? sharedNowherePort else { return }
             port = canonicalPort
         } else {
             guard let parsedPort = UInt16(serverPort) else { return }

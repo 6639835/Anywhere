@@ -81,11 +81,12 @@ nonisolated extension ProxyClient {
         let downlink = nowhere.downlink
         let multiplex = nowhere.multiplex
         let effectiveMultiplex = multiplex && (uplink == .tcp || downlink == .tcp)
+        let ports = nowhere.resolvedPorts(serverPort: configuration.serverPort)
         let identityKey = NowhereTransportIdentityKey(
             configurationID: configuration.id,
             proxyHost: configuration.serverAddress,
-            proxyTCPPort: nowhere.tcpPort,
-            proxyUDPPort: nowhere.udpPort,
+            proxyTCPPort: ports.tcp,
+            proxyUDPPort: ports.udp,
             key: key,
             uplink: uplink,
             downlink: downlink,
@@ -96,8 +97,8 @@ nonisolated extension ProxyClient {
         let sessionID = try NowhereTransportIdentityRegistry.shared.identity(for: identityKey)
         let nwConfig = try NowhereRuntimeConfiguration(
             proxyHost: configuration.serverAddress,
-            proxyTCPPort: nowhere.tcpPort,
-            proxyUDPPort: nowhere.udpPort,
+            proxyTCPPort: ports.tcp,
+            proxyUDPPort: ports.udp,
             key: key,
             uplink: uplink,
             downlink: downlink,

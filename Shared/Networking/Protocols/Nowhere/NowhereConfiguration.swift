@@ -44,13 +44,11 @@ nonisolated struct NowhereConfiguration: Hashable, Sendable {
         self.serverName = serverName
     }
 
-    var canonicalPort: UInt16? { tcpPort ?? udpPort }
-
-    func port(for network: NowhereNetwork) -> UInt16? {
-        switch network {
-        case .tcp: tcpPort
-        case .udp: udpPort
+    func resolvedPorts(serverPort: UInt16) -> (tcp: UInt16?, udp: UInt16?) {
+        if tcpPort == nil && udpPort == nil {
+            return (serverPort, serverPort)
         }
+        return (tcpPort, udpPort)
     }
 }
 
