@@ -84,7 +84,7 @@ nonisolated final class NowhereSession: Sendable {
     }
 
     private let quic: QUICConnection
-    private let configuration: NowhereConfiguration
+    private let configuration: NowhereRuntimeConfiguration
 
     private struct StreamOpenWaiter {
         let id: UInt64
@@ -144,17 +144,32 @@ nonisolated final class NowhereSession: Sendable {
         if fireNow { hook() }
     }
 
-    init(configuration: NowhereConfiguration, transport: QUICDatagramTransport? = nil) {
+    init(configuration: NowhereRuntimeConfiguration, transport: QUICDatagramTransport? = nil) throws {
         self.configuration = configuration
-        self.quic = QUICConnection(
+        let morphObfuscator: NowhereMorphPacketObfuscator?
+        if configuration.morph {
+            guard let keys = configuration.morphKeys else {
+                throw AnywhereError.proxy(.nowhere, .protocolViolation(detail: "Missing Morph keys"))
+            }
+            morphObfuscator = try NowhereMorphPacketObfuscator(key: keys.udp)
+        } else {
+            morphObfuscator = nil
+        }
+        let quic = QUICConnection(
             host: configuration.proxyHost,
-            port: configuration.proxyPort,
+            port: try configuration.proxyPort(for: .udp),
             serverName: configuration.tls.serverName,
             alpn: [configuration.alpn],
             datagramsEnabled: true,
             tuning: .nowhere,
+            obfuscator: morphObfuscator,
+            directMaxUDPPayload: configuration.morph ? 1440 : QUICConnection.maxUDPPayload,
             transport: transport
         )
+        self.quic = quic
+        morphObfuscator?.setFailureHandler { [weak quic] error in
+            quic?.close(error: error)
+        }
         let (transportStream, transportSignal) = AsyncThrowingStream.makeStream(of: Never.self)
         self.transportSignal = transportSignal
         self.transportTask = Task { for try await _ in transportStream {} }

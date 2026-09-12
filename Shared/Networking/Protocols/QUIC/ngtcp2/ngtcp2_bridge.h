@@ -23,6 +23,10 @@
 #define NGTCP2_APPLE_CS_AES_256_GCM_SHA384       0x1302
 #define NGTCP2_APPLE_CS_CHACHA20_POLY1305_SHA256 0x1303
 
+int nowhere_chacha20_xor(uint8_t *dest, const uint8_t *src, size_t len,
+                         const uint8_t key[32], const uint8_t nonce[12],
+                         uint64_t offset);
+
 /* Swift CryptoKit callback types for AEAD operations */
 typedef int (*ngtcp2_apple_aead_encrypt_fn)(
     uint8_t *dest, const uint8_t *key, size_t keylen, const uint8_t *nonce,

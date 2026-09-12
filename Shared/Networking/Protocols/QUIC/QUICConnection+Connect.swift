@@ -314,7 +314,7 @@ extension QUICConnection {
 
         var settings = defaultSettings()
         settings.initial_ts = currentTimestamp()
-        settings.max_tx_udp_payload_size = (transport != nil) ? Self.chainedMaxUDPPayload : Self.maxUDPPayload
+        settings.max_tx_udp_payload_size = (transport != nil) ? Self.chainedMaxUDPPayload : directMaxUDPPayload
         settings.cc_algo = tuning.ngtcp2CCAlgo
         settings.max_stream_window = tuning.maxStreamWindow
         settings.max_window = tuning.maxWindow
@@ -335,12 +335,18 @@ extension QUICConnection {
         configureConnRef(&connRefStorage)
 
         let usePMTUD = (transport == nil)
+        var pmtudProbes = Self.pmtudProbes.filter { $0 <= directMaxUDPPayload }
+        if let maximumProbe = UInt16(exactly: directMaxUDPPayload),
+           maximumProbe > UInt16(Self.chainedMaxUDPPayload),
+           !pmtudProbes.contains(maximumProbe) {
+            pmtudProbes.append(maximumProbe)
+        }
         let (conn, rv) = createClientConn(
             dcid: &dcid, scid: &scid,
             localAddr: &localAddr, remoteAddr: &remoteAddr, addrLen: addrLen,
             version: UInt32(NGTCP2_PROTO_VER_V1),
             callbacks: &callbacks, settings: &settings,
-            pmtudProbes: usePMTUD ? Self.pmtudProbes : nil,
+            pmtudProbes: usePMTUD ? pmtudProbes : nil,
             params: &parameters, connRef: &connRefStorage
         )
         guard rv == 0, let connectionOpaquePointer = conn else {

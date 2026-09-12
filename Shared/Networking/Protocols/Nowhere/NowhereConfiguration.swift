@@ -14,56 +14,111 @@ nonisolated enum NowhereNetwork: String, Codable, CaseIterable, Sendable {
     case tcp
 }
 
+nonisolated struct NowhereConfiguration: Hashable, Sendable {
+    let key: String
+    let tcpPort: UInt16?
+    let udpPort: UInt16?
+    let uplink: NowhereNetwork
+    let downlink: NowhereNetwork
+    let multiplex: Bool
+    let morph: Bool
+    let serverName: String
+
+    init(
+        key: String,
+        tcpPort: UInt16?,
+        udpPort: UInt16?,
+        uplink: NowhereNetwork,
+        downlink: NowhereNetwork,
+        multiplex: Bool,
+        morph: Bool,
+        serverName: String
+    ) {
+        self.key = key
+        self.tcpPort = tcpPort
+        self.udpPort = udpPort
+        self.uplink = uplink
+        self.downlink = downlink
+        self.multiplex = multiplex && (uplink == .tcp || downlink == .tcp)
+        self.morph = morph
+        self.serverName = serverName
+    }
+
+    func resolvedPorts(serverPort: UInt16) -> (tcp: UInt16?, udp: UInt16?) {
+        if tcpPort == nil && udpPort == nil {
+            return (serverPort, serverPort)
+        }
+        return (tcpPort, udpPort)
+    }
+}
+
 nonisolated struct NowhereTransportIdentityKey: Hashable, Sendable {
     let configurationID: UUID
     let proxyHost: String
-    let proxyPort: UInt16
+    let proxyTCPPort: UInt16?
+    let proxyUDPPort: UInt16?
     let key: String
     let uplink: NowhereNetwork
     let downlink: NowhereNetwork
     let multiplex: Bool
+    let morph: Bool
     let tls: TLSConfiguration
 }
 
-nonisolated struct NowhereConfiguration: Hashable, Sendable {
+nonisolated struct NowhereRuntimeConfiguration: Hashable, Sendable {
     let proxyHost: String
-    let proxyPort: UInt16
+    let proxyTCPPort: UInt16?
+    let proxyUDPPort: UInt16?
     let key: String
     let uplink: NowhereNetwork
     let downlink: NowhereNetwork
     let multiplex: Bool
+    let morph: Bool
     let sessionID: Data
     let tls: TLSConfiguration
     let alpn: String
     let authKey: NowhereProtocol.AuthKey
+    let morphKeys: NowhereMorph.Keys?
 
     init(
         proxyHost: String,
-        proxyPort: UInt16,
+        proxyTCPPort: UInt16?,
+        proxyUDPPort: UInt16?,
         key: String,
         uplink: NowhereNetwork,
         downlink: NowhereNetwork,
         multiplex: Bool,
+        morph: Bool,
         sessionID: Data,
-        tls: TLSConfiguration
+        serverName: String
     ) throws {
         guard sessionID.count == 16 else {
             throw AnywhereError.proxy(.nowhere, .protocolViolation(detail: "Invalid Nowhere session ID"))
         }
-        let alpn = tls.alpn?.first ?? NowhereProtocol.defaultALPN
-        guard !alpn.isEmpty, alpn.utf8.count <= UInt8.max else {
-            throw AnywhereError.proxy(.nowhere, .protocolViolation(detail: "Invalid Nowhere ALPN"))
+        guard proxyTCPPort != nil || proxyUDPPort != nil else {
+            throw AnywhereError.proxy(.nowhere, .protocolViolation(detail: "Nowhere requires a carrier port"))
+        }
+        guard proxyTCPPort.map({ $0 != 0 }) ?? true,
+              proxyUDPPort.map({ $0 != 0 }) ?? true else {
+            throw AnywhereError.proxy(.nowhere, .protocolViolation(detail: "Nowhere carrier ports must be non-zero"))
+        }
+        guard (uplink == .tcp ? proxyTCPPort : proxyUDPPort) != nil,
+              (downlink == .tcp ? proxyTCPPort : proxyUDPPort) != nil else {
+            throw AnywhereError.proxy(.nowhere, .protocolViolation(detail: "Nowhere route uses an unavailable carrier"))
         }
         self.proxyHost = proxyHost
-        self.proxyPort = proxyPort
+        self.proxyTCPPort = proxyTCPPort
+        self.proxyUDPPort = proxyUDPPort
         self.key = key
         self.uplink = uplink
         self.downlink = downlink
         self.multiplex = multiplex && (uplink == .tcp || downlink == .tcp)
+        self.morph = morph
         self.sessionID = sessionID
-        self.tls = tls
-        self.alpn = alpn
+        self.tls = TLSConfiguration(serverName: serverName, alpn: [NowhereProtocol.defaultALPN], minVersion: .tls13, maxVersion: .tls13)
+        self.alpn = NowhereProtocol.defaultALPN
         self.authKey = try NowhereProtocol.deriveAuthKey(sharedKey: key)
+        self.morphKeys = morph ? try NowhereMorph.deriveKeys(sharedKey: key) : nil
     }
 
     var tcpTLSConfiguration: TLSConfiguration {
@@ -72,11 +127,16 @@ nonisolated struct NowhereConfiguration: Hashable, Sendable {
             alpn: [alpn],
             minVersion: .tls13,
             maxVersion: .tls13,
-            echEnabled: tls.echEnabled,
-            echConfig: tls.echConfig,
-            fingerprint: tls.fingerprint,
-            insecureSkipVerify: tls.insecureSkipVerify
+            insecureSkipVerify: false
         )
+    }
+
+    func proxyPort(for network: NowhereNetwork) throws -> UInt16 {
+        let port = network == .tcp ? proxyTCPPort : proxyUDPPort
+        guard let port else {
+            throw AnywhereError.proxy(.nowhere, .protocolViolation(detail: "Nowhere carrier port unavailable"))
+        }
+        return port
     }
 
     func acceptsNegotiatedALPN(_ negotiated: String) -> Bool {
@@ -145,15 +205,15 @@ nonisolated final class NowhereTransportIdentityRegistry: Sendable {
             }
             var candidate = max(state.nextFlowID, 1)
             for _ in 0...state.activeFlowIDs.count {
-                if candidate != 0, !state.activeFlowIDs.contains(candidate) {
+                if candidate <= NowhereProtocol.maximumFlowID, !state.activeFlowIDs.contains(candidate) {
                     state.activeFlowIDs.insert(candidate)
                     state.nextFlowID = candidate &+ 1
-                    if state.nextFlowID == 0 { state.nextFlowID = 1 }
+                    if state.nextFlowID > NowhereProtocol.maximumFlowID { state.nextFlowID = 1 }
                     states[identityKey] = state
                     return candidate
                 }
                 candidate &+= 1
-                if candidate == 0 { candidate = 1 }
+                if candidate > NowhereProtocol.maximumFlowID { candidate = 1 }
             }
             throw AnywhereError.proxy(.nowhere, .connectionClosed(detail: "Nowhere flow ID space exhausted"))
         }

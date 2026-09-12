@@ -206,14 +206,25 @@ actor TLSClient {
         }
     }
 
+    func connect(transport: any ByteTransport) async throws -> TLSRecordConnection {
+        try claimConnect()
+        return try await withHandshakeDeadline {
+            try await self.performConnect(transport: transport)
+        }
+    }
+
     private func performConnect(overTunnel tunnel: ProxyConnection) async throws -> TLSRecordConnection {
+        try await performConnect(transport: TunneledTransport(tunnel: tunnel))
+    }
+
+    private func performConnect(transport: any ByteTransport) async throws -> TLSRecordConnection {
         try await prepareECH()
 
         ephemeralPrivateKey = Curve25519.KeyAgreement.PrivateKey()
         guard let privateKey = ephemeralPrivateKey else {
             throw AnywhereError.tls(.handshakeFailed(detail: "No ephemeral key"))
         }
-        adoptTransport(TunneledTransport(tunnel: tunnel))
+        adoptTransport(transport)
 
         let clientHello = try buildTLSClientHello(privateKey: privateKey)
         storedClientHello = clientHello.subdata(in: 5..<clientHello.count)

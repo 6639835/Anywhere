@@ -47,12 +47,14 @@ nonisolated final class NowhereFlowOpenAttempt: Sendable {
 nonisolated final class NowhereClient: Sendable {
     private struct Key: Hashable {
         let host: String
-        let port: UInt16
+        let tcpPort: UInt16?
+        let udpPort: UInt16?
         let key: String
         let uplink: NowhereNetwork
         let downlink: NowhereNetwork
         let sni: String
         let alpn: String
+        let morph: Bool
         let chain: [ProxyConfiguration]
         let sessionID: Data
     }
@@ -74,15 +76,17 @@ nonisolated final class NowhereClient: Sendable {
         registry.withLock { $0.sealed = false }
     }
 
-    static func shared(for configuration: NowhereConfiguration) throws -> NowhereClient {
+    static func shared(for configuration: NowhereRuntimeConfiguration) throws -> NowhereClient {
         let key = Key(
             host: configuration.proxyHost,
-            port: configuration.proxyPort,
+            tcpPort: configuration.proxyTCPPort,
+            udpPort: configuration.proxyUDPPort,
             key: configuration.key,
             uplink: configuration.uplink,
             downlink: configuration.downlink,
             sni: configuration.tls.serverName,
             alpn: configuration.alpn,
+            morph: configuration.morph,
             chain: [],
             sessionID: configuration.sessionID
         )
@@ -101,7 +105,7 @@ nonisolated final class NowhereClient: Sendable {
     }
 
     static func chained(
-        configuration: NowhereConfiguration,
+        configuration: NowhereRuntimeConfiguration,
         transport: QUICDatagramTransport
     ) -> NowhereClient {
         NowhereClient(
@@ -113,18 +117,20 @@ nonisolated final class NowhereClient: Sendable {
     }
 
     static func acquireChained(
-        configuration: NowhereConfiguration,
+        configuration: NowhereRuntimeConfiguration,
         chain: [ProxyConfiguration],
         builder: @escaping @Sendable () async throws -> (QUICDatagramTransport, [ProxyClient])
     ) async throws -> NowhereClient {
         let key = Key(
             host: configuration.proxyHost,
-            port: configuration.proxyPort,
+            tcpPort: configuration.proxyTCPPort,
+            udpPort: configuration.proxyUDPPort,
             key: configuration.key,
             uplink: configuration.uplink,
             downlink: configuration.downlink,
             sni: configuration.tls.serverName,
             alpn: configuration.alpn,
+            morph: configuration.morph,
             chain: chain,
             sessionID: configuration.sessionID
         )
@@ -155,7 +161,7 @@ nonisolated final class NowhereClient: Sendable {
 
     private static func buildChained(
         key: Key,
-        configuration: NowhereConfiguration,
+        configuration: NowhereRuntimeConfiguration,
         buildEpoch: UInt64,
         buildGeneration: UInt64,
         builder: @escaping @Sendable () async throws -> (QUICDatagramTransport, [ProxyClient])
@@ -195,7 +201,7 @@ nonisolated final class NowhereClient: Sendable {
         return try outcome.get()
     }
 
-    private let configuration: NowhereConfiguration
+    private let configuration: NowhereRuntimeConfiguration
     private let transport: QUICDatagramTransport?
     private let poolKey: Key?
 
@@ -208,7 +214,7 @@ nonisolated final class NowhereClient: Sendable {
     private let state: Mutex<SessionState>
 
     private init(
-        configuration: NowhereConfiguration,
+        configuration: NowhereRuntimeConfiguration,
         transport: QUICDatagramTransport?,
         chainHolders: [ProxyClient],
         poolKey: Key?
@@ -225,7 +231,7 @@ nonisolated final class NowhereClient: Sendable {
             case transportSpent
             case fresh(NowhereSession)
         }
-        let acquired: Acquired = state.withLock { state in
+        let acquired: Acquired = try state.withLock { state in
             guard !state.retired else { return .transportSpent }
             if let existing = state.session, !existing.isClosed {
                 return .reuse(existing)
@@ -242,7 +248,7 @@ nonisolated final class NowhereClient: Sendable {
                 return .transportSpent
             }
 
-            let newSession = NowhereSession(configuration: configuration, transport: transport)
+            let newSession = try NowhereSession(configuration: configuration, transport: transport)
             state.session = newSession
             if transport != nil { state.transportConsumed = true }
             return .fresh(newSession)
@@ -405,7 +411,7 @@ nonisolated final class NowhereClient: Sendable {
         for client in resources.1 { client.cancel() }
     }
 
-    static func invalidateSharedSession(for configuration: NowhereConfiguration) {
+    static func invalidateSharedSession(for configuration: NowhereRuntimeConfiguration) {
         let resources: ([NowhereClient], [Task<NowhereClient, Error>]) = registry.withLock { state in
             let entryKeys = state.entries.keys.filter {
                 Self.matches($0, configuration: configuration)
@@ -427,15 +433,17 @@ nonisolated final class NowhereClient: Sendable {
 
     private static func matches(
         _ key: Key,
-        configuration: NowhereConfiguration
+        configuration: NowhereRuntimeConfiguration
     ) -> Bool {
         key.host == configuration.proxyHost
-            && key.port == configuration.proxyPort
+            && key.tcpPort == configuration.proxyTCPPort
+            && key.udpPort == configuration.proxyUDPPort
             && key.key == configuration.key
             && key.uplink == configuration.uplink
             && key.downlink == configuration.downlink
             && key.sni == configuration.tls.serverName
             && key.alpn == configuration.alpn
+            && key.morph == configuration.morph
             && key.sessionID == configuration.sessionID
     }
 

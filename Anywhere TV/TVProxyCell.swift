@@ -18,7 +18,7 @@ class TVProxyCell: UITableViewCell {
     private let tagsRow = UIStackView()
 
     private var tagContainers: [(container: UIView, label: UILabel)] = []
-    private static let maxTags = 4
+    private static let maxTags = 5
 
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
         super.init(style: style, reuseIdentifier: reuseIdentifier)
