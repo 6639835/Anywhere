@@ -35,20 +35,19 @@ nonisolated final class AnyTLSMultiplexerRegistry: Sendable {
         for configuration: ProxyConfiguration,
         dialOut: @escaping AnyTLSMultiplexerPool.DialOut
     ) -> AnyTLSMultiplexerPool? {
-        guard
-            case .anytls(let password, let idleSessionCheckInterval, let idleSessionTimeout, let minIdleSession, _) = configuration.outbound
-        else {
-            logger.debug("[AnyTLSMultiplexerRegistry] outbound is not .anytls — refusing to create pool")
-            return nil
-        }
+        guard case .anytls(
+            let password,
+            let idleSessionCheckInterval,
+            let idleSessionTimeout,
+            let minIdleSession,
+            _
+        ) = configuration.outbound else { return nil }
         let key = Key(host: configuration.serverAddress, port: configuration.serverPort, password: password)
-        var reused = true
         let pool = state.withLock { state -> AnyTLSMultiplexerPool? in
             if let existing = state.pools[key] {
                 return existing
             }
             guard !state.sealed else { return nil }
-            reused = false
             let created = AnyTLSMultiplexerPool(
                 password: password,
                 idleSessionCheckInterval: TimeInterval(idleSessionCheckInterval),
@@ -59,15 +58,7 @@ nonisolated final class AnyTLSMultiplexerRegistry: Sendable {
             state.pools[key] = created
             return created
         }
-        guard let pool else {
-            logger.debug("[AnyTLSMultiplexerRegistry] sealed — refusing to create pool \(configuration.serverAddress):\(configuration.serverPort)")
-            return nil
-        }
-        if reused {
-            logger.debug("[AnyTLSMultiplexerRegistry] reuse pool \(configuration.serverAddress):\(configuration.serverPort)")
-        } else {
-            logger.debug("[AnyTLSMultiplexerRegistry] created pool \(configuration.serverAddress):\(configuration.serverPort) ici=\(idleSessionCheckInterval)s it=\(idleSessionTimeout)s mis=\(minIdleSession)")
-        }
+        guard let pool else { return nil }
         return pool
     }
 
@@ -76,9 +67,6 @@ nonisolated final class AnyTLSMultiplexerRegistry: Sendable {
             let values = Array(state.pools.values)
             state.pools.removeAll(keepingCapacity: false)
             return values
-        }
-        if !snapshot.isEmpty {
-            logger.debug("[AnyTLSMultiplexerRegistry] closeAll(\(snapshot.count) pools)")
         }
         for pool in snapshot {
             pool.closeAll()

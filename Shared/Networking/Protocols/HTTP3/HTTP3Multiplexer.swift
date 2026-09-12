@@ -363,7 +363,7 @@ nonisolated final class HTTP3Multiplexer: Multiplexer, Sendable {
             switch effect {
             case .fail(let error):
                 failSession(error)
-            case .goaway(let _, let shouldClose):
+            case .goaway(_, let shouldClose):
                 if shouldClose {
                     close()
                 }

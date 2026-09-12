@@ -106,24 +106,22 @@ nonisolated final class AnyTLSMultiplexer: Multiplexer, Sendable {
         let padding = state.withLock { $0.padding }
         var prologue = Data()
         prologue.append(passwordHash)
-        let paddingLen: Int
+        let paddingLength: Int
         let firstSchedule = padding.generateRecordPayloadSizes(packet: 0)
         if let first = firstSchedule.first, first > 0 {
-            paddingLen = first
+            paddingLength = first
         } else {
-            paddingLen = 0
+            paddingLength = 0
         }
-        prologue.append(UInt8((paddingLen >> 8) & 0xFF))
-        prologue.append(UInt8( paddingLen       & 0xFF))
-        if paddingLen > 0 {
-            prologue.append(Data(repeating: 0, count: paddingLen))
+        prologue.append(UInt8((paddingLength >> 8) & 0xFF))
+        prologue.append(UInt8( paddingLength       & 0xFF))
+        if paddingLength > 0 {
+            prologue.append(Data(repeating: 0, count: paddingLength))
         }
-        logger.debug("[AnyTLSMultiplexer] prologue \(prologue.count)B (hash=32 + lenHdr=2 + zeros=\(paddingLen)) padding-md5=\(padding.md5Hex)")
         do {
             let pending = state.withLock { chainSend(prologue, state: &$0) }
             try await pending.value()
         } catch {
-            logger.debug("[AnyTLSMultiplexer] prologue write failed: \(error.localizedDescription)")
             handleTransportFailure(error)
             return
         }
@@ -134,7 +132,6 @@ nonisolated final class AnyTLSMultiplexer: Multiplexer, Sendable {
             "padding-md5": padding.md5Hex,
         ]
         let payload = AnyTLSProtocol.encodeStringMap(settings)
-        logger.debug("[AnyTLSMultiplexer] cmdSettings buffered (\(payload.count)B payload)")
         try? await writeControl(cmd: AnyTLSProtocol.cmdSettings, sid: 0, payload: payload)
 
         startReadLoop()
@@ -157,8 +154,13 @@ nonisolated final class AnyTLSMultiplexer: Multiplexer, Sendable {
     // MARK: - Streams
 
     func openStream(onEnd: (@Sendable () -> Void)? = nil) async -> AnyTLSStream? {
-        typealias Opened = (stream: AnyTLSStream, sid: UInt32, armWatchdog: Bool,
-                            bufferedBytes: Int, peerVersion: UInt8)
+        typealias Opened = (
+            stream: AnyTLSStream,
+            sid: UInt32,
+            armWatchdog: Bool,
+            bufferedBytes: Int,
+            peerVersion: UInt8
+        )
         let opened: Opened? = state.withLock { (state: inout State) -> Opened? in
             if state.phase == .closed {
                 return nil
@@ -180,12 +182,7 @@ nonisolated final class AnyTLSMultiplexer: Multiplexer, Sendable {
             }
             return (stream, sid, armWatchdog, state.outboundBuffer.count, state.peerVersion)
         }
-        guard let opened else {
-            logger.debug("[AnyTLSMultiplexer] openStream rejected — multiplexer closed")
-            return nil
-        }
-
-        logger.debug("[AnyTLSMultiplexer] openStream sid=\(opened.sid) peerVersion=\(opened.peerVersion) watchdog=\(opened.armWatchdog) buffered=\(opened.bufferedBytes)B")
+        guard let opened else { return nil }
 
         let synFrame = AnyTLSProtocol.encodeFrameHeader(cmd: AnyTLSProtocol.cmdSYN, sid: opened.sid, length: 0)
         try? await writeConnLocked(synFrame)
@@ -195,10 +192,8 @@ nonisolated final class AnyTLSMultiplexer: Multiplexer, Sendable {
             state.buffering = false
             return true
         }
-        guard live else {
-            logger.debug("[AnyTLSMultiplexer] openStream sid=\(opened.sid) lost to concurrent close")
-            return nil
-        }
+        guard live else { return nil }
+        
         return opened.stream
     }
 
@@ -282,7 +277,6 @@ nonisolated final class AnyTLSMultiplexer: Multiplexer, Sendable {
 
         switch action {
         case .rejected:
-            logger.debug("[AnyTLSMultiplexer] writeConn rejected — multiplexer closed (\(bytes.count)B)")
             throw AnywhereError.proxy(.anyTLS, .connectionClosed(detail: "AnyTLS multiplexer closed"))
         case .buffered:
             return
@@ -340,19 +334,16 @@ nonisolated final class AnyTLSMultiplexer: Multiplexer, Sendable {
     // MARK: - Read Loop
 
     private func startReadLoop() {
-        logger.debug("[AnyTLSMultiplexer] recv loop started")
         let task = Task {
             do {
                 while true {
                     guard let data = try await inner.receive() else {
-                        logger.debug("[AnyTLSMultiplexer] inner transport EOF")
                         handleTransportEOF()
                         return
                     }
                     await handleInbound(data)
                 }
             } catch {
-                logger.debug("[AnyTLSMultiplexer] inner transport error: \(error.localizedDescription)")
                 handleTransportFailure(error)
             }
         }
@@ -402,8 +393,6 @@ nonisolated final class AnyTLSMultiplexer: Multiplexer, Sendable {
             let stream = state.withLock { $0.streams[sid] }
             if stream == nil {
                 logger.warning("[AnyTLSMultiplexer] cmdPSH for unknown sid=\(sid) (\(payload.count)B) — dropping")
-            } else {
-                logger.debug("[AnyTLSMultiplexer] cmdPSH sid=\(sid) \(payload.count)B")
             }
             stream?.deliverData(payload)
 
@@ -414,45 +403,37 @@ nonisolated final class AnyTLSMultiplexer: Multiplexer, Sendable {
             }
             if !payload.isEmpty {
                 let message = String(data: payload, encoding: .utf8) ?? "<binary>"
-                logger.debug("[AnyTLSMultiplexer] cmdSYNACK error sid=\(sid): \(message)")
                 stream?.deliverClose(error: AnywhereError.proxy(.anyTLS, .protocolViolation(detail: "AnyTLS remote: \(message)")))
                 state.withLock { $0.streams[sid] = nil }
-            } else {
-                logger.debug("[AnyTLSMultiplexer] cmdSYNACK ok sid=\(sid)")
             }
 
         case AnyTLSProtocol.cmdFIN:
             let stream = state.withLock { $0.streams.removeValue(forKey: sid) }
-            logger.debug("[AnyTLSMultiplexer] cmdFIN sid=\(sid) (had stream=\(stream != nil))")
             stream?.deliverClose(error: nil)
 
         case AnyTLSProtocol.cmdWaste:
-            logger.debug("[AnyTLSMultiplexer] cmdWaste sid=\(sid) \(payload.count)B (drained)")
+            break
 
         case AnyTLSProtocol.cmdServerSettings:
             let map = AnyTLSProtocol.decodeStringMap(payload)
             if let v = map["v"], let parsed = UInt8(v) {
                 state.withLock { $0.peerVersion = parsed }
-                logger.debug("[AnyTLSMultiplexer] cmdServerSettings peerVersion=\(parsed) keys=\(Array(map.keys))")
             } else {
                 logger.warning("[AnyTLSMultiplexer] cmdServerSettings missing or invalid v: \(map)")
             }
 
         case AnyTLSProtocol.cmdAlert:
             let message = String(data: payload, encoding: .utf8) ?? "<binary>"
-            logger.debug("[AnyTLSMultiplexer] cmdAlert from server: \(message)")
             close(error: AnywhereError.proxy(.anyTLS, .protocolViolation(detail: "AnyTLS alert: \(message)")))
 
         case AnyTLSProtocol.cmdUpdatePaddingScheme:
             if let new = AnyTLSPaddingScheme.parse(payload) {
                 state.withLock { $0.padding = new }
-                logger.debug("[AnyTLSMultiplexer] cmdUpdatePaddingScheme applied md5=\(new.md5Hex) stop=\(new.stop)")
             } else {
                 logger.warning("[AnyTLSMultiplexer] cmdUpdatePaddingScheme: failed to parse payload (\(payload.count)B)")
             }
 
         case AnyTLSProtocol.cmdHeartRequest:
-            logger.debug("[AnyTLSMultiplexer] cmdHeartRequest sid=\(sid) — replying")
             let pong = AnyTLSProtocol.encodeFrameHeader(cmd: AnyTLSProtocol.cmdHeartResponse, sid: sid, length: 0)
             try? await writeConnLocked(pong)
 
@@ -480,9 +461,7 @@ nonisolated final class AnyTLSMultiplexer: Multiplexer, Sendable {
             return (live, read)
         }
         guard let (liveStreams, readTask) = teardown else { return }
-
-        let reasonText = error.map { $0.localizedDescription } ?? "clean"
-        logger.debug("[AnyTLSMultiplexer] close seq=\(seq) streams=\(liveStreams.count) reason=\(reasonText)")
+        
         for stream in liveStreams {
             stream.deliverClose(error: error)
         }
