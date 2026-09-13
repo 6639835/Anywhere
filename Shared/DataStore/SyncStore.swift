@@ -120,22 +120,10 @@ nonisolated final class SyncStore: Sendable {
     private static let schema = Schema([JSONBlob.self, SyncItem.self])
 
     private static func makeContainer() -> ModelContainer? {
-        let config: ModelConfiguration
-        #if os(tvOS)
-        config = ModelConfiguration(
+        let config = ModelConfiguration(
             groupContainer: .identifier(AWCore.Identifier.appGroupSuite),
             cloudKitDatabase: .none
         )
-        #else
-        if let url = relocatedStoreURL() {
-            config = ModelConfiguration(url: url, cloudKitDatabase: .none)
-        } else {
-            config = ModelConfiguration(
-                groupContainer: .identifier(AWCore.Identifier.appGroupSuite),
-                cloudKitDatabase: .none
-            )
-        }
-        #endif
         do {
             return try ModelContainer(for: schema, configurations: config)
         } catch {
@@ -143,54 +131,6 @@ nonisolated final class SyncStore: Sendable {
             return nil
         }
     }
-
-    #if !os(tvOS)
-    private static func relocatedStoreURL() -> URL? {
-        let fileManager = FileManager.default
-        let directory = URL.applicationSupportDirectory
-        let storeURL = directory.appendingPathComponent("default.store")
-        do {
-            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-            try migrateLegacyStoreIfNeeded(to: storeURL, in: directory, fileManager: fileManager)
-            return storeURL
-        } catch {
-            try? fileManager.removeItem(at: storeURL)
-            logger.report("Failed to migrate sync store", error: error)
-            return nil
-        }
-    }
-
-    // MARK: - Legacy group-container store migration
-
-    private static func migrateLegacyStoreIfNeeded(to storeURL: URL, in directory: URL, fileManager: FileManager) throws {
-        guard !fileManager.fileExists(atPath: storeURL.path),
-              let oldDirectory = legacyStoreDirectory(fileManager) else { return }
-        let related = try fileManager.contentsOfDirectory(at: oldDirectory, includingPropertiesForKeys: nil)
-            .filter { item in
-                let name = item.lastPathComponent
-                return name.hasPrefix("default.store") || name.hasPrefix("default_") || name == ".default_SUPPORT"
-            }
-            .sorted { ($0.lastPathComponent == "default.store" ? 1 : 0) < ($1.lastPathComponent == "default.store" ? 1 : 0) }
-        for item in related {
-            let destination = directory.appendingPathComponent(item.lastPathComponent)
-            if fileManager.fileExists(atPath: destination.path) {
-                try fileManager.removeItem(at: destination)
-            }
-            try fileManager.copyItem(at: item, to: destination)
-        }
-        logger.info("Migrated sync store out of the app group container")
-    }
-
-    private static func legacyStoreDirectory(_ fileManager: FileManager) -> URL? {
-        guard let group = fileManager.containerURL(
-            forSecurityApplicationGroupIdentifier: AWCore.Identifier.appGroupSuite
-        ) else { return nil }
-        return [
-            group.appendingPathComponent("Library/Application Support", isDirectory: true),
-            group,
-        ].first { fileManager.fileExists(atPath: $0.appendingPathComponent("default.store").path) }
-    }
-    #endif
 
     // MARK: - Change observation
 

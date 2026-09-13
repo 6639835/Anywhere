@@ -655,7 +655,7 @@ nonisolated extension RFCHTTP2Multiplexer {
         guard !frame.hasFlag(HTTP2FrameFlags.ack) else { return }
 
         let settings = HTTP2Framer.parseSettings(payload: frame.payload)
-        let wakeAll: Bool = state.withLock { state in
+        _ = state.withLock { state in
             var windowChanged = false
             for setting in settings {
                 switch setting.id {

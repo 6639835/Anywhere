@@ -179,7 +179,6 @@ nonisolated enum AnywhereError: Error {
         case saveFailed(Resource, underlying: any Error)
         case missing(Resource)
         case corrupted(Resource, detail: String?)
-        case migrationFailed(file: String, underlying: any Error)
         case syncFailed(underlying: any Error)
     }
 
@@ -587,8 +586,6 @@ nonisolated extension AnywhereError.Store {
         case .missing(let resource): "\(resource.rawValue) not found"
         case .corrupted(let resource, let detail):
             "\(resource.rawValue) corrupted" + (detail.map { ": \($0)" } ?? "")
-        case .migrationFailed(let file, let underlying):
-            "failed to migrate \(file): \(AnywhereError.describe(underlying))"
         case .syncFailed(let underlying): "sync failed: \(AnywhereError.describe(underlying))"
         }
     }
@@ -675,8 +672,7 @@ nonisolated extension AnywhereError {
         switch self {
         case .wrapped(_, let e),
              .certificate(.buildFailed(let e)),
-             .store(.loadFailed(_, let e)), .store(.saveFailed(_, let e)),
-             .store(.migrationFailed(_, let e)), .store(.syncFailed(let e)),
+             .store(.loadFailed(_, let e)), .store(.saveFailed(_, let e)), .store(.syncFailed(let e)),
              .subscription(.fetchFailed(let e)),
              .tunnel(.settingsApplyFailed(let e)), .tunnel(.ipcFailed(let e)):
             e

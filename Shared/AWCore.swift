@@ -110,19 +110,6 @@ nonisolated final class AWCore {
         static let voyagerMembership = "voyagerMembership"
     }
 
-    static func migrateToAppGroup(fileName: String) {
-        let fileManager = FileManager.default
-        let oldURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(fileName)
-        guard let container = fileManager.containerURL(forSecurityApplicationGroupIdentifier: Identifier.appGroupSuite) else { return }
-        let newURL = container.appendingPathComponent(fileName)
-        guard fileManager.fileExists(atPath: oldURL.path), !fileManager.fileExists(atPath: newURL.path) else { return }
-        do {
-            try fileManager.moveItem(at: oldURL, to: newURL)
-        } catch {
-            logger.report(AnywhereError.store(.migrationFailed(file: fileName, underlying: error)))
-        }
-    }
-
     // MARK: - Typed UserDefaults Accessors
     
     // App

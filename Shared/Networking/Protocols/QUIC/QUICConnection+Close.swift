@@ -62,7 +62,7 @@ extension QUICConnection {
         self.pendingDatagrams.removeAll()
         let closeError: Error
         if let error {
-            if wasEstablished, case AnywhereError.quic(.connectionFailed(let detail)) = error {
+            if wasEstablished, case AnywhereError.quic(.connectionFailed(_)) = error {
                 closeError = AnywhereError.quic(.closed(graceful: false))
             } else {
                 closeError = error

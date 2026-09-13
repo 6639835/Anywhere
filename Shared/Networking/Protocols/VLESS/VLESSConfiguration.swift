@@ -54,7 +54,6 @@ nonisolated enum XraySecurityLayer: Hashable, Sendable {
 // MARK: - VLESSConfiguration
 
 nonisolated struct VLESSConfiguration: Hashable, Sendable {
-
     static let visionFlow = "xtls-rprx-vision"
 
     let uuid: UUID
