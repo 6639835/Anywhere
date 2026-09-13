@@ -3087,7 +3087,7 @@
         }
       }
     },
-    "ASCII" : {
+    "ASCII Mode" : {
       "shouldTranslate" : false
     },
     "Authority" : {
@@ -5661,10 +5661,6 @@
           }
         }
       }
-    },
-    "Disable HTTP Mask" : {
-      "comment" : "Disable HTTP Mask for Sudoku protocol",
-      "shouldTranslate" : false
     },
     "Disabled" : {
       "localizations" : {
@@ -10122,6 +10118,9 @@
         }
       }
     },
+    "Maximum Padding" : {
+      "shouldTranslate" : false
+    },
     "Mbps" : {
       "shouldTranslate" : false
     },
@@ -10334,6 +10333,9 @@
           }
         }
       }
+    },
+    "Minimum Padding" : {
+      "shouldTranslate" : false
     },
     "Mission Control" : {
       "localizations" : {
@@ -12222,14 +12224,6 @@
           }
         }
       }
-    },
-    "Padding Max" : {
-      "comment" : "Padding Max for Sudoku protocol",
-      "shouldTranslate" : false
-    },
-    "Padding Min" : {
-      "comment" : "Padding Min for Sudoku protocol",
-      "shouldTranslate" : false
     },
     "Password" : {
       "localizations" : {

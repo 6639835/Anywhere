@@ -33,6 +33,7 @@ struct TextWithColorfulIcon<F, B>: View where F : ShapeStyle, B : ShapeStyle {
                 .background(backgroundStyle)
                 .clipShape(.rect(cornerRadius: 8))
             Text(String(localized: title, comment: comment))
+                .minimumScaleFactor(0.1)
         }
     }
 }
@@ -65,6 +66,7 @@ struct TextWithColorfulIconAndCustomImage<F, B>: View where F : ShapeStyle, B : 
                 .background(backgroundStyle)
                 .clipShape(.rect(cornerRadius: 8))
             Text(String(localized: title, comment: comment))
+                .minimumScaleFactor(0.1)
         }
     }
 }
