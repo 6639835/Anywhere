@@ -120,17 +120,32 @@ nonisolated final class SyncStore: Sendable {
     private static let schema = Schema([JSONBlob.self, SyncItem.self])
 
     private static func makeContainer() -> ModelContainer? {
-        let config = ModelConfiguration(
-            groupContainer: .identifier(AWCore.Identifier.appGroupSuite),
-            cloudKitDatabase: .none
-        )
         do {
-            return try ModelContainer(for: schema, configurations: config)
+            return try ModelContainer(for: schema, configurations: makeConfiguration())
         } catch {
             logger.report("Failed to open sync store", error: error)
             return nil
         }
     }
+
+    #if os(tvOS)
+    private static func makeConfiguration() throws -> ModelConfiguration {
+        ModelConfiguration(
+            groupContainer: .identifier(AWCore.Identifier.appGroupSuite),
+            cloudKitDatabase: .none
+        )
+    }
+    #else
+    static let storeURL = URL.applicationSupportDirectory.appendingPathComponent("default.store")
+
+    private static func makeConfiguration() throws -> ModelConfiguration {
+        try FileManager.default.createDirectory(
+            at: storeURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        return ModelConfiguration(url: storeURL, cloudKitDatabase: .none)
+    }
+    #endif
 
     // MARK: - Change observation
 
