@@ -68,15 +68,15 @@ nonisolated extension ProxyClient {
         destinationHost: String,
         destinationPort: UInt16
     ) -> Result<ProxyConnection, Error> {
-        guard case .shadowsocks(let password, let method) = configuration.outbound else {
+        guard case .shadowsocks(let shadowsocks) = configuration.outbound else {
             return .failure(AnywhereError.proxy(.shadowsocks, .protocolViolation(detail: "Shadowsocks password not set")))
         }
-        guard let cipher = ShadowsocksCipher(method: method) else {
-            return .failure(AnywhereError.proxy(.shadowsocks, .protocolViolation(detail: "Invalid Shadowsocks method: \(method)")))
+        guard let cipher = shadowsocks.cipher else {
+            return .failure(AnywhereError.proxy(.shadowsocks, .protocolViolation(detail: "Invalid Shadowsocks method: \(shadowsocks.method)")))
         }
 
         if cipher.isSS2022 {
-            guard let pskList = ShadowsocksKeyDerivation.decodePSKList(password: password, keySize: cipher.keySize) else {
+            guard let pskList = ShadowsocksKeyDerivation.decodePSKList(password: shadowsocks.password, keySize: cipher.keySize) else {
                 return .failure(AnywhereError.proxy(.shadowsocks, .protocolViolation(detail: "Invalid Shadowsocks 2022 PSK")))
             }
 
@@ -99,7 +99,7 @@ nonisolated extension ProxyClient {
                 ))
             }
         } else {
-            let masterKey = ShadowsocksKeyDerivation.deriveKey(password: password, keySize: cipher.keySize)
+            let masterKey = ShadowsocksKeyDerivation.deriveKey(password: shadowsocks.password, keySize: cipher.keySize)
             let addressHeader = ShadowsocksProtocol.buildAddressHeader(host: destinationHost, port: destinationPort)
 
             if network == .udp {

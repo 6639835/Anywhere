@@ -11,7 +11,7 @@ extension ProxyClient {
     func connectWithSOCKS5(_ request: ProxyRequest) async throws -> ProxyConnection {
         let destinationHost = request.host
         let destinationPort = request.port
-        guard case .socks5(let username, let password) = configuration.outbound else {
+        guard case .socks5(let socks5) = configuration.outbound else {
             throw AnywhereError.proxy(.socks5, .protocolViolation(detail: "SOCKS5 outbound expected"))
         }
 
@@ -31,8 +31,8 @@ extension ProxyClient {
                 let relay = try await SOCKS5Handshake.performUDPAssociate(
                     buffer: buffer,
                     transport: transport,
-                    username: username,
-                    password: password,
+                    username: socks5.username,
+                    password: socks5.password,
                     serverAddress: configuration.serverAddress
                 )
                 let relayConnection = try await openSOCKS5UDPRelay(
@@ -51,8 +51,8 @@ extension ProxyClient {
                     transport: transport,
                     destinationHost: destinationHost,
                     destinationPort: destinationPort,
-                    username: username,
-                    password: password
+                    username: socks5.username,
+                    password: socks5.password
                 )
                 let dataTransport: any ByteTransport
                 if let excess = buffer.remaining {

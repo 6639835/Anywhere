@@ -11,7 +11,7 @@ nonisolated private let logger = AnywhereLogger(category: "ProxyClient+RFC")
 
 extension ProxyClient {
     func connectWithRFC(_ request: ProxyRequest) async throws -> ProxyConnection {
-        guard case .rfc(let username, let password, let securityLayer) = configuration.outbound else {
+        guard case .rfc(let rfc) = configuration.outbound else {
             throw AnywhereError.proxy(.rfc, .invalidConfiguration(detail: "RFC outbound expected"))
         }
 
@@ -21,7 +21,7 @@ extension ProxyClient {
 
         let initialData = request.initialData
         let authority = RFCProtocol.authority(host: request.host, port: request.port)
-        let credentials = RFCProtocol.basicCredentials(username: username, password: password)
+        let credentials = rfc.basicCredentials
 
         let pool = RFCMultiplexerRegistry.shared.pool(for: configuration)
         if let pool, let warm = pool.reserveWarmSession() {
@@ -35,7 +35,7 @@ extension ProxyClient {
             }
         }
 
-        let dialed = try await dialRFC(securityLayer: securityLayer)
+        let dialed = try await dialRFC(securityLayer: rfc.securityLayer)
         guard !isCancelled else {
             dialed.connection.cancel()
             throw AnywhereError.transport(.terminated)

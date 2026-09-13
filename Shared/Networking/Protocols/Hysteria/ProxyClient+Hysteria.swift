@@ -10,19 +10,14 @@ import Synchronization
 
 extension ProxyClient {
     func connectWithHysteria(_ request: ProxyRequest) async throws -> ProxyConnection {
-        guard case .hysteria(let password, let congestionControl, let uploadMbps, let downloadMbps, let obfuscation, let sni) = configuration.outbound else {
+        guard case .hysteria(let hysteriaConfiguration) = configuration.outbound else {
             throw AnywhereError.proxy(.hysteria, .protocolViolation(detail: "Hysteria password not set"))
         }
 
-        let hysteriaConfiguration = HysteriaConfiguration(
+        let hysteriaRuntimeConfiguration = HysteriaRuntimeConfiguration(
+            configuration: hysteriaConfiguration,
             proxyHost: configuration.serverAddress,
-            proxyPort: configuration.serverPort,
-            password: password,
-            congestionControl: congestionControl,
-            uploadMbps: uploadMbps,
-            downloadMbps: downloadMbps,
-            obfuscation: obfuscation,
-            sni: sni
+            proxyPort: configuration.serverPort
         )
         
         let bracketedHost = request.host.contains(":") ? "[\(request.host)]" : request.host
@@ -31,20 +26,20 @@ extension ProxyClient {
         if let chainTunnel = tunnel {
             let transport = ProxyConnectionDatagramTransport(connection: chainTunnel)
             setChainTunnel(nil)
-            let client = HysteriaClient.chained(configuration: hysteriaConfiguration, transport: transport)
+            let client = HysteriaClient.chained(configuration: hysteriaRuntimeConfiguration, transport: transport)
             return try await dispatchHysteria(client: client, network: request.network, destination: destination)
         }
 
         if let chain = configuration.chain, !chain.isEmpty {
             return try await connectPooledChainedHysteria(
-                hysteriaConfiguration: hysteriaConfiguration,
+                hysteriaRuntimeConfiguration: hysteriaRuntimeConfiguration,
                 chain: chain,
                 network: request.network,
                 destination: destination
             )
         }
 
-        let client = HysteriaClient.shared(for: hysteriaConfiguration)
+        let client = HysteriaClient.shared(for: hysteriaRuntimeConfiguration)
         return try await dispatchHysteria(client: client, network: request.network, destination: destination)
     }
 
@@ -62,7 +57,7 @@ extension ProxyClient {
     }
     
     private func connectPooledChainedHysteria(
-        hysteriaConfiguration: HysteriaConfiguration,
+        hysteriaRuntimeConfiguration: HysteriaRuntimeConfiguration,
         chain: [ProxyConfiguration],
         network: ProxyNetwork,
         destination: String
@@ -86,7 +81,7 @@ extension ProxyClient {
         let useResolvedAddress = useResolvedAddressForDirectDial
 
         let client = try await HysteriaClient.acquireChained(
-            configuration: hysteriaConfiguration,
+            configuration: hysteriaRuntimeConfiguration,
             chainSignature: chainSignature,
             builder: {
                 let holders = Mutex<[ProxyClient]>([])

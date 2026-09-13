@@ -11,8 +11,8 @@ nonisolated private let logger = AnywhereLogger(category: "ProxyClient+AnyTLS")
 
 extension ProxyClient {
     func connectWithAnyTLS(_ request: ProxyRequest) async throws -> ProxyConnection {
-        guard case .anytls(let password, _, _, _, let securityLayer) = configuration.outbound, !password.isEmpty,
-              let tlsConfig = securityLayer.tlsConfiguration else {
+        guard let anytls = configuration.anytls, !anytls.password.isEmpty,
+              let tlsConfig = anytls.tlsConfiguration else {
             throw AnywhereError.proxy(.anyTLS, .protocolViolation(detail: "AnyTLS password not set"))
         }
 

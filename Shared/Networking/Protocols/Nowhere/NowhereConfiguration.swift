@@ -52,6 +52,61 @@ nonisolated struct NowhereConfiguration: Hashable, Sendable {
     }
 }
 
+nonisolated extension NowhereConfiguration: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case key, tcpPort, udpPort, uplink, downlink, multiplex, morph, serverName
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        let tcpPort = try container.decodeIfPresent(UInt16.self, forKey: .tcpPort)
+        let udpPort = try container.decodeIfPresent(UInt16.self, forKey: .udpPort)
+        guard tcpPort != 0, udpPort != 0 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: tcpPort == 0 ? .tcpPort : .udpPort,
+                in: container,
+                debugDescription: "Nowhere carrier ports must be non-zero"
+            )
+        }
+        let uplink = try container.decodeIfPresent(NowhereNetwork.self, forKey: .uplink) ?? .tcp
+        let downlink = try container.decodeIfPresent(NowhereNetwork.self, forKey: .downlink) ?? .tcp
+        if tcpPort != nil || udpPort != nil {
+            guard (uplink == .tcp ? tcpPort : udpPort) != nil,
+                  (downlink == .tcp ? tcpPort : udpPort) != nil else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .uplink,
+                    in: container,
+                    debugDescription: "Nowhere route uses an unavailable carrier"
+                )
+            }
+        }
+
+        self.init(
+            key: try container.decode(String.self, forKey: .key),
+            tcpPort: tcpPort,
+            udpPort: udpPort,
+            uplink: uplink,
+            downlink: downlink,
+            multiplex: try container.decodeIfPresent(Bool.self, forKey: .multiplex) ?? false,
+            morph: try container.decodeIfPresent(Bool.self, forKey: .morph) ?? false,
+            serverName: try container.decode(String.self, forKey: .serverName)
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(key, forKey: .key)
+        try container.encodeIfPresent(tcpPort, forKey: .tcpPort)
+        try container.encodeIfPresent(udpPort, forKey: .udpPort)
+        try container.encode(uplink, forKey: .uplink)
+        try container.encode(downlink, forKey: .downlink)
+        try container.encode(multiplex, forKey: .multiplex)
+        try container.encode(morph, forKey: .morph)
+        try container.encode(serverName, forKey: .serverName)
+    }
+}
+
 nonisolated struct NowhereTransportIdentityKey: Hashable, Sendable {
     let configurationID: UUID
     let proxyHost: String

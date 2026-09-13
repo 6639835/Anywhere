@@ -172,17 +172,17 @@ extension ProxyConfiguration {
     }
     
     private func toHysteriaURL() -> String {
-        guard case .hysteria(let password, let congestionControl, let uploadMbps, let downloadMbps, let obfuscation, let sni) = outbound else {
+        guard case .hysteria(let configuration) = outbound else {
             return ""
         }
-        let encodedPassword = password.addingPercentEncoding(withAllowedCharacters: .urlPasswordAllowed) ?? ""
+        let encodedPassword = configuration.password.addingPercentEncoding(withAllowedCharacters: .urlPasswordAllowed) ?? ""
         let fragment = name.addingPercentEncoding(withAllowedCharacters: .urlFragmentAllowed) ?? name
         var parameters: [String] = []
-        if congestionControl == .brutal {
-            parameters.append("upmbps=\(uploadMbps)")
-            parameters.append("downmbps=\(downloadMbps)")
+        if configuration.congestionControl == .brutal {
+            parameters.append("upmbps=\(configuration.uploadMbps)")
+            parameters.append("downmbps=\(configuration.downloadMbps)")
         }
-        if let obfuscation {
+        if let obfuscation = configuration.obfuscation {
             parameters.append("obfs=\(obfuscation.typeTag)")
             parameters.append("obfs-password=\(encodedQueryValue(obfuscation.password))")
             if case .gecko(_, let minPacketSize, let maxPacketSize) = obfuscation {
@@ -190,32 +190,32 @@ extension ProxyConfiguration {
                 parameters.append("obfs-max-packet-size=\(maxPacketSize)")
             }
         }
-        if sni != serverAddress {
-            parameters.append("sni=\(sni)")
+        if configuration.serverName != serverAddress {
+            parameters.append("sni=\(configuration.serverName)")
         }
         let query = parameters.isEmpty ? "" : "?\(parameters.joined(separator: "&"))"
         return "hysteria2://\(encodedPassword)@\(bracketedServerAddress):\(serverPort)/\(query)#\(fragment)"
     }
     
     private func toSudokuURL() -> String {
-        guard case .sudoku(let sudoku) = outbound else { return "sudoku://" }
+        guard case .sudoku(let configuration) = outbound else { return "sudoku://" }
         var payload: [String: Any] = [
             "h": serverAddress,
             "p": Int(serverPort),
-            "k": sudoku.key,
-            "a": sudoku.asciiMode.shortLinkToken,
-            "e": sudoku.aeadMethod.rawValue,
-            "x": !sudoku.enablePureDownlink
+            "k": configuration.key,
+            "a": configuration.asciiMode.shortLinkToken,
+            "e": configuration.aeadMethod.rawValue,
+            "x": !configuration.enablePureDownlink
         ]
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedName.isEmpty { payload["n"] = trimmedName }
-        if !sudoku.customTables.isEmpty { payload["ts"] = sudoku.customTables }
-        if sudoku.httpMask.disable { payload["hd"] = true }
-        if sudoku.httpMask.mode != .legacy { payload["hm"] = sudoku.httpMask.mode.rawValue }
-        if sudoku.httpMask.tls { payload["ht"] = true }
-        if !sudoku.httpMask.host.isEmpty { payload["hh"] = sudoku.httpMask.host }
-        if sudoku.multiplex != .off { payload["hx"] = sudoku.multiplex.rawValue }
-        if !sudoku.httpMask.pathRoot.isEmpty { payload["hy"] = sudoku.httpMask.pathRoot }
+        if !configuration.customTables.isEmpty { payload["ts"] = configuration.customTables }
+        if configuration.httpMask.disable { payload["hd"] = true }
+        if configuration.httpMask.mode != .legacy { payload["hm"] = configuration.httpMask.mode.rawValue }
+        if configuration.httpMask.tls { payload["ht"] = true }
+        if !configuration.httpMask.host.isEmpty { payload["hh"] = configuration.httpMask.host }
+        if configuration.multiplex != .off { payload["hx"] = configuration.multiplex.rawValue }
+        if !configuration.httpMask.pathRoot.isEmpty { payload["hy"] = configuration.httpMask.pathRoot }
 
         guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else {
             return "sudoku://"
@@ -224,9 +224,9 @@ extension ProxyConfiguration {
     }
 
     private func toTrojanURL() -> String {
-        guard case .trojan(let password, let securityLayer) = outbound,
-              let tls = securityLayer.tlsConfiguration else { return "" }
-        let encodedPassword = password.addingPercentEncoding(withAllowedCharacters: .urlPasswordAllowed) ?? ""
+        guard case .trojan(let configuration) = outbound,
+              let tls = configuration.tlsConfiguration else { return "" }
+        let encodedPassword = configuration.password.addingPercentEncoding(withAllowedCharacters: .urlPasswordAllowed) ?? ""
         let fragment = name.addingPercentEncoding(withAllowedCharacters: .urlFragmentAllowed) ?? name
         var parameters: [String] = []
         if tls.serverName != serverAddress {
@@ -247,9 +247,9 @@ extension ProxyConfiguration {
     }
 
     private func toAnyTLSURL() -> String {
-        guard case .anytls(let password, let idleCheckInterval, let idleTimeout, let minIdleSession, let securityLayer) = outbound,
-              let tls = securityLayer.tlsConfiguration else { return "" }
-        let encodedPassword = password.addingPercentEncoding(withAllowedCharacters: .urlPasswordAllowed) ?? ""
+        guard case .anytls(let configuration) = outbound,
+              let tls = configuration.tlsConfiguration else { return "" }
+        let encodedPassword = configuration.password.addingPercentEncoding(withAllowedCharacters: .urlPasswordAllowed) ?? ""
         let fragment = name.addingPercentEncoding(withAllowedCharacters: .urlFragmentAllowed) ?? name
         var parameters: [String] = []
         if tls.serverName != serverAddress {
@@ -265,18 +265,24 @@ extension ProxyConfiguration {
         if let ech = tls.echQueryValue {
             parameters.append("ech=\(ech)")
         }
-        if idleCheckInterval != 30 { parameters.append("ici=\(idleCheckInterval)") }
-        if idleTimeout != 30 { parameters.append("it=\(idleTimeout)") }
-        if minIdleSession != 0 { parameters.append("mis=\(minIdleSession)") }
+        if configuration.idleCheckInterval != AnyTLSConfiguration.defaultIdleCheckInterval {
+            parameters.append("ici=\(configuration.idleCheckInterval)")
+        }
+        if configuration.idleTimeout != AnyTLSConfiguration.defaultIdleTimeout {
+            parameters.append("it=\(configuration.idleTimeout)")
+        }
+        if configuration.minIdleSession != AnyTLSConfiguration.defaultMinIdleSession {
+            parameters.append("mis=\(configuration.minIdleSession)")
+        }
         let query = parameters.isEmpty ? "" : "?\(parameters.joined(separator: "&"))"
         return "anytls://\(encodedPassword)@\(bracketedServerAddress):\(serverPort)\(query)#\(fragment)"
     }
 
     private func toShadowsocksURL() -> String {
-        guard case .shadowsocks(let password, let method) = outbound else {
+        guard case .shadowsocks(let configuration) = outbound else {
             return "ss://invalid"
         }
-        let userInfo = "\(method):\(password)"
+        let userInfo = "\(configuration.method):\(configuration.password)"
         let encoded = Data(userInfo.utf8).base64EncodedString()
             .replacingOccurrences(of: "=", with: "")
         
@@ -286,21 +292,21 @@ extension ProxyConfiguration {
 
     private func toSOCKS5URL() -> String {
         let fragment = name.addingPercentEncoding(withAllowedCharacters: .urlFragmentAllowed) ?? name
-        if case .socks5(let username, let password) = outbound, let user = username, !user.isEmpty {
+        if case .socks5(let configuration) = outbound, let user = configuration.username, !user.isEmpty {
             let encodedUser = user.addingPercentEncoding(withAllowedCharacters: .urlUserAllowed) ?? user
-            let encodedPass = (password ?? "").addingPercentEncoding(withAllowedCharacters: .urlPasswordAllowed) ?? ""
+            let encodedPass = (configuration.password ?? "").addingPercentEncoding(withAllowedCharacters: .urlPasswordAllowed) ?? ""
             return "socks5://\(encodedUser):\(encodedPass)@\(bracketedServerAddress):\(serverPort)#\(fragment)"
         }
         return "socks5://\(bracketedServerAddress):\(serverPort)#\(fragment)"
     }
     
     private func toRFCURL() -> String {
-        guard case .rfc(let username, let password, let securityLayer) = outbound else { return "" }
+        guard case .rfc(let configuration) = outbound else { return "" }
         let fragment = name.addingPercentEncoding(withAllowedCharacters: .urlFragmentAllowed) ?? name
         
         var userInfo = ""
-        let user = username ?? ""
-        let secret = password ?? ""
+        let user = configuration.username ?? ""
+        let secret = configuration.password ?? ""
         if !user.isEmpty || !secret.isEmpty {
             let encodedUser = user.addingPercentEncoding(withAllowedCharacters: .urlUserAllowed) ?? user
             let encodedPassword = secret.addingPercentEncoding(withAllowedCharacters: .urlPasswordAllowed) ?? secret
@@ -308,7 +314,7 @@ extension ProxyConfiguration {
         }
 
         var parameters: [String] = []
-        switch securityLayer {
+        switch configuration.securityLayer {
         case .none:
             parameters.append("security=none")
         case .tls(let tls):

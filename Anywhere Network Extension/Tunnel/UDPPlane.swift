@@ -290,16 +290,16 @@ actor UDPPlane {
         }
         ssSessions.removeValue(forKey: configuration.id)
 
-        guard case .shadowsocks(let password, let method) = configuration.outbound else {
+        guard case .shadowsocks(let shadowsocks) = configuration.outbound else {
             return .failure(AnywhereError.proxy(.shadowsocks, .protocolViolation(detail: "Shadowsocks password not set")))
         }
-        guard let cipher = ShadowsocksCipher(method: method) else {
-            return .failure(AnywhereError.proxy(.shadowsocks, .cipher(.unsupportedMethod(method))))
+        guard let cipher = shadowsocks.cipher else {
+            return .failure(AnywhereError.proxy(.shadowsocks, .cipher(.unsupportedMethod(shadowsocks.method))))
         }
 
         let mode: ShadowsocksUDPSession.Mode
         if cipher.isSS2022 {
-            guard let pskList = ShadowsocksKeyDerivation.decodePSKList(password: password, keySize: cipher.keySize) else {
+            guard let pskList = ShadowsocksKeyDerivation.decodePSKList(password: shadowsocks.password, keySize: cipher.keySize) else {
                 return .failure(AnywhereError.proxy(.shadowsocks, .cipher(.invalidKey)))
             }
             if cipher == .blake3chacha20poly1305 {
@@ -308,7 +308,7 @@ actor UDPPlane {
                 mode = .ss2022AES(cipher: cipher, pskList: pskList)
             }
         } else {
-            let masterKey = ShadowsocksKeyDerivation.deriveKey(password: password, keySize: cipher.keySize)
+            let masterKey = ShadowsocksKeyDerivation.deriveKey(password: shadowsocks.password, keySize: cipher.keySize)
             mode = .legacy(cipher: cipher, masterKey: masterKey)
         }
 

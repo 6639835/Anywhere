@@ -344,7 +344,7 @@ private struct ProminentCircle<Content: View>: View {
         name: "🇺🇸 Los Angeles",
         serverAddress: "203.0.113.10",
         serverPort: 443,
-        outbound: .socks5(username: nil, password: nil)
+        outbound: .socks5(SOCKS5Configuration())
     ))
     container.tunnel.setStatusForPreview(.connected)
 

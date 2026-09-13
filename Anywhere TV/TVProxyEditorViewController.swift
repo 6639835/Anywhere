@@ -1008,12 +1008,12 @@ class TVProxyEditorViewController: UITableViewController {
             break
         case .vless:
             break
-        case .hysteria(let password, let congestionControl, let uploadMbps, let downloadMbps, let obfuscation, let sni):
-            hysteriaPassword = password
-            hysteriaCC = congestionControl
-            hysteriaUploadMbpsText = String(uploadMbps)
-            hysteriaDownloadMbpsText = String(downloadMbps)
-            if let obfuscation {
+        case .hysteria(let hysteria):
+            hysteriaPassword = hysteria.password
+            hysteriaCC = hysteria.congestionControl
+            hysteriaUploadMbpsText = String(hysteria.uploadMbps)
+            hysteriaDownloadMbpsText = String(hysteria.downloadMbps)
+            if let obfuscation = hysteria.obfuscation {
                 hysteriaObfuscationType = obfuscation.typeTag
                 hysteriaObfuscationPassword = obfuscation.password
                 if case .gecko(_, let minPacketSize, let maxPacketSize) = obfuscation {
@@ -1021,7 +1021,7 @@ class TVProxyEditorViewController: UITableViewController {
                     hysteriaObfuscationMaxText = String(maxPacketSize)
                 }
             }
-            hysteriaSNI = sni
+            hysteriaSNI = hysteria.serverName
         case .sudoku(let sudoku):
             sudokuKey = sudoku.key
             sudokuAEADMethod = sudoku.aeadMethod
@@ -1036,33 +1036,33 @@ class TVProxyEditorViewController: UITableViewController {
             sudokuHTTPMaskHost = sudoku.httpMask.host
             sudokuHTTPMaskPathRoot = sudoku.httpMask.pathRoot
             sudokuMultiplex = sudoku.multiplex
-        case .trojan(let password, let securityLayer):
-            let tls = securityLayer.tlsConfiguration ?? TLSConfiguration(serverName: "")
-            trojanPassword = password
+        case .trojan(let trojan):
+            let tls = trojan.tlsConfiguration ?? TLSConfiguration(serverName: "")
+            trojanPassword = trojan.password
             trojanSNI = tls.serverName
             trojanALPN = tls.alpn?.joined(separator: ",") ?? ""
             trojanECHEnabled = tls.echEnabled
             trojanECH = tls.echConfig ?? ""
             trojanFingerprint = tls.fingerprint
-        case .anytls(let password, _, _, _, let securityLayer):
-            let tls = securityLayer.tlsConfiguration ?? TLSConfiguration(serverName: "")
-            anytlsPassword = password
+        case .anytls(let anytls):
+            let tls = anytls.tlsConfiguration ?? TLSConfiguration(serverName: "")
+            anytlsPassword = anytls.password
             anytlsSNI = tls.serverName
             anytlsALPN = tls.alpn?.joined(separator: ",") ?? ""
             anytlsECHEnabled = tls.echEnabled
             anytlsECH = tls.echConfig ?? ""
             anytlsFingerprint = tls.fingerprint
-        case .shadowsocks(let password, let method):
-            ssPassword = password
-            ssMethod = method
-        case .socks5(let user, let pass):
-            socks5Username = user ?? ""
-            socks5Password = pass ?? ""
-        case .rfc(let username, let password, let securityLayer):
-            rfcUsername = username ?? ""
-            rfcPassword = password ?? ""
-            rfcSecurity = securityLayer.tag
-            if let tls = securityLayer.tlsConfiguration {
+        case .shadowsocks(let shadowsocks):
+            ssPassword = shadowsocks.password
+            ssMethod = shadowsocks.method
+        case .socks5(let socks5):
+            socks5Username = socks5.username ?? ""
+            socks5Password = socks5.password ?? ""
+        case .rfc(let rfc):
+            rfcUsername = rfc.username ?? ""
+            rfcPassword = rfc.password ?? ""
+            rfcSecurity = rfc.securityLayer.tag
+            if let tls = rfc.tlsConfiguration {
                 rfcSNI = tls.serverName
                 rfcALPN = tls.alpn?.joined(separator: ",") ?? ""
                 rfcECHEnabled = tls.echEnabled
@@ -1085,8 +1085,7 @@ class TVProxyEditorViewController: UITableViewController {
     private func updateSaveButton() {
         navigationItem.rightBarButtonItem?.isEnabled = isValid
     }
-
-    /// Keys must match what `XHTTPConfiguration.parse` reads back. Returns nil when detach is off or address/port are missing.
+    
     private func xhttpDownloadSettingsDict() -> [String: Any]? {
         guard vlessXHTTPDownloadEnabled,
               !vlessXHTTPDownloadAddress.isEmpty,
@@ -1242,16 +1241,15 @@ class TVProxyEditorViewController: UITableViewController {
                 )
             )
         case .hysteria:
-            let uploadMbps = HysteriaCongestionControl.clampUploadMbps(Int(hysteriaUploadMbpsText) ?? HysteriaCongestionControl.uploadMbpsDefault)
-            let downloadMbps = HysteriaCongestionControl.clampDownloadMbps(Int(hysteriaDownloadMbpsText) ?? HysteriaCongestionControl.downloadMbpsDefault)
-            let sni = hysteriaSNI.isEmpty ? bareAddress : hysteriaSNI
             outbound = .hysteria(
-                password: hysteriaPassword,
-                congestionControl: hysteriaCC,
-                uploadMbps: uploadMbps,
-                downloadMbps: downloadMbps,
-                obfuscation: hysteriaObfuscationValue,
-                sni: sni
+                HysteriaConfiguration(
+                    password: hysteriaPassword,
+                    congestionControl: hysteriaCC,
+                    uploadMbps: Int(hysteriaUploadMbpsText) ?? HysteriaCongestionControl.uploadMbpsDefault,
+                    downloadMbps: Int(hysteriaDownloadMbpsText) ?? HysteriaCongestionControl.downloadMbpsDefault,
+                    obfuscation: hysteriaObfuscationValue,
+                    serverName: hysteriaSNI.isEmpty ? bareAddress : hysteriaSNI
+                )
             )
         case .sudoku:
             outbound = .sudoku(
@@ -1281,11 +1279,11 @@ class TVProxyEditorViewController: UITableViewController {
             let alpn: [String]? = trojanALPN.isEmpty ? nil : trojanALPN.split(separator: ",").map { String($0) }
             let ech = trojanECH.trimmingCharacters(in: .whitespacesAndNewlines)
             outbound = .trojan(
-                password: trojanPassword,
-                securityLayer: .tls(
-                    TLSConfiguration(
+                TrojanConfiguration(
+                    password: trojanPassword,
+                    tls: TLSConfiguration(
                         serverName: sni,
-                                     alpn: alpn,
+                        alpn: alpn,
                         echEnabled: trojanECHEnabled,
                         echConfig: trojanECHEnabled && !ech.isEmpty ? ech : nil,
                         fingerprint: trojanFingerprint
@@ -1296,13 +1294,9 @@ class TVProxyEditorViewController: UITableViewController {
             let sni = anytlsSNI.isEmpty ? bareAddress : anytlsSNI
             let alpn: [String]? = anytlsALPN.isEmpty ? nil : anytlsALPN.split(separator: ",").map { String($0) }
             let ech = anytlsECH.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let existing = existingConfiguration,
-               case .anytls(_, let idleCheckInterval, let idleTimeout, let minIdleSession, _) = existing.outbound {
-                outbound = .anytls(
+            outbound = .anytls(
+                AnyTLSConfiguration(
                     password: anytlsPassword,
-                    idleCheckInterval: idleCheckInterval,
-                    idleTimeout: idleTimeout,
-                    minIdleSession: minIdleSession,
                     securityLayer: .tls(
                         TLSConfiguration(
                             serverName: sni,
@@ -1311,31 +1305,18 @@ class TVProxyEditorViewController: UITableViewController {
                             echConfig: anytlsECHEnabled && !ech.isEmpty ? ech : nil,
                             fingerprint: anytlsFingerprint
                         )
-                    )
+                    ),
+                    inheritingTuningFrom: existingConfiguration?.anytls
                 )
-            } else {
-                outbound = .anytls(
-                    password: anytlsPassword,
-                    idleCheckInterval: 30,
-                    idleTimeout: 30,
-                    minIdleSession: 0,
-                    securityLayer: .tls(
-                        TLSConfiguration(
-                            serverName: sni,
-                            alpn: alpn,
-                            echEnabled: anytlsECHEnabled,
-                            echConfig: anytlsECHEnabled && !ech.isEmpty ? ech : nil,
-                            fingerprint: anytlsFingerprint
-                        )
-                    )
-                )
-            }
+            )
         case .shadowsocks:
-            outbound = .shadowsocks(password: ssPassword, method: ssMethod)
+            outbound = .shadowsocks(ShadowsocksConfiguration(password: ssPassword, method: ssMethod))
         case .socks5:
             outbound = .socks5(
-                username: socks5Username.isEmpty ? nil : socks5Username,
-                password: socks5Password.isEmpty ? nil : socks5Password
+                SOCKS5Configuration(
+                    username: socks5Username.isEmpty ? nil : socks5Username,
+                    password: socks5Password.isEmpty ? nil : socks5Password
+                )
             )
         case .rfc:
             let securityLayer: GenericSecurityLayer
@@ -1356,9 +1337,11 @@ class TVProxyEditorViewController: UITableViewController {
                 securityLayer = .none
             }
             outbound = .rfc(
-                username: rfcUsername.isEmpty ? nil : rfcUsername,
-                password: rfcPassword.isEmpty ? nil : rfcPassword,
-                securityLayer: securityLayer
+                RFCConfiguration(
+                    username: rfcUsername.isEmpty ? nil : rfcUsername,
+                    password: rfcPassword.isEmpty ? nil : rfcPassword,
+                    securityLayer: securityLayer
+                )
             )
         }
 

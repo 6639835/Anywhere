@@ -30,7 +30,7 @@ nonisolated final class HysteriaSession: Sendable {
     }
 
     private let quic: QUICConnection
-    private let configuration: HysteriaConfiguration
+    private let configuration: HysteriaRuntimeConfiguration
 
     private struct State: PhaseHolding {
         var phase: Phase = .idle
@@ -83,7 +83,7 @@ nonisolated final class HysteriaSession: Sendable {
 
     // MARK: - Init
 
-    init(configuration: HysteriaConfiguration, transport: QUICDatagramTransport? = nil) {
+    init(configuration: HysteriaRuntimeConfiguration, transport: QUICDatagramTransport? = nil) {
         self.configuration = configuration
         let obfuscator: QUICPacketObfuscator?
         switch configuration.obfuscation {

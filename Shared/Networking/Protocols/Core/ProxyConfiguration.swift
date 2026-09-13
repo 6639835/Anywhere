@@ -85,30 +85,27 @@ nonisolated enum OutboundProtocol: String, Codable, CaseIterable {
 nonisolated enum Outbound: Hashable, Sendable {
     case nowhere(NowhereConfiguration)
     case vless(VLESSConfiguration)
-    case hysteria(
-        password: String,
-        congestionControl: HysteriaCongestionControl,
-        uploadMbps: Int,
-        downloadMbps: Int,
-        obfuscation: HysteriaObfuscation?,
-        sni: String
-    )
+    case hysteria(HysteriaConfiguration)
     case sudoku(SudokuConfiguration)
-    case trojan(password: String, securityLayer: GenericSecurityLayer)
-    case anytls(
-        password: String,
-        idleCheckInterval: Int,
-        idleTimeout: Int,
-        minIdleSession: Int,
-        securityLayer: GenericSecurityLayer
-    )
-    case shadowsocks(password: String, method: String)
-    case socks5(username: String?, password: String?)
-    case rfc(
-        username: String?,
-        password: String?,
-        securityLayer: GenericSecurityLayer
-    )
+    case trojan(TrojanConfiguration)
+    case anytls(AnyTLSConfiguration)
+    case shadowsocks(ShadowsocksConfiguration)
+    case socks5(SOCKS5Configuration)
+    case rfc(RFCConfiguration)
+
+    var outboundProtocol: OutboundProtocol {
+        switch self {
+        case .nowhere:      .nowhere
+        case .vless:        .vless
+        case .hysteria:     .hysteria
+        case .sudoku:       .sudoku
+        case .trojan:       .trojan
+        case .anytls:       .anytls
+        case .shadowsocks:  .shadowsocks
+        case .socks5:       .socks5
+        case .rfc:          .rfc
+        }
+    }
 }
 
 // MARK: - Generic Security Layer Configuration
@@ -130,6 +127,35 @@ nonisolated enum GenericSecurityLayer: Hashable, Sendable {
     }
 }
 
+nonisolated extension GenericSecurityLayer: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case type, tls
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let type = try container.decode(String.self, forKey: .type)
+        switch type {
+        case "tls":     self = .tls(try container.decode(TLSConfiguration.self, forKey: .tls))
+        case "none":    self = .none
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .type,
+                in: container,
+                debugDescription: "Unsupported security layer: \(type)"
+            )
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(tag, forKey: .type)
+        if case .tls(let tls) = self {
+            try container.encode(tls, forKey: .tls)
+        }
+    }
+}
+
 // MARK: - ProxyConfiguration
 
 nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable, SoftDeletable {
@@ -146,27 +172,22 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
 
     var connectAddress: String { resolvedIP ?? serverAddress }
 
-    var outboundProtocol: OutboundProtocol {
-        switch outbound {
-        case .nowhere:      .nowhere
-        case .vless:        .vless
-        case .hysteria:     .hysteria
-        case .sudoku:       .sudoku
-        case .trojan:       .trojan
-        case .anytls:       .anytls
-        case .shadowsocks:  .shadowsocks
-        case .socks5:       .socks5
-        case .rfc:          .rfc
-        }
-    }
+    var outboundProtocol: OutboundProtocol { outbound.outboundProtocol }
     
     var genericSecurityLayer: GenericSecurityLayer {
         switch outbound {
-        case .nowhere(let configuration):        .tls(TLSConfiguration(serverName: configuration.serverName, alpn: [NowhereProtocol.defaultALPN], minVersion: .tls13, maxVersion: .tls13))
-        case .trojan(_, let security):           security
-        case .anytls(_, _, _, _, let security):  security
-        case .rfc(_, _, let security):           security
-        default:                                 .none
+        case .nowhere(let configuration):   .tls(
+            TLSConfiguration(
+                serverName: configuration.serverName,
+                alpn: [NowhereProtocol.defaultALPN],
+                minVersion: .tls13,
+                maxVersion: .tls13
+            )
+        )
+        case .trojan(let configuration):    configuration.securityLayer
+        case .anytls(let configuration):    configuration.securityLayer
+        case .rfc(let configuration):       configuration.securityLayer
+        default:                            .none
         }
     }
     
@@ -239,6 +260,11 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
     
     var vless: VLESSConfiguration? {
         if case .vless(let configuration) = outbound { return configuration }
+        return nil
+    }
+
+    var anytls: AnyTLSConfiguration? {
+        if case .anytls(let configuration) = outbound { return configuration }
         return nil
     }
 
@@ -330,230 +356,37 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
 
     private enum CodingKeys: String, CodingKey {
         case id, name, serverAddress, serverPort, resolvedIP, subscriptionId
-        case outboundProtocol
-        case nowhereKey, nowhereSNI, nowhereALPN, nowhereTCPPort, nowhereUDPPort, up, down, mux, morph
-        case uuid, encryption
-        case hysteriaPassword, hysteriaCongestionControl, hysteriaUploadMbps, hysteriaDownloadMbps
-        case hysteriaObfs, hysteriaObfsPassword, hysteriaObfsMinPacketSize, hysteriaObfsMaxPacketSize
-        case hysteriaSNI
-        case sudoku
-        case trojanPassword, trojanTLS
-        case anytlsPassword, anytlsIdleCheckInterval, anytlsIdleTimeout, anytlsMinIdleSession, anytlsTLS
-        case ssPassword, ssMethod
-        case socks5Username, socks5Password
-        case rfcUsername, rfcPassword, rfcSecurity, rfcTLS
+        case outbound
         case chain
         case updatedAt
         case deletedAt
     }
-    
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
 
         id = try container.decode(UUID.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
         serverAddress = try container.decode(String.self, forKey: .serverAddress)
-        let decodedServerPort = try container.decode(UInt16.self, forKey: .serverPort)
+        serverPort = try container.decode(UInt16.self, forKey: .serverPort)
         resolvedIP = try container.decodeIfPresent(String.self, forKey: .resolvedIP)
         subscriptionId = try container.decodeIfPresent(UUID.self, forKey: .subscriptionId)
 
-        let `protocol` = try container.decodeIfPresent(OutboundProtocol.self, forKey: .outboundProtocol) ?? .vless
-
-        switch `protocol` {
-        case .nowhere:
-            let explicitSNI = try container.decodeIfPresent(String.self, forKey: .nowhereSNI)
-            _ = try container.decodeIfPresent(String.self, forKey: .nowhereALPN)
-            let hasCarrierPorts = container.contains(.nowhereTCPPort) || container.contains(.nowhereUDPPort)
-            let storedTCPPort = try container.decodeIfPresent(UInt16.self, forKey: .nowhereTCPPort)
-            let storedUDPPort = try container.decodeIfPresent(UInt16.self, forKey: .nowhereUDPPort)
-            let usesSeparatePorts = hasCarrierPorts && storedTCPPort != storedUDPPort
-            let tcpPort = usesSeparatePorts ? storedTCPPort : decodedServerPort
-            let udpPort = usesSeparatePorts ? storedUDPPort : decodedServerPort
-            if decodedServerPort == 0 {
-                throw DecodingError.dataCorruptedError(
-                    forKey: .serverPort,
-                    in: container,
-                    debugDescription: "Invalid zero Nowhere port"
-                )
-            }
-            if storedTCPPort == 0 {
-                throw DecodingError.dataCorruptedError(
-                    forKey: .nowhereTCPPort,
-                    in: container,
-                    debugDescription: "Invalid zero Nowhere TCP port"
-                )
-            }
-            if storedUDPPort == 0 {
-                throw DecodingError.dataCorruptedError(
-                    forKey: .nowhereUDPPort,
-                    in: container,
-                    debugDescription: "Invalid zero Nowhere UDP port"
-                )
-            }
-            let rawUp = try container.decodeIfPresent(String.self, forKey: .up)
-            let rawDown = try container.decodeIfPresent(String.self, forKey: .down)
-            func decodeCarrier(_ value: String?, forKey key: CodingKeys) throws -> NowhereNetwork {
-                guard let value else { return .tcp }
-                guard let network = NowhereNetwork(rawValue: value) else {
-                    throw DecodingError.dataCorruptedError(
-                        forKey: key,
-                        in: container,
-                        debugDescription: "Invalid Nowhere \(key.stringValue) value"
-                    )
-                }
-                return network
-            }
-            let uplink = try decodeCarrier(rawUp, forKey: .up)
-            let downlink = try decodeCarrier(rawDown, forKey: .down)
-            let decodedMultiplex: Bool
-            if !container.contains(.mux) {
-                decodedMultiplex = false
-            } else if try container.decodeNil(forKey: .mux) {
-                decodedMultiplex = false
-            } else if let value = try? container.decode(Bool.self, forKey: .mux) {
-                decodedMultiplex = value
-            } else if let value = try? container.decode(Int.self, forKey: .mux), value == 0 || value == 1 {
-                decodedMultiplex = value == 1
-            } else {
-                throw DecodingError.dataCorruptedError(
-                    forKey: .mux,
-                    in: container,
-                    debugDescription: "Invalid Nowhere mux value"
-                )
-            }
-            let decodedMorph: Bool
-            let morphMissing = !container.contains(.morph)
-            let morphNull = morphMissing ? false : try container.decodeNil(forKey: .morph)
-            if morphMissing || morphNull {
-                decodedMorph = false
-            } else if let value = try? container.decode(Bool.self, forKey: .morph) {
-                decodedMorph = value
-            } else if let value = try? container.decode(Int.self, forKey: .morph), value == 0 || value == 1 {
-                decodedMorph = value == 1
-            } else {
-                throw DecodingError.dataCorruptedError(
-                    forKey: .morph,
-                    in: container,
-                    debugDescription: "Invalid Nowhere morph value"
-                )
-            }
-            guard tcpPort != nil || udpPort != nil else {
-                throw DecodingError.dataCorruptedError(
-                    forKey: .serverPort,
-                    in: container,
-                    debugDescription: "Nowhere requires at least one carrier port"
-                )
-            }
-            guard (uplink == .tcp ? tcpPort : udpPort) != nil,
-                  (downlink == .tcp ? tcpPort : udpPort) != nil else {
-                throw DecodingError.dataCorruptedError(
-                    forKey: .up,
-                    in: container,
-                    debugDescription: "Nowhere route uses an unavailable carrier"
-                )
-            }
-            outbound = .nowhere(NowhereConfiguration(
-                key: try container.decodeIfPresent(String.self, forKey: .nowhereKey) ?? "",
-                tcpPort: usesSeparatePorts ? storedTCPPort : nil,
-                udpPort: usesSeparatePorts ? storedUDPPort : nil,
-                uplink: uplink,
-                downlink: downlink,
-                multiplex: (uplink == .tcp || downlink == .tcp) && decodedMultiplex,
-                morph: decodedMorph,
-                serverName: (explicitSNI?.isEmpty == false && explicitSNI != "none" ? explicitSNI : nil) ?? serverAddress
-            ))
-
-        case .vless:
-            outbound = .vless(try VLESSConfiguration(from: decoder))
-
-        case .hysteria:
-            let congestionControl = try container.decodeIfPresent(HysteriaCongestionControl.self, forKey: .hysteriaCongestionControl) ?? .brutal
-            let rawUp = try container.decodeIfPresent(Int.self, forKey: .hysteriaUploadMbps)
-                ?? HysteriaCongestionControl.uploadMbpsDefault
-            let rawDown = try container.decodeIfPresent(Int.self, forKey: .hysteriaDownloadMbps)
-                ?? HysteriaCongestionControl.downloadMbpsDefault
-            let obfsType = try container.decodeIfPresent(String.self, forKey: .hysteriaObfs)
-            let obfsPassword = try container.decodeIfPresent(String.self, forKey: .hysteriaObfsPassword)
-            let obfsMin = try container.decodeIfPresent(Int.self, forKey: .hysteriaObfsMinPacketSize)
-            let obfsMax = try container.decodeIfPresent(Int.self, forKey: .hysteriaObfsMaxPacketSize)
-            let explicitSNI = try container.decodeIfPresent(String.self, forKey: .hysteriaSNI)
-            outbound = .hysteria(
-                password: try container.decodeIfPresent(String.self, forKey: .hysteriaPassword) ?? "",
-                congestionControl: congestionControl,
-                uploadMbps: HysteriaCongestionControl.clampUploadMbps(rawUp),
-                downloadMbps: HysteriaCongestionControl.clampDownloadMbps(rawDown),
-                obfuscation: HysteriaObfuscation.make(
-                    type: obfsType,
-                    password: obfsPassword,
-                    geckoMinPacketSize: obfsMin,
-                    geckoMaxPacketSize: obfsMax
-                ),
-                sni: (explicitSNI?.isEmpty == false ? explicitSNI! : serverAddress)
-            )
-            
-        case .sudoku:
-            outbound = .sudoku(try container.decode(SudokuConfiguration.self, forKey: .sudoku))
-            
-        case .trojan:
-            let password = try container.decodeIfPresent(String.self, forKey: .trojanPassword) ?? ""
-            // TLS is mandatory; fall back to SNI=serverAddress so partial configs decode cleanly.
-            let tlsConfiguration = try container.decodeIfPresent(TLSConfiguration.self, forKey: .trojanTLS)
-                ?? TLSConfiguration(serverName: serverAddress)
-            outbound = .trojan(password: password, securityLayer: .tls(tlsConfiguration))
-
-        case .anytls:
-            let password = try container.decodeIfPresent(String.self, forKey: .anytlsPassword) ?? ""
-            // Stored unclamped so the JSON round-trips exactly; AnyTLSMultiplexerPool clamps at use time.
-            let idleCheckInterval = try container.decodeIfPresent(Int.self, forKey: .anytlsIdleCheckInterval) ?? 30
-            let idleTimeout  = try container.decodeIfPresent(Int.self, forKey: .anytlsIdleTimeout) ?? 30
-            let minIdleSession = try container.decodeIfPresent(Int.self, forKey: .anytlsMinIdleSession) ?? 0
-            let tlsConfiguration = try container.decodeIfPresent(TLSConfiguration.self, forKey: .anytlsTLS)
-                ?? TLSConfiguration(serverName: serverAddress)
-            outbound = .anytls(
-                password: password,
-                idleCheckInterval: idleCheckInterval,
-                idleTimeout: idleTimeout,
-                minIdleSession: minIdleSession,
-                securityLayer: .tls(tlsConfiguration)
-            )
-
-        case .shadowsocks:
-            outbound = .shadowsocks(
-                password: try container.decodeIfPresent(String.self, forKey: .ssPassword) ?? "",
-                method: try container.decodeIfPresent(String.self, forKey: .ssMethod) ?? ""
-            )
-            
-        case .socks5:
-            outbound = .socks5(
-                username: try container.decodeIfPresent(String.self, forKey: .socks5Username),
-                password: try container.decodeIfPresent(String.self, forKey: .socks5Password)
-            )
-
-        case .rfc:
-            let securityTag = try container.decodeIfPresent(String.self, forKey: .rfcSecurity) ?? "tls"
-            let securityLayer: GenericSecurityLayer
-            if securityTag == "none" {
-                securityLayer = .none
-            } else {
-                securityLayer = .tls(
-                    try container.decodeIfPresent(TLSConfiguration.self, forKey: .rfcTLS)
-                        ?? TLSConfiguration(serverName: serverAddress, alpn: RFCProtocol.defaultALPN)
-                )
-            }
-            outbound = .rfc(
-                username: try container.decodeIfPresent(String.self, forKey: .rfcUsername),
-                password: try container.decodeIfPresent(String.self, forKey: .rfcPassword),
-                securityLayer: securityLayer
+        if let outbound = try container.decodeIfPresent(Outbound.self, forKey: .outbound) {
+            self.outbound = outbound
+        } else {
+            self.outbound = try Outbound(
+                legacyFrom: decoder,
+                serverAddress: serverAddress,
+                serverPort: serverPort
             )
         }
-
-        serverPort = decodedServerPort
 
         chain = try container.decodeIfPresent([ProxyConfiguration].self, forKey: .chain)
         deletedAt = try container.decodeIfPresent(Date.self, forKey: .deletedAt)
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? deletedAt ?? .distantPast
     }
-    
+
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
 
@@ -564,77 +397,7 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
         try container.encodeIfPresent(resolvedIP, forKey: .resolvedIP)
         try container.encodeIfPresent(subscriptionId, forKey: .subscriptionId)
 
-        try container.encode(outboundProtocol, forKey: .outboundProtocol)
-        
-        switch outbound {
-        case .nowhere(let configuration):
-            try container.encode(id, forKey: .uuid)
-            try container.encode("none", forKey: .encryption)
-            try container.encode(configuration.key, forKey: .nowhereKey)
-            try container.encodeIfPresent(configuration.tcpPort, forKey: .nowhereTCPPort)
-            try container.encodeIfPresent(configuration.udpPort, forKey: .nowhereUDPPort)
-            try container.encode(configuration.uplink.rawValue, forKey: .up)
-            try container.encode(configuration.downlink.rawValue, forKey: .down)
-            try container.encode(configuration.multiplex, forKey: .mux)
-            try container.encode(configuration.morph, forKey: .morph)
-            try container.encode(configuration.serverName, forKey: .nowhereSNI)
-        case .vless(let configuration):
-            try configuration.encode(to: encoder)
-        case .hysteria(let password, let congestionControl, let uploadMbps, let downloadMbps, let obfuscation, let sni):
-            try container.encode(id, forKey: .uuid)
-            try container.encode("none", forKey: .encryption)
-            try container.encode(password, forKey: .hysteriaPassword)
-            try container.encode(congestionControl, forKey: .hysteriaCongestionControl)
-            try container.encode(uploadMbps, forKey: .hysteriaUploadMbps)
-            try container.encode(downloadMbps, forKey: .hysteriaDownloadMbps)
-            if let obfuscation {
-                try container.encode(obfuscation.typeTag, forKey: .hysteriaObfs)
-                try container.encode(obfuscation.password, forKey: .hysteriaObfsPassword)
-                if case .gecko(_, let minPacketSize, let maxPacketSize) = obfuscation {
-                    try container.encode(minPacketSize, forKey: .hysteriaObfsMinPacketSize)
-                    try container.encode(maxPacketSize, forKey: .hysteriaObfsMaxPacketSize)
-                }
-            }
-            try container.encode(sni, forKey: .hysteriaSNI)
-        case .sudoku(let configuration):
-            try container.encode(id, forKey: .uuid)
-            try container.encode("none", forKey: .encryption)
-            try container.encode(configuration, forKey: .sudoku)
-        case .trojan(let password, let securityLayer):
-            let tls = securityLayer.tlsConfiguration ?? TLSConfiguration(serverName: serverAddress)
-            try container.encode(id, forKey: .uuid)
-            try container.encode("none", forKey: .encryption)
-            try container.encode(password, forKey: .trojanPassword)
-            try container.encode(tls, forKey: .trojanTLS)
-        case .anytls(let password, let idleCheckInterval, let idleTimeout, let minIdleSession, let securityLayer):
-            let tls = securityLayer.tlsConfiguration ?? TLSConfiguration(serverName: serverAddress)
-            try container.encode(id, forKey: .uuid)
-            try container.encode("none", forKey: .encryption)
-            try container.encode(password, forKey: .anytlsPassword)
-            try container.encode(idleCheckInterval, forKey: .anytlsIdleCheckInterval)
-            try container.encode(idleTimeout, forKey: .anytlsIdleTimeout)
-            try container.encode(minIdleSession, forKey: .anytlsMinIdleSession)
-            try container.encode(tls, forKey: .anytlsTLS)
-        case .shadowsocks(let password, let method):
-            try container.encode(id, forKey: .uuid)
-            try container.encode("none", forKey: .encryption)
-            try container.encode(password, forKey: .ssPassword)
-            try container.encode(method, forKey: .ssMethod)
-        case .socks5(let username, let password):
-            try container.encode(id, forKey: .uuid)
-            try container.encode("none", forKey: .encryption)
-            try container.encodeIfPresent(username, forKey: .socks5Username)
-            try container.encodeIfPresent(password, forKey: .socks5Password)
-        case .rfc(let username, let password, let securityLayer):
-            try container.encode(id, forKey: .uuid)
-            try container.encode("none", forKey: .encryption)
-            try container.encodeIfPresent(username, forKey: .rfcUsername)
-            try container.encodeIfPresent(password, forKey: .rfcPassword)
-            try container.encode(securityLayer.tag, forKey: .rfcSecurity)
-            if let tls = securityLayer.tlsConfiguration {
-                try container.encode(tls, forKey: .rfcTLS)
-            }
-        }
+        try container.encode(outbound, forKey: .outbound)
 
         try container.encodeIfPresent(chain, forKey: .chain)
         try container.encode(updatedAt, forKey: .updatedAt)

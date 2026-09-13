@@ -223,20 +223,20 @@ nonisolated struct ClashProxyParser {
         let downString = getString(node, key: "down")
         let hasBandwidth = (upString?.isEmpty == false) || (downString?.isEmpty == false)
         let congestionControl: HysteriaCongestionControl = hasBandwidth ? .brutal : .bbr
-        let uploadMbps = HysteriaCongestionControl.clampUploadMbps(parseBandwidthMbps(upString, default: HysteriaCongestionControl.uploadMbpsDefault))
-        let downloadMbps = HysteriaCongestionControl.clampDownloadMbps(parseBandwidthMbps(downString, default: HysteriaCongestionControl.downloadMbpsDefault))
 
         return ProxyConfiguration(
             name: basics.name,
             serverAddress: basics.server,
             serverPort: basics.port,
             outbound: .hysteria(
-                password: password,
-                congestionControl: congestionControl,
-                uploadMbps: uploadMbps,
-                downloadMbps: downloadMbps,
-                obfuscation: obfuscation,
-                sni: sni
+                HysteriaConfiguration(
+                    password: password,
+                    congestionControl: congestionControl,
+                    uploadMbps: parseBandwidthMbps(upString, default: HysteriaCongestionControl.uploadMbpsDefault),
+                    downloadMbps: parseBandwidthMbps(downString, default: HysteriaCongestionControl.downloadMbpsDefault),
+                    obfuscation: obfuscation,
+                    serverName: sni
+                )
             )
         )
     }
@@ -334,7 +334,7 @@ nonisolated struct ClashProxyParser {
             name: basics.name,
             serverAddress: basics.server,
             serverPort: basics.port,
-            outbound: .trojan(password: password, securityLayer: .tls(tlsConfiguration))
+            outbound: .trojan(TrojanConfiguration(password: password, tls: tlsConfiguration))
         )
     }
 
@@ -345,9 +345,9 @@ nonisolated struct ClashProxyParser {
 
         let password = getString(node, key: "password") ?? ""
 
-        let idleCheckInterval = getInt(node, key: "idle-session-check-interval") ?? 30
-        let idleTimeout = getInt(node, key: "idle-session-timeout") ?? 30
-        let minIdleSession = getInt(node, key: "min-idle-session") ?? 0
+        let idleCheckInterval = getInt(node, key: "idle-session-check-interval") ?? AnyTLSConfiguration.defaultIdleCheckInterval
+        let idleTimeout = getInt(node, key: "idle-session-timeout") ?? AnyTLSConfiguration.defaultIdleTimeout
+        let minIdleSession = getInt(node, key: "min-idle-session") ?? AnyTLSConfiguration.defaultMinIdleSession
 
         let ech = echSettings(node)
 
@@ -364,11 +364,13 @@ nonisolated struct ClashProxyParser {
             serverAddress: basics.server,
             serverPort: basics.port,
             outbound: .anytls(
-                password: password,
-                idleCheckInterval: idleCheckInterval,
-                idleTimeout: idleTimeout,
-                minIdleSession: minIdleSession,
-                securityLayer: .tls(tlsConfiguration)
+                AnyTLSConfiguration(
+                    password: password,
+                    idleCheckInterval: idleCheckInterval,
+                    idleTimeout: idleTimeout,
+                    minIdleSession: minIdleSession,
+                    securityLayer: .tls(tlsConfiguration)
+                )
             )
         )
     }
@@ -392,7 +394,7 @@ nonisolated struct ClashProxyParser {
             name: basics.name,
             serverAddress: basics.server,
             serverPort: basics.port,
-            outbound: .shadowsocks(password: password, method: cipher)
+            outbound: .shadowsocks(ShadowsocksConfiguration(password: password, method: cipher))
         )
     }
 
@@ -407,8 +409,10 @@ nonisolated struct ClashProxyParser {
             serverAddress: basics.server,
             serverPort: basics.port,
             outbound: .socks5(
-                username: getString(node, key: "username"),
-                password: getString(node, key: "password")
+                SOCKS5Configuration(
+                    username: getString(node, key: "username"),
+                    password: getString(node, key: "password")
+                )
             )
         )
     }
@@ -440,9 +444,11 @@ nonisolated struct ClashProxyParser {
             serverAddress: basics.server,
             serverPort: basics.port,
             outbound: .rfc(
-                username: username,
-                password: getString(node, key: "password"),
-                securityLayer: securityLayer
+                RFCConfiguration(
+                    username: username,
+                    password: getString(node, key: "password"),
+                    securityLayer: securityLayer
+                )
             )
         )
     }

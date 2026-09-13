@@ -9,8 +9,8 @@ import Foundation
 
 extension ProxyClient {
     func connectWithTrojan(_ request: ProxyRequest) async throws -> ProxyConnection {
-        guard case .trojan(let password, let securityLayer) = configuration.outbound, !password.isEmpty,
-              let tlsConfig = securityLayer.tlsConfiguration else {
+        guard case .trojan(let trojan) = configuration.outbound, !trojan.password.isEmpty,
+              let tlsConfig = trojan.tlsConfiguration else {
             throw AnywhereError.proxy(.trojan, .protocolViolation(detail: "Trojan password not set"))
         }
 
@@ -24,7 +24,7 @@ extension ProxyClient {
         }
 
         let tlsProxyConnection = TLSProxyConnection(tlsConnection: tlsConnection)
-        return try await wrapTrojan(over: tlsProxyConnection, password: password, request: request)
+        return try await wrapTrojan(over: tlsProxyConnection, password: trojan.password, request: request)
     }
     
     private func wrapTrojan(

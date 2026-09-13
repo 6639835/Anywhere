@@ -37,8 +37,8 @@ nonisolated final class RFCMultiplexerRegistry: Sendable {
     func unseal() { state.withLock { $0.sealed = false } }
     
     func pool(for configuration: ProxyConfiguration) -> RFCMultiplexerPool? {
-        guard case .rfc(_, _, let securityLayer) = configuration.outbound,
-              let tls = securityLayer.tlsConfiguration else {
+        guard case .rfc(let rfc) = configuration.outbound,
+              let tls = rfc.tlsConfiguration else {
             return nil
         }
 

@@ -1188,12 +1188,12 @@ struct ProxyEditorView: View {
             break
         case .vless:
             break
-        case .hysteria(let password, let congestionControl, let uploadMbps, let downloadMbps, let obfuscation, let sni):
-            hysteriaPassword = password
-            hysteriaCC = congestionControl
-            hysteriaUploadMbpsText = String(uploadMbps)
-            hysteriaDownloadMbpsText = String(downloadMbps)
-            if let obfuscation {
+        case .hysteria(let configuration):
+            hysteriaPassword = configuration.password
+            hysteriaCC = configuration.congestionControl
+            hysteriaUploadMbpsText = String(configuration.uploadMbps)
+            hysteriaDownloadMbpsText = String(configuration.downloadMbps)
+            if let obfuscation = configuration.obfuscation {
                 hysteriaObfuscationType = obfuscation.typeTag
                 hysteriaObfuscationPassword = obfuscation.password
                 if case .gecko(_, let minPacketSize, let maxPacketSize) = obfuscation {
@@ -1201,48 +1201,48 @@ struct ProxyEditorView: View {
                     hysteriaObfuscationMaxText = String(maxPacketSize)
                 }
             }
-            hysteriaSNI = sni
-        case .sudoku(let sudoku):
-            sudokuKey = sudoku.key
-            sudokuAEADMethod = sudoku.aeadMethod
-            sudokuPaddingMinText = String(sudoku.paddingMin)
-            sudokuPaddingMaxText = String(sudoku.paddingMax)
-            sudokuASCIIMode = sudoku.asciiMode
-            sudokuCustomTablesText = sudoku.customTables.joined(separator: ",")
-            sudokuEnablePureDownlink = sudoku.enablePureDownlink
-            sudokuHTTPMaskDisable = sudoku.httpMask.disable
-            sudokuHTTPMaskMode = sudoku.httpMask.mode
-            sudokuHTTPMaskTLS = sudoku.httpMask.tls
-            sudokuHTTPMaskHost = sudoku.httpMask.host
-            sudokuHTTPMaskPathRoot = sudoku.httpMask.pathRoot
-            sudokuMultiplex = sudoku.multiplex
-        case .trojan(let password, let securityLayer):
-            let tls = securityLayer.tlsConfiguration ?? TLSConfiguration(serverName: "")
-            trojanPassword = password
+            hysteriaSNI = configuration.serverName
+        case .sudoku(let configuration):
+            sudokuKey = configuration.key
+            sudokuAEADMethod = configuration.aeadMethod
+            sudokuPaddingMinText = String(configuration.paddingMin)
+            sudokuPaddingMaxText = String(configuration.paddingMax)
+            sudokuASCIIMode = configuration.asciiMode
+            sudokuCustomTablesText = configuration.customTables.joined(separator: ",")
+            sudokuEnablePureDownlink = configuration.enablePureDownlink
+            sudokuHTTPMaskDisable = configuration.httpMask.disable
+            sudokuHTTPMaskMode = configuration.httpMask.mode
+            sudokuHTTPMaskTLS = configuration.httpMask.tls
+            sudokuHTTPMaskHost = configuration.httpMask.host
+            sudokuHTTPMaskPathRoot = configuration.httpMask.pathRoot
+            sudokuMultiplex = configuration.multiplex
+        case .trojan(let configuration):
+            let tls = configuration.tlsConfiguration ?? TLSConfiguration(serverName: "")
+            trojanPassword = configuration.password
             trojanSNI = tls.serverName
             trojanALPN = tls.alpn?.joined(separator: ",") ?? ""
             trojanECHEnabled = tls.echEnabled
             trojanECHConfig = tls.echConfig ?? ""
             trojanFingerprint = tls.fingerprint
-        case .anytls(let password, _, _, _, let securityLayer):
-            let tls = securityLayer.tlsConfiguration ?? TLSConfiguration(serverName: "")
-            anytlsPassword = password
+        case .anytls(let configuration):
+            let tls = configuration.tlsConfiguration ?? TLSConfiguration(serverName: "")
+            anytlsPassword = configuration.password
             anytlsSNI = tls.serverName
             anytlsALPN = tls.alpn?.joined(separator: ",") ?? ""
             anytlsECHEnabled = tls.echEnabled
             anytlsECHConfig = tls.echConfig ?? ""
             anytlsFingerprint = tls.fingerprint
-        case .shadowsocks(let password, let method):
-            ssPassword = password
-            ssMethod = method
-        case .socks5(let user, let pass):
-            socks5Username = user ?? ""
-            socks5Password = pass ?? ""
-        case .rfc(let username, let password, let securityLayer):
-            rfcUsername = username ?? ""
-            rfcPassword = password ?? ""
-            rfcSecurity = securityLayer.tag
-            if let tls = securityLayer.tlsConfiguration {
+        case .shadowsocks(let configuration):
+            ssPassword = configuration.password
+            ssMethod = configuration.method
+        case .socks5(let configuration):
+            socks5Username = configuration.username ?? ""
+            socks5Password = configuration.password ?? ""
+        case .rfc(let configuration):
+            rfcUsername = configuration.username ?? ""
+            rfcPassword = configuration.password ?? ""
+            rfcSecurity = configuration.securityLayer.tag
+            if let tls = configuration.tlsConfiguration {
                 rfcSNI = tls.serverName
                 rfcALPN = tls.alpn?.joined(separator: ",") ?? ""
                 rfcECHEnabled = tls.echEnabled
@@ -1320,80 +1320,6 @@ struct ProxyEditorView: View {
             parsedUUID = uuid
         }
         
-        var vlessTLSConfiguration: TLSConfiguration?
-        if isVLESSTLS {
-            let sni = vlessTLSSNI.isEmpty ? serverAddress : vlessTLSSNI
-            let alpn: [String]? = vlessTLSALPN.isEmpty ? nil : vlessTLSALPN.split(separator: ",").map { String($0) }
-            let ech = vlessTLSECHConfig.trimmingCharacters(in: .whitespacesAndNewlines)
-            vlessTLSConfiguration = TLSConfiguration(
-                serverName: sni,
-                alpn: alpn,
-                echEnabled: vlessTLSECHEnabled,
-                echConfig: vlessTLSECHEnabled && !ech.isEmpty ? ech : nil,
-                fingerprint: vlessFingerprint
-            )
-        }
-        
-        var vlessRealityConfiguration: RealityConfiguration?
-        if isVLESSReality {
-            guard let publicKey = Data(base64URLEncoded: vlessRealityPublicKey) else { return }
-            let shortId = Data(hexString: vlessRealityShortId) ?? Data()
-            vlessRealityConfiguration = RealityConfiguration(
-                serverName: vlessRealitySNI,
-                publicKey: publicKey,
-                shortId: shortId,
-                fingerprint: vlessFingerprint
-            )
-        }
-        
-        var vlessWebSocketConfiguration: WebSocketConfiguration?
-        if vlessTransport == "ws" {
-            let host = vlessWebSocketHost.isEmpty ? serverAddress : vlessWebSocketHost
-            let path = vlessWebSocketPath.isEmpty ? "/" : vlessWebSocketPath
-            vlessWebSocketConfiguration = WebSocketConfiguration(host: host, path: path)
-        }
-        
-        var vlessHTTPUpgradeConfiguration: HTTPUpgradeConfiguration?
-        if vlessTransport == "httpupgrade" {
-            vlessHTTPUpgradeConfiguration = HTTPUpgradeConfiguration(host: vlessHTTPUpgradeHost.isEmpty ? serverAddress : vlessHTTPUpgradeHost, path: vlessHTTPUpgradePath.isEmpty ? "/" : vlessHTTPUpgradePath)
-        }
-        
-        var vlessXHTTPConfiguration: XHTTPConfiguration?
-        if vlessTransport == "xhttp" {
-            let host = vlessXHTTPHost.isEmpty ? serverAddress : vlessXHTTPHost
-            let mode = XHTTPMode(rawValue: vlessXHTTPMode) ?? .auto
-            var parameters: [String: String] = [
-                "host": host,
-                "path": vlessXHTTPPath,
-                "mode": mode.rawValue
-            ]
-            // Merge advanced fields and the detached download source so neither clobbers the other.
-            var extra: [String: Any] = [:]
-            if !vlessXHTTPExtra.isEmpty, let data = vlessXHTTPExtra.data(using: .utf8),
-               let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                extra = parsed
-            }
-            if let download = xhttpDownloadSettingsDict() {
-                extra["downloadSettings"] = download
-            }
-            if !extra.isEmpty,
-               let data = try? JSONSerialization.data(withJSONObject: extra, options: [.sortedKeys]),
-               let json = String(data: data, encoding: .utf8) {
-                parameters["extra"] = json
-            }
-            vlessXHTTPConfiguration = XHTTPConfiguration.parse(from: parameters, serverAddress: serverAddress)
-        }
-        
-        var vlessGRPCConfiguration: GRPCConfiguration?
-        if vlessTransport == "grpc" {
-            vlessGRPCConfiguration = GRPCConfiguration(
-                serviceName: vlessGRPCServiceName,
-                authority: vlessGRPCAuthority,
-                multiMode: vlessGRPCMode == "multi",
-                userAgent: vlessGRPCUserAgent
-            )
-        }
-        
         let bareAddress = serverAddress.hasPrefix("[") && serverAddress.hasSuffix("]")
         ? String(serverAddress.dropFirst().dropLast())
         : serverAddress
@@ -1413,6 +1339,79 @@ struct ProxyEditorView: View {
                 serverName: sni
             ))
         case .vless:
+            var vlessTLSConfiguration: TLSConfiguration?
+            if isVLESSTLS {
+                let sni = vlessTLSSNI.isEmpty ? serverAddress : vlessTLSSNI
+                let alpn: [String]? = vlessTLSALPN.isEmpty ? nil : vlessTLSALPN.split(separator: ",").map { String($0) }
+                let ech = vlessTLSECHConfig.trimmingCharacters(in: .whitespacesAndNewlines)
+                vlessTLSConfiguration = TLSConfiguration(
+                    serverName: sni,
+                    alpn: alpn,
+                    echEnabled: vlessTLSECHEnabled,
+                    echConfig: vlessTLSECHEnabled && !ech.isEmpty ? ech : nil,
+                    fingerprint: vlessFingerprint
+                )
+            }
+            
+            var vlessRealityConfiguration: RealityConfiguration?
+            if isVLESSReality {
+                guard let publicKey = Data(base64URLEncoded: vlessRealityPublicKey) else { return }
+                let shortId = Data(hexString: vlessRealityShortId) ?? Data()
+                vlessRealityConfiguration = RealityConfiguration(
+                    serverName: vlessRealitySNI,
+                    publicKey: publicKey,
+                    shortId: shortId,
+                    fingerprint: vlessFingerprint
+                )
+            }
+            
+            var vlessWebSocketConfiguration: WebSocketConfiguration?
+            if vlessTransport == "ws" {
+                let host = vlessWebSocketHost.isEmpty ? serverAddress : vlessWebSocketHost
+                let path = vlessWebSocketPath.isEmpty ? "/" : vlessWebSocketPath
+                vlessWebSocketConfiguration = WebSocketConfiguration(host: host, path: path)
+            }
+            
+            var vlessHTTPUpgradeConfiguration: HTTPUpgradeConfiguration?
+            if vlessTransport == "httpupgrade" {
+                vlessHTTPUpgradeConfiguration = HTTPUpgradeConfiguration(host: vlessHTTPUpgradeHost.isEmpty ? serverAddress : vlessHTTPUpgradeHost, path: vlessHTTPUpgradePath.isEmpty ? "/" : vlessHTTPUpgradePath)
+            }
+            
+            var vlessXHTTPConfiguration: XHTTPConfiguration?
+            if vlessTransport == "xhttp" {
+                let host = vlessXHTTPHost.isEmpty ? serverAddress : vlessXHTTPHost
+                let mode = XHTTPMode(rawValue: vlessXHTTPMode) ?? .auto
+                var parameters: [String: String] = [
+                    "host": host,
+                    "path": vlessXHTTPPath,
+                    "mode": mode.rawValue
+                ]
+                var extra: [String: Any] = [:]
+                if !vlessXHTTPExtra.isEmpty, let data = vlessXHTTPExtra.data(using: .utf8),
+                   let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    extra = parsed
+                }
+                if let download = xhttpDownloadSettingsDict() {
+                    extra["downloadSettings"] = download
+                }
+                if !extra.isEmpty,
+                   let data = try? JSONSerialization.data(withJSONObject: extra, options: [.sortedKeys]),
+                   let json = String(data: data, encoding: .utf8) {
+                    parameters["extra"] = json
+                }
+                vlessXHTTPConfiguration = XHTTPConfiguration.parse(from: parameters, serverAddress: serverAddress)
+            }
+            
+            var vlessGRPCConfiguration: GRPCConfiguration?
+            if vlessTransport == "grpc" {
+                vlessGRPCConfiguration = GRPCConfiguration(
+                    serviceName: vlessGRPCServiceName,
+                    authority: vlessGRPCAuthority,
+                    multiMode: vlessGRPCMode == "multi",
+                    userAgent: vlessGRPCUserAgent
+                )
+            }
+            
             let vlessXrayTransportLayer: XrayTransportLayer
             if let vlessWebSocketConfiguration { vlessXrayTransportLayer = .ws(vlessWebSocketConfiguration) }
             else if let vlessHTTPUpgradeConfiguration { vlessXrayTransportLayer = .httpUpgrade(vlessHTTPUpgradeConfiguration) }
@@ -1435,16 +1434,15 @@ struct ProxyEditorView: View {
                 )
             )
         case .hysteria:
-            let up = HysteriaCongestionControl.clampUploadMbps(Int(hysteriaUploadMbpsText) ?? HysteriaCongestionControl.uploadMbpsDefault)
-            let down = HysteriaCongestionControl.clampDownloadMbps(Int(hysteriaDownloadMbpsText) ?? HysteriaCongestionControl.downloadMbpsDefault)
-            let sni = hysteriaSNI.isEmpty ? bareAddress : hysteriaSNI
             outbound = .hysteria(
-                password: hysteriaPassword,
-                congestionControl: hysteriaCC,
-                uploadMbps: up,
-                downloadMbps: down,
-                obfuscation: hysteriaObfuscationValue,
-                sni: sni
+                HysteriaConfiguration(
+                    password: hysteriaPassword,
+                    congestionControl: hysteriaCC,
+                    uploadMbps: Int(hysteriaUploadMbpsText) ?? HysteriaCongestionControl.uploadMbpsDefault,
+                    downloadMbps: Int(hysteriaDownloadMbpsText) ?? HysteriaCongestionControl.downloadMbpsDefault,
+                    obfuscation: hysteriaObfuscationValue,
+                    serverName: hysteriaSNI.isEmpty ? bareAddress : hysteriaSNI
+                )
             )
         case .sudoku:
             outbound = .sudoku(
@@ -1474,34 +1472,30 @@ struct ProxyEditorView: View {
             let alpn: [String]? = trojanALPN.isEmpty ? nil : trojanALPN.split(separator: ",").map { String($0) }
             let ech = trojanECHConfig.trimmingCharacters(in: .whitespacesAndNewlines)
             outbound = .trojan(
-                password: trojanPassword,
-                securityLayer: .tls(TLSConfiguration(serverName: sni, alpn: alpn, echEnabled: trojanECHEnabled, echConfig: trojanECHEnabled && !ech.isEmpty ? ech : nil, fingerprint: trojanFingerprint))
+                TrojanConfiguration(
+                    password: trojanPassword,
+                    tls: TLSConfiguration(serverName: sni, alpn: alpn, echEnabled: trojanECHEnabled, echConfig: trojanECHEnabled && !ech.isEmpty ? ech : nil, fingerprint: trojanFingerprint)
+                )
             )
         case .anytls:
             let sni = anytlsSNI.isEmpty ? bareAddress : anytlsSNI
             let alpn: [String]? = anytlsALPN.isEmpty ? nil : anytlsALPN.split(separator: ",").map { String($0) }
-            let idleCheckInterval: Int
-            let idleTimeout: Int
-            let minIdleSession: Int
-            if let existing = self.configuration?.outbound, case .anytls(_, let c, let t, let m, _) = existing {
-                idleCheckInterval = c; idleTimeout = t; minIdleSession = m
-            } else {
-                idleCheckInterval = 30; idleTimeout = 30; minIdleSession = 0
-            }
             let ech = anytlsECHConfig.trimmingCharacters(in: .whitespacesAndNewlines)
             outbound = .anytls(
-                password: anytlsPassword,
-                idleCheckInterval: idleCheckInterval,
-                idleTimeout: idleTimeout,
-                minIdleSession: minIdleSession,
-                securityLayer: .tls(TLSConfiguration(serverName: sni, alpn: alpn, echEnabled: anytlsECHEnabled, echConfig: anytlsECHEnabled && !ech.isEmpty ? ech : nil, fingerprint: anytlsFingerprint))
+                AnyTLSConfiguration(
+                    password: anytlsPassword,
+                    securityLayer: .tls(TLSConfiguration(serverName: sni, alpn: alpn, echEnabled: anytlsECHEnabled, echConfig: anytlsECHEnabled && !ech.isEmpty ? ech : nil, fingerprint: anytlsFingerprint)),
+                    inheritingTuningFrom: self.configuration?.anytls
+                )
             )
         case .shadowsocks:
-            outbound = .shadowsocks(password: ssPassword, method: ssMethod)
+            outbound = .shadowsocks(ShadowsocksConfiguration(password: ssPassword, method: ssMethod))
         case .socks5:
             outbound = .socks5(
-                username: socks5Username.isEmpty ? nil : socks5Username,
-                password: socks5Password.isEmpty ? nil : socks5Password
+                SOCKS5Configuration(
+                    username: socks5Username.isEmpty ? nil : socks5Username,
+                    password: socks5Password.isEmpty ? nil : socks5Password
+                )
             )
         case .rfc:
             let securityLayer: GenericSecurityLayer
@@ -1520,9 +1514,11 @@ struct ProxyEditorView: View {
                 securityLayer = .none
             }
             outbound = .rfc(
-                username: rfcUsername.isEmpty ? nil : rfcUsername,
-                password: rfcPassword.isEmpty ? nil : rfcPassword,
-                securityLayer: securityLayer
+                RFCConfiguration(
+                    username: rfcUsername.isEmpty ? nil : rfcUsername,
+                    password: rfcPassword.isEmpty ? nil : rfcPassword,
+                    securityLayer: securityLayer
+                )
             )
         }
         

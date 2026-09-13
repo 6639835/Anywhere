@@ -146,16 +146,18 @@ nonisolated extension ProxyConfiguration {
             name: fragment ?? "Nowhere",
             serverAddress: parsedEndpoint.host,
             serverPort: parsedEndpoint.tcpPort ?? parsedEndpoint.udpPort!,
-            outbound: .nowhere(NowhereConfiguration(
-                key: key,
-                tcpPort: usesSeparatePorts ? parsedEndpoint.tcpPort : nil,
-                udpPort: usesSeparatePorts ? parsedEndpoint.udpPort : nil,
-                uplink: uplink,
-                downlink: downlink,
-                multiplex: multiplex,
-                morph: morph,
-                serverName: sni
-            ))
+            outbound: .nowhere(
+                NowhereConfiguration(
+                    key: key,
+                    tcpPort: usesSeparatePorts ? parsedEndpoint.tcpPort : nil,
+                    udpPort: usesSeparatePorts ? parsedEndpoint.udpPort : nil,
+                    uplink: uplink,
+                    downlink: downlink,
+                    multiplex: multiplex,
+                    morph: morph,
+                    serverName: sni
+                )
+            )
         )
     }
 
@@ -280,8 +282,6 @@ nonisolated extension ProxyConfiguration {
         let rawUp = parameters["upmbps"].flatMap { Int($0) }
         let rawDown = parameters["downmbps"].flatMap { Int($0) }
         let congestionControl: HysteriaCongestionControl = (rawUp != nil || rawDown != nil) ? .brutal : .bbr
-        let uploadMbps = HysteriaCongestionControl.clampUploadMbps(rawUp ?? HysteriaCongestionControl.uploadMbpsDefault)
-        let downloadMbps = HysteriaCongestionControl.clampDownloadMbps(rawDown ?? HysteriaCongestionControl.downloadMbpsDefault)
 
         let obfuscation: HysteriaObfuscation?
         if let obfsType = parameters["obfs"], !obfsType.isEmpty {
@@ -301,12 +301,14 @@ nonisolated extension ProxyConfiguration {
             serverAddress: body.host,
             serverPort: body.port,
             outbound: .hysteria(
-                password: password,
-                congestionControl: congestionControl,
-                uploadMbps: uploadMbps,
-                downloadMbps: downloadMbps,
-                obfuscation: obfuscation,
-                sni: sni
+                HysteriaConfiguration(
+                    password: password,
+                    congestionControl: congestionControl,
+                    uploadMbps: rawUp ?? HysteriaCongestionControl.uploadMbpsDefault,
+                    downloadMbps: rawDown ?? HysteriaCongestionControl.downloadMbpsDefault,
+                    obfuscation: obfuscation,
+                    serverName: sni
+                )
             )
         )
     }
@@ -391,7 +393,7 @@ nonisolated extension ProxyConfiguration {
             name: body.fragment ?? "Untitled",
             serverAddress: body.host,
             serverPort: body.port,
-            outbound: .trojan(password: password, securityLayer: .tls(tlsConfiguration))
+            outbound: .trojan(TrojanConfiguration(password: password, tls: tlsConfiguration))
         )
     }
     
@@ -402,20 +404,18 @@ nonisolated extension ProxyConfiguration {
         let password = body.userInfo.removingPercentEncoding ?? body.userInfo
         let tlsConfiguration = standardTLSConfiguration(from: parameters, host: body.host)
 
-        let idleCheckInterval = parameters["ici"].flatMap { Int($0) } ?? 30
-        let idleTimeout = parameters["it"].flatMap  { Int($0) } ?? 30
-        let minIdleSession = parameters["mis"].flatMap { Int($0) } ?? 0
-
         return ProxyConfiguration(
             name: body.fragment ?? "Untitled",
             serverAddress: body.host,
             serverPort: body.port,
             outbound: .anytls(
-                password: password,
-                idleCheckInterval: idleCheckInterval,
-                idleTimeout: idleTimeout,
-                minIdleSession: minIdleSession,
-                securityLayer: .tls(tlsConfiguration)
+                AnyTLSConfiguration(
+                    password: password,
+                    idleCheckInterval: parameters["ici"].flatMap { Int($0) } ?? AnyTLSConfiguration.defaultIdleCheckInterval,
+                    idleTimeout: parameters["it"].flatMap { Int($0) } ?? AnyTLSConfiguration.defaultIdleTimeout,
+                    minIdleSession: parameters["mis"].flatMap { Int($0) } ?? AnyTLSConfiguration.defaultMinIdleSession,
+                    securityLayer: .tls(tlsConfiguration)
+                )
             )
         )
     }
@@ -468,7 +468,7 @@ nonisolated extension ProxyConfiguration {
             name: fragmentName ?? "Untitled",
             serverAddress: host,
             serverPort: port,
-            outbound: .shadowsocks(password: password, method: method)
+            outbound: .shadowsocks(ShadowsocksConfiguration(password: password, method: method))
         )
     }
     
@@ -532,7 +532,7 @@ nonisolated extension ProxyConfiguration {
             name: fragmentName ?? "Untitled",
             serverAddress: host,
             serverPort: port,
-            outbound: .socks5(username: username, password: password)
+            outbound: .socks5(SOCKS5Configuration(username: username, password: password))
         )
     }
 
@@ -549,7 +549,7 @@ nonisolated extension ProxyConfiguration {
                 name: fragment ?? "Untitled",
                 serverAddress: host,
                 serverPort: port,
-                outbound: .rfc(username: username, password: password, securityLayer: securityLayer)
+                outbound: .rfc(RFCConfiguration(username: username, password: password, securityLayer: securityLayer))
             )
         }
     }

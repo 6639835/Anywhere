@@ -24,7 +24,7 @@ nonisolated final class HysteriaClient: Sendable {
     }
     private static let registry = Mutex(RegistryState())
 
-    static func shared(for configuration: HysteriaConfiguration) -> HysteriaClient {
+    static func shared(for configuration: HysteriaRuntimeConfiguration) -> HysteriaClient {
         let key = Key(
             host: configuration.proxyHost,
             port: configuration.proxyPort,
@@ -46,7 +46,7 @@ nonisolated final class HysteriaClient: Sendable {
     }
 
     static func chained(
-        configuration: HysteriaConfiguration,
+        configuration: HysteriaRuntimeConfiguration,
         transport: QUICDatagramTransport
     ) -> HysteriaClient {
         HysteriaClient(
@@ -58,7 +58,7 @@ nonisolated final class HysteriaClient: Sendable {
     }
 
     static func acquireChained(
-        configuration: HysteriaConfiguration,
+        configuration: HysteriaRuntimeConfiguration,
         chainSignature: String,
         builder: @escaping @Sendable () async throws -> (QUICDatagramTransport, [ProxyClient])
     ) async throws -> HysteriaClient {
@@ -94,7 +94,7 @@ nonisolated final class HysteriaClient: Sendable {
 
     private static func buildChained(
         key: Key,
-        configuration: HysteriaConfiguration,
+        configuration: HysteriaRuntimeConfiguration,
         buildEpoch: UInt64,
         builder: @escaping @Sendable () async throws -> (QUICDatagramTransport, [ProxyClient])
     ) async throws -> HysteriaClient {
@@ -128,7 +128,7 @@ nonisolated final class HysteriaClient: Sendable {
         return try outcome.get()
     }
 
-    private let configuration: HysteriaConfiguration
+    private let configuration: HysteriaRuntimeConfiguration
     private let transport: QUICDatagramTransport?
     private let poolKey: Key?
 
@@ -157,7 +157,7 @@ nonisolated final class HysteriaClient: Sendable {
     private let state: Mutex<SessionState>
 
     private init(
-        configuration: HysteriaConfiguration,
+        configuration: HysteriaRuntimeConfiguration,
         transport: QUICDatagramTransport?,
         chainHolders: [ProxyClient],
         poolKey: Key?
