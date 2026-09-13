@@ -50,7 +50,7 @@ nonisolated struct Subscription: Identifiable, Codable, SoftDeletable {
         iconLight = try container.decodeIfPresent(Data.self, forKey: .iconLight)
         iconDark = try container.decodeIfPresent(Data.self, forKey: .iconDark)
         isNameCustomized = (try? container.decode(Bool.self, forKey: .isNameCustomized)) ?? false
-        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? deletedAt ?? .distantPast
         deletedAt = try container.decodeIfPresent(Date.self, forKey: .deletedAt)
+        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? deletedAt ?? .distantPast
     }
 }

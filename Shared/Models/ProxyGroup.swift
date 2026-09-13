@@ -33,7 +33,7 @@ nonisolated struct ProxyGroup: Identifiable, Codable, Hashable, SoftDeletable {
         name = try container.decode(String.self, forKey: .name)
         kind = try container.decode(Kind.self, forKey: .kind)
         memberIds = try container.decodeIfPresent([UUID].self, forKey: .memberIds) ?? []
-        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? deletedAt ?? .distantPast
         deletedAt = try container.decodeIfPresent(Date.self, forKey: .deletedAt)
+        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? deletedAt ?? .distantPast
     }
 }

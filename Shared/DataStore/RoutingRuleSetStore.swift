@@ -50,8 +50,8 @@ nonisolated struct CustomRoutingRuleSet: Codable, Identifiable, Equatable, SoftD
         self.subscriptionURL = try container.decodeIfPresent(URL.self, forKey: .subscriptionURL)
         self.iconLight = try container.decodeIfPresent(Data.self, forKey: .iconLight)
         self.iconDark = try container.decodeIfPresent(Data.self, forKey: .iconDark)
-        self.updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? deletedAt ?? .distantPast
         self.deletedAt = try container.decodeIfPresent(Date.self, forKey: .deletedAt)
+        self.updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? deletedAt ?? .distantPast
     }
 
     func encode(to encoder: Encoder) throws {

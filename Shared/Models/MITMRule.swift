@@ -563,8 +563,8 @@ nonisolated struct MITMRuleSet: Codable, Equatable, Identifiable, SoftDeletable 
         self.subscriptionURL = try c.decodeIfPresent(URL.self, forKey: .subscriptionURL)
         self.iconLight = try c.decodeIfPresent(Data.self, forKey: .iconLight)
         self.iconDark = try c.decodeIfPresent(Data.self, forKey: .iconDark)
-        self.updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? deletedAt ?? .distantPast
         self.deletedAt = try c.decodeIfPresent(Date.self, forKey: .deletedAt)
+        self.updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? deletedAt ?? .distantPast
     }
 
     func encode(to encoder: Encoder) throws {

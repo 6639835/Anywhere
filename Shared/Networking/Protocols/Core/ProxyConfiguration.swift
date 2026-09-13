@@ -550,8 +550,8 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
         serverPort = decodedServerPort
 
         chain = try container.decodeIfPresent([ProxyConfiguration].self, forKey: .chain)
-        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? deletedAt ?? .distantPast
         deletedAt = try container.decodeIfPresent(Date.self, forKey: .deletedAt)
+        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? deletedAt ?? .distantPast
     }
     
     func encode(to encoder: Encoder) throws {

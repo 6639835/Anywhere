@@ -26,8 +26,8 @@ nonisolated struct ProxyChain: Identifiable, Codable, Hashable, SoftDeletable {
         id = try container.decode(UUID.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
         proxyIds = try container.decode([UUID].self, forKey: .proxyIds)
-        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? deletedAt ?? .distantPast
         deletedAt = try container.decodeIfPresent(Date.self, forKey: .deletedAt)
+        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? deletedAt ?? .distantPast
     }
     
     func resolveProxies(from pool: [ProxyConfiguration]) -> [ProxyConfiguration] {
