@@ -13,7 +13,7 @@ nonisolated extension Outbound {
     private enum LegacyCodingKeys: String, CodingKey {
         case serverPort
         case outboundProtocol
-        case nowhereKey, nowhereSNI, nowhereALPN, nowhereTCPPort, nowhereUDPPort, up, down, mux, morph
+        case nowhereKey, nowhereSNI, nowhereTCPPort, nowhereUDPPort, up, down, mux, morph
         case hysteriaPassword, hysteriaCongestionControl, hysteriaUploadMbps, hysteriaDownloadMbps
         case hysteriaObfs, hysteriaObfsPassword, hysteriaObfsMinPacketSize, hysteriaObfsMaxPacketSize
         case hysteriaSNI
@@ -33,7 +33,6 @@ nonisolated extension Outbound {
         switch `protocol` {
         case .nowhere:
             let explicitSNI = try container.decodeIfPresent(String.self, forKey: .nowhereSNI)
-            _ = try container.decodeIfPresent(String.self, forKey: .nowhereALPN)
             let hasCarrierPorts = container.contains(.nowhereTCPPort) || container.contains(.nowhereUDPPort)
             let storedTCPPort = try container.decodeIfPresent(UInt16.self, forKey: .nowhereTCPPort)
             let storedUDPPort = try container.decodeIfPresent(UInt16.self, forKey: .nowhereUDPPort)
