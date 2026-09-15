@@ -176,14 +176,7 @@ nonisolated struct ProxyConfiguration: Identifiable, Hashable, Codable, Sendable
     
     var genericSecurityLayer: GenericSecurityLayer {
         switch outbound {
-        case .nowhere(let configuration):   .tls(
-            TLSConfiguration(
-                serverName: configuration.serverName,
-                alpn: [NowhereProtocol.defaultALPN],
-                minVersion: .tls13,
-                maxVersion: .tls13
-            )
-        )
+        case .nowhere(let configuration):   configuration.securityLayer
         case .trojan(let configuration):    configuration.securityLayer
         case .anytls(let configuration):    configuration.securityLayer
         case .rfc(let configuration):       configuration.securityLayer

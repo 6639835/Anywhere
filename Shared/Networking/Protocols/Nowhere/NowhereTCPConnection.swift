@@ -95,7 +95,7 @@ actor NowhereTCPConnection: ProxyConnection, NowhereTerminationObservable {
             throw AnywhereError.proxy(.nowhere, .notReady)
         }
 
-        let client = TLSClient(configuration: configuration.tcpTLSConfiguration)
+        let client = TLSClient(configuration: configuration.tlsConfiguration)
         let adoptedClient = lifecycle.withLock { state -> Bool in
             guard state.phase == .opening else { return false }
             state.tlsClient = client
@@ -137,10 +137,10 @@ actor NowhereTCPConnection: ProxyConnection, NowhereTerminationObservable {
                 )
             }
 
-            guard configuration.acceptsNegotiatedALPN(record.negotiatedALPN) else {
+            guard record.negotiatedALPN == NowhereProtocol.applicationProtocol else {
                 record.cancel()
                 throw AnywhereError.tls(.handshakeFailed(
-                    detail: "Portal did not negotiate the configured ALPN"
+                    detail: "Portal did not negotiate the Nowhere application protocol"
                 ))
             }
             let exporter = try record.exportKeyingMaterial(

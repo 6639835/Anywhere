@@ -11,7 +11,7 @@ import Darwin
 
 nonisolated enum NowhereProtocol {
     static let closeErrCodeOK: UInt64 = 0x100
-    static let defaultALPN = "nw2"
+    static let applicationProtocol = "nw2"
     static let authFrameSize = 32
     static let flowHeaderSize = 5
     static let flowResultSize = 1

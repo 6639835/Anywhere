@@ -158,8 +158,8 @@ nonisolated final class NowhereSession: Sendable {
         let quic = QUICConnection(
             host: configuration.proxyHost,
             port: try configuration.proxyPort(for: .udp),
-            serverName: configuration.tls.serverName,
-            alpn: [configuration.alpn],
+            serverName: configuration.serverName,
+            alpn: [NowhereProtocol.applicationProtocol],
             datagramsEnabled: true,
             tuning: .nowhere,
             obfuscator: morphObfuscator,
