@@ -113,7 +113,7 @@ nonisolated final class TLSRecordConnection: Sendable {
         var receivedCloseNotify = false
     }
 
-    private let receiveState = Mutex<ReceiveState>(ReceiveState(buffer: Data(capacity: 256 * 1024)))
+    private let receiveState = Mutex<ReceiveState>(ReceiveState(buffer: Data()))
 
     // MARK: Initialization
 
@@ -309,7 +309,8 @@ nonisolated final class TLSRecordConnection: Sendable {
             return nil
         }
 
-        var batchedData = Data(capacity: state.buffer.count)
+        var batchedData = Data()
+        var batchedRecords = 0
         var hasError: Error? = nil
         var recordsProcessed = 0
         var bytesPendingReplay: Data? = nil
@@ -352,7 +353,12 @@ nonisolated final class TLSRecordConnection: Sendable {
                     let decrypted = try decryptTLSRecord(ciphertext: body, header: header, ingress: ingress, receive: &state)
                     consumed += totalLen
                     if !decrypted.isEmpty {
-                        batchedData.append(decrypted)
+                        if batchedRecords == 0 {
+                            batchedData = decrypted.startIndex == 0 ? decrypted : Data(decrypted)
+                        } else {
+                            batchedData.append(decrypted)
+                        }
+                        batchedRecords += 1
                     }
                     if state.receivedCloseNotify { break }
                 } catch {

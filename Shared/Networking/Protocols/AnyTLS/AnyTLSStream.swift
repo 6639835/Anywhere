@@ -11,12 +11,22 @@ import Synchronization
 nonisolated private let logger = AnywhereLogger(category: "AnyTLSStream")
 
 actor AnyTLSStream {
+    static let downlinkHighWaterMark = 128 * 1024
+    static let downlinkLowWaterMark  = 32 * 1024
+
     nonisolated let sid: UInt32
     private weak var multiplexer: AnyTLSMultiplexer?
     
     private nonisolated let cachedTLSVersion: TLSVersion?
     
     private let inbox = AsyncInbox<Data>()
+    
+    private struct Downlink {
+        var queuedBytes = 0
+        var ended = false
+        var gate = H2FlowGate()
+    }
+    private nonisolated let downlink = Mutex(Downlink())
 
     private enum Phase: PhaseTransitionable {
         case open
@@ -65,7 +75,12 @@ actor AnyTLSStream {
     // MARK: - Receive
 
     func receiveRaw() async throws -> Data? {
-        try await inbox.next()
+        guard let data = try await inbox.next() else { return nil }
+        downlink.withLock { link in
+            link.queuedBytes = max(0, link.queuedBytes - data.count)
+            if link.queuedBytes <= Self.downlinkLowWaterMark { link.gate.wakeAll() }
+        }
+        return data
     }
 
     // MARK: - Cancel
@@ -78,6 +93,7 @@ actor AnyTLSStream {
             return (true, hook)
         }
         guard outcome.proceed else { return }
+        releaseDownlink()
         inbox.finish()
         outcome.hook?()
         Task { await self.removeFromMultiplexer() }
@@ -88,7 +104,24 @@ actor AnyTLSStream {
     }
     
     nonisolated func deliverData(_ data: Data) {
+        downlink.withLock { $0.queuedBytes += data.count }
         inbox.yield(data)
+    }
+    
+    nonisolated func awaitDownlinkCredit() async {
+        await H2FlowGate.park {
+            downlink.withLock { link in
+                guard !link.ended, link.queuedBytes >= Self.downlinkHighWaterMark else { return nil }
+                return link.gate.enroll()
+            }
+        }
+    }
+    
+    private nonisolated func releaseDownlink() {
+        downlink.withLock { link in
+            link.ended = true
+            link.gate.wakeAll()
+        }
     }
     
     nonisolated func deliverClose(error: Error?) {
@@ -99,6 +132,7 @@ actor AnyTLSStream {
             return (true, hook)
         }
         guard outcome.proceed else { return }
+        releaseDownlink()
         if let error { inbox.finish(throwing: error) } else { inbox.finish() }
         outcome.hook?()
     }

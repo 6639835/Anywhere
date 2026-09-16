@@ -214,18 +214,16 @@ nonisolated final class AnyTLSMultiplexer: Multiplexer, Sendable {
 
     func writeData(sid: UInt32, data: Data) async throws {
         guard !data.isEmpty else { return }
-        // cmdPSH carries at most 65535 bytes per frame; chunk longer payloads.
         let max = Int(UInt16.max)
         if data.count <= max {
             let frame = AnyTLSProtocol.encodeFrame(cmd: AnyTLSProtocol.cmdPSH, sid: sid, payload: data)
             try await writeConnLocked(frame)
             return
         }
-        var offset = 0
-        while offset < data.count {
-            let end = min(offset + max, data.count)
-            let chunk = data.subdata(in: offset..<end)
-            let frame = AnyTLSProtocol.encodeFrame(cmd: AnyTLSProtocol.cmdPSH, sid: sid, payload: chunk)
+        var offset = data.startIndex
+        while offset < data.endIndex {
+            let end = Swift.min(offset + max, data.endIndex)
+            let frame = AnyTLSProtocol.encodeFrame(cmd: AnyTLSProtocol.cmdPSH, sid: sid, payload: data[offset..<end])
             try await writeConnLocked(frame)
             offset = end
         }
@@ -293,21 +291,22 @@ nonisolated final class AnyTLSMultiplexer: Multiplexer, Sendable {
     private static func applyPaddingSchedule(pending: Data, schedule: [Int]) -> Data {
         if schedule.isEmpty { return pending }
         var output = Data(capacity: pending.count + 64)
-        var remaining = pending
+        var cursor = pending.startIndex
+        let end = pending.endIndex
         scheduleLoop: for size in schedule {
+            let remaining = end - cursor
             if size == AnyTLSPaddingScheme.checkMark {
-                if remaining.isEmpty { break scheduleLoop }
+                if remaining == 0 { break scheduleLoop }
                 continue
             }
             let want = size
-            if remaining.count > want {
-                output.append(remaining.prefix(want))
-                remaining.removeFirst(want)
-            } else if !remaining.isEmpty {
-                let payloadLeft = remaining.count
-                output.append(remaining)
-                remaining.removeAll(keepingCapacity: false)
-                let paddingLen = want - payloadLeft - AnyTLSProtocol.headerSize
+            if remaining > want {
+                output.append(pending[cursor..<(cursor + want)])
+                cursor += want
+            } else if remaining > 0 {
+                output.append(pending[cursor..<end])
+                cursor = end
+                let paddingLen = want - remaining - AnyTLSProtocol.headerSize
                 if paddingLen > 0 {
                     let waste = AnyTLSProtocol.encodeFrame(
                         cmd: AnyTLSProtocol.cmdWaste,
@@ -325,8 +324,8 @@ nonisolated final class AnyTLSMultiplexer: Multiplexer, Sendable {
                 output.append(waste)
             }
         }
-        if !remaining.isEmpty {
-            output.append(remaining)
+        if cursor < end {
+            output.append(pending[cursor..<end])
         }
         return output
     }
@@ -371,13 +370,21 @@ nonisolated final class AnyTLSMultiplexer: Multiplexer, Sendable {
         let dispatched: [(cmd: UInt8, sid: UInt32, payload: Data)] = state.withLock { state in
             state.receiveBuffer.appendCompacting(data)
             var dispatched: [(cmd: UInt8, sid: UInt32, payload: Data)] = []
-            while state.receiveBuffer.count >= AnyTLSProtocol.headerSize {
-                guard let header = AnyTLSProtocol.decodeFrameHeader(state.receiveBuffer) else { break }
+            let base = state.receiveBuffer.startIndex
+            var consumed = 0
+            while state.receiveBuffer.count - consumed >= AnyTLSProtocol.headerSize {
+                guard let header = AnyTLSProtocol.decodeFrameHeader(state.receiveBuffer, at: consumed) else { break }
                 let totalLen = AnyTLSProtocol.headerSize + Int(header.length)
-                if state.receiveBuffer.count < totalLen { break }
-                let payload = state.receiveBuffer.subdata(in: AnyTLSProtocol.headerSize..<totalLen)
-                state.receiveBuffer.removeSubrange(0..<totalLen)
+                if state.receiveBuffer.count - consumed < totalLen { break }
+                let payloadStart = base + consumed + AnyTLSProtocol.headerSize
+                let payload = Data(state.receiveBuffer[payloadStart..<(base + consumed + totalLen)])
+                consumed += totalLen
                 dispatched.append((header.cmd, header.sid, payload))
+            }
+            if consumed > 0 {
+                state.receiveBuffer = consumed == state.receiveBuffer.count
+                    ? Data()
+                    : Data(state.receiveBuffer[(base + consumed)...])
             }
             return dispatched
         }
@@ -391,10 +398,12 @@ nonisolated final class AnyTLSMultiplexer: Multiplexer, Sendable {
         switch cmd {
         case AnyTLSProtocol.cmdPSH:
             let stream = state.withLock { $0.streams[sid] }
-            if stream == nil {
+            guard let stream else {
                 logger.warning("[AnyTLSMultiplexer] cmdPSH for unknown sid=\(sid) (\(payload.count)B) — dropping")
+                break
             }
-            stream?.deliverData(payload)
+            stream.deliverData(payload)
+            await stream.awaitDownlinkCredit()
 
         case AnyTLSProtocol.cmdSYNACK:
             let stream = state.withLock { (state: inout State) -> AnyTLSStream? in

@@ -100,7 +100,7 @@ nonisolated final class MultiplexerPool<S: Multiplexer & Sendable, Extra: Sendab
             for key in Array(state.multiplexers.keys) {
                 guard let multiplexers = state.multiplexers[key] else { continue }
                 var idle = multiplexers.filter { $0.activeStreamCount == 0 && !$0.isClosed }
-                if policy.minIdleKeep > 0 {
+                if policy.minIdleKeep > 0 || policy.softCapPerKey > 0 {
                     idle.sort { (state.lastActivity[ObjectIdentifier($0)] ?? 0) > (state.lastActivity[ObjectIdentifier($1)] ?? 0) }
                 }
                 for (index, multiplexer) in idle.enumerated() {
@@ -108,8 +108,9 @@ nonisolated final class MultiplexerPool<S: Multiplexer & Sendable, Extra: Sendab
                         state.lastActivity[ObjectIdentifier(multiplexer)] = now
                         continue
                     }
+                    let surplus = policy.softCapPerKey > 0 && index >= policy.softCapPerKey
                     let age = now - (state.lastActivity[ObjectIdentifier(multiplexer)] ?? now)
-                    if age > policy.idleTimeout {
+                    if surplus || age > policy.idleTimeout {
                         state.multiplexers[key]?.removeAll { $0 === multiplexer }
                         state.lastActivity.removeValue(forKey: ObjectIdentifier(multiplexer))
                         toClose.append(multiplexer)

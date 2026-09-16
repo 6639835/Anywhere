@@ -8,47 +8,34 @@
 import Foundation
 import CommonCrypto
 
-/// AnyTLS wire-format constants and pure-data helpers.
-///
-/// After the TLS handshake the client sends:
-///
-///     [SHA256(password) (32 B)] [paddingLen (BE u16)] [paddingLen × 0x00]
-///
-/// followed by length-prefixed frames:
-///
-///     [cmd (1 B)] [sid (BE u32)] [length (BE u16)] [length B payload]
 nonisolated enum AnyTLSProtocol {
 
     // MARK: - Frame commands
 
-    static let cmdWaste:               UInt8 = 0   // padding
-    static let cmdSYN:                 UInt8 = 1   // open stream
-    static let cmdPSH:                 UInt8 = 2   // data on stream
-    static let cmdFIN:                 UInt8 = 3   // close stream
-    static let cmdSettings:            UInt8 = 4   // client→server StringMap
-    static let cmdAlert:               UInt8 = 5   // UTF-8 error string
-    static let cmdUpdatePaddingScheme: UInt8 = 6   // server→client raw scheme
-    static let cmdSYNACK:              UInt8 = 7   // server confirms stream open (v2+)
-    static let cmdHeartRequest:        UInt8 = 8   // keepalive ping
-    static let cmdHeartResponse:       UInt8 = 9   // keepalive pong
-    static let cmdServerSettings:      UInt8 = 10  // server→client StringMap (v2+)
-
-    /// 1 (cmd) + 4 (sid) + 2 (length).
+    static let cmdWaste:               UInt8 = 0
+    static let cmdSYN:                 UInt8 = 1
+    static let cmdPSH:                 UInt8 = 2
+    static let cmdFIN:                 UInt8 = 3
+    static let cmdSettings:            UInt8 = 4
+    static let cmdAlert:               UInt8 = 5
+    static let cmdUpdatePaddingScheme: UInt8 = 6
+    static let cmdSYNACK:              UInt8 = 7
+    static let cmdHeartRequest:        UInt8 = 8
+    static let cmdHeartResponse:       UInt8 = 9
+    static let cmdServerSettings:      UInt8 = 10
+    
     static let headerSize: Int = 7
 
     // MARK: - Client identity
-
-    /// Sent verbatim in cmdSettings.
+    
     static let clientVersion: String = "sing-anytls/0.0.11"
 
     // MARK: - UoT
-
-    /// UDP-over-TCP magic destination for v2.
+    
     static let uotMagicAddress: String = "sp.v2.udp-over-tcp.arpa"
 
     // MARK: - Password
-
-    /// Returns SHA256(password) — the 32-byte token the server uses to identify the user.
+    
     static func passwordHash(_ password: String) -> Data {
         let bytes = Array(password.utf8)
         var digest = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
@@ -60,9 +47,8 @@ nonisolated enum AnyTLSProtocol {
         return Data(digest)
     }
 
-    // MARK: - Address (SocksaddrSerializer: 0x01 IPv4, 0x03 FQDN, 0x04 IPv6)
-
-    /// Encodes `atyp(1) + addr + port(BE u16)`.
+    // MARK: - Address
+    
     static func encodeAddrPort(host: String, port: UInt16) -> Data {
         var data = Data()
         if let ipv4 = parseIPv4(host) {
@@ -83,18 +69,22 @@ nonisolated enum AnyTLSProtocol {
     }
 
     // MARK: - Frame header
-
-    /// Builds a 7-byte frame header, big-endian.
+    
     static func encodeFrameHeader(cmd: UInt8, sid: UInt32, length: UInt16) -> Data {
         var data = Data(count: headerSize)
-        data[0] = cmd
-        data[1] = UInt8((sid >> 24) & 0xFF)
-        data[2] = UInt8((sid >> 16) & 0xFF)
-        data[3] = UInt8((sid >>  8) & 0xFF)
-        data[4] = UInt8( sid        & 0xFF)
-        data[5] = UInt8((length >> 8) & 0xFF)
-        data[6] = UInt8( length       & 0xFF)
+        writeFrameHeader(into: &data, at: data.startIndex, cmd: cmd, sid: sid, length: length)
         return data
+    }
+
+    private static func writeFrameHeader(into data: inout Data, at index: Data.Index,
+                                         cmd: UInt8, sid: UInt32, length: UInt16) {
+        data[index]     = cmd
+        data[index + 1] = UInt8((sid >> 24) & 0xFF)
+        data[index + 2] = UInt8((sid >> 16) & 0xFF)
+        data[index + 3] = UInt8((sid >>  8) & 0xFF)
+        data[index + 4] = UInt8( sid        & 0xFF)
+        data[index + 5] = UInt8((length >> 8) & 0xFF)
+        data[index + 6] = UInt8( length       & 0xFF)
     }
 
     static func decodeFrameHeader(_ bytes: Data, at offset: Int = 0) -> (cmd: UInt8, sid: UInt32, length: UInt16)? {
@@ -111,22 +101,22 @@ nonisolated enum AnyTLSProtocol {
 
     static func encodeFrame(cmd: UInt8, sid: UInt32, payload: Data) -> Data {
         let length = UInt16(min(payload.count, Int(UInt16.max)))
-        var frame = encodeFrameHeader(cmd: cmd, sid: sid, length: length)
+        var frame = Data(capacity: headerSize + Int(length))
+        frame.append(contentsOf: repeatElement(0, count: headerSize))
+        writeFrameHeader(into: &frame, at: frame.startIndex, cmd: cmd, sid: sid, length: length)
         frame.append(payload.prefix(Int(length)))
         return frame
     }
 
-    // MARK: - StringMap (cmdSettings / cmdServerSettings payload)
-
-    /// Encodes `key=value\n...`; keys sorted for determinism.
+    // MARK: - StringMap
+    
     static func encodeStringMap(_ map: [String: String]) -> Data {
         let lines = map
             .sorted { $0.key < $1.key }
             .map { "\($0.key)=\($0.value)" }
         return Data(lines.joined(separator: "\n").utf8)
     }
-
-    /// Decodes `key=value\n...`; lines without `=` are skipped.
+    
     static func decodeStringMap(_ data: Data) -> [String: String] {
         guard let text = String(data: data, encoding: .utf8) else { return [:] }
         var map: [String: String] = [:]
