@@ -12,7 +12,7 @@ nonisolated private let logger = AnywhereLogger(category: "UDPPlane")
 
 nonisolated enum UDPPlaneCommand {
     case setMultiplexerPool((any UDPMultiplexerPool)?)
-    case reclaim(replacementMultiplexerPool: (any UDPMultiplexerPool)?)
+    case reclaim
 }
 
 actor UDPPlane {
@@ -52,8 +52,8 @@ actor UDPPlane {
         switch command {
         case .setMultiplexerPool(let pool):
             multiplexerPoolStorage = pool
-        case .reclaim(let replacement):
-            reclaim(replacementMultiplexerPool: replacement)
+        case .reclaim:
+            reclaim()
         }
     }
 
@@ -61,6 +61,7 @@ actor UDPPlane {
 
     func feed(_ packets: [Data]) async {
         for packet in packets {
+            guard stack.publishedPhase.load(ordering: .relaxed) == .running else { return }
             if let datagram = UDPPacket.parse(packet) {
                 await handleInboundUDP(datagram)
             }
@@ -523,9 +524,9 @@ actor UDPPlane {
 
     // MARK: - Reclaim
 
-    private func reclaim(replacementMultiplexerPool: (any UDPMultiplexerPool)?) {
+    private func reclaim() {
         multiplexerPoolStorage?.closeAll()
-        multiplexerPoolStorage = replacementMultiplexerPool
+        multiplexerPoolStorage = nil
         purgeShadowsocksUDPSessions()
         pendingResolutions.removeAll()
         pendingResolutionCapWarned = false

@@ -143,10 +143,13 @@ actor TunnelStack {
     var deferredRestartScheduled = false
     var pendingConfigurationSwitch: ProxyConfiguration?
     var pendingSuspend = false
-    var pendingWake = false
     var stopWaiters: [CheckedContinuation<Void, Never>] = []
 
     var lwipTick: BridgeTimer?
+    
+    var dataPlaneUp = false
+    
+    nonisolated let udpCleanupResume = AsyncInbox<Void>(capacity: 1)
 
     let byteCounts = Mutex(TrafficByteCounts())
     nonisolated func addBytesIn(_ n: Int64, target: RouteTarget) {
@@ -370,8 +373,6 @@ actor TunnelStack {
         publishUDPConfig()
         publishReflector()
         publishOutboundRoutingContext(configuration: configuration)
-
-        submitPlaneCommand(.setMultiplexerPool(configuration.makeUDPMultiplexerPool()))
 
         if proxyMode == .rule {
             if let precompiledRouting {

@@ -50,6 +50,23 @@ extension TunnelStack {
             await Task.yield()
         }
     }
+    
+    func flushOutputBuffer() {
+        guard let packetFlow else { return }
+        let (packets, protocols, releases) = outputBuffer.withLock { buffer in
+            defer {
+                buffer.packets.removeAll(keepingCapacity: true)
+                buffer.protocols.removeAll(keepingCapacity: true)
+                buffer.releases.removeAll(keepingCapacity: true)
+            }
+            return (buffer.packets, buffer.protocols, buffer.releases)
+        }
+        guard !packets.isEmpty else { return }
+        packetFlow.writePackets(packets, withProtocols: protocols)
+        for release in releases {
+            release.run()
+        }
+    }
 
     nonisolated func enqueueOutbound(_ packet: Data, isIPv6: Bool) {
         let proto: NSNumber = isIPv6 ? Self.ipv6Proto : Self.ipv4Proto
@@ -111,7 +128,7 @@ extension TunnelStack {
     }
 
     func feedLwipBatch(_ packets: [Data]) {
-        guard !packets.isEmpty else { return }
+        guard dataPlaneUp, !packets.isEmpty else { return }
         lwip_bridge_input_batch_begin()
         for packet in packets {
             packet.withUnsafeBytes { buffer in
@@ -148,6 +165,11 @@ extension TunnelStack {
         let interval = TimeInterval(TunnelConstants.udpCleanupIntervalSec)
         var lastRun = MonotonicClock.now
         while !Task.isCancelled {
+            guard publishedPhase.load(ordering: .relaxed) == .running else {
+                guard (try? await udpCleanupResume.next()) != nil else { return }
+                lastRun = MonotonicClock.now
+                continue
+            }
             let remaining = interval - (MonotonicClock.now - lastRun)
             if remaining > 0 {
                 try? await Task.sleep(
@@ -156,9 +178,7 @@ extension TunnelStack {
                 )
                 continue
             }
-            if self.publishedPhase.load(ordering: .relaxed).isActive {
-                await udpPlane.cleanup()
-            }
+            await udpPlane.cleanup()
             lastRun = MonotonicClock.now
         }
     }

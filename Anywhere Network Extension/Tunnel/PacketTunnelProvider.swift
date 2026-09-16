@@ -401,14 +401,14 @@ nonisolated class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Senda
     override func sleep() async {
         statsRecorder.noteSleep()
         await enqueueLifecycleEvent { [tunnelStack] in
-            await tunnelStack.suspendOutbound()
+            await tunnelStack.suspend()
         }.value
     }
 
     override func wake() {
         statsRecorder.noteWake()
         enqueueLifecycleEvent { [tunnelStack] in
-            await tunnelStack.handleWake()
+            await tunnelStack.wake()
         }
     }
 

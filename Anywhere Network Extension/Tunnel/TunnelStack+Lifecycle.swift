@@ -21,7 +21,6 @@ extension TunnelStack {
         TransportReclaim.unsealAll()
         pendingConfigurationSwitch = nil
         pendingSuspend = false
-        pendingWake = false
         makeFreshDutyCycleStreams()
         AnywhereLogger.installLogSink { [weak self] message, level in
             let logLevel: TunnelLogLevel
@@ -53,10 +52,7 @@ extension TunnelStack {
             return false
         }
         configureRuntime(for: configuration, precompiledRouting: precompiledRouting)
-
-        installLwipCallbacks()
-        lwip_bridge_init()
-        startLwipTick()
+        bringUpDataPlane(configuration: configuration)
 
         rootTask = Task { await self.run(packetFlow: packetFlow, udpPlane: udpPlane) }
 
@@ -70,10 +66,7 @@ extension TunnelStack {
         }
         if pendingSuspend {
             pendingSuspend = false
-            suspendOutbound()
-        } else if pendingWake {
-            pendingWake = false
-            invalidateOutboundState(configuration: configuration)
+            suspend()
         }
         return true
     }
@@ -123,7 +116,7 @@ extension TunnelStack {
 
     private func finishShutdown() {
         TransportReclaim.sealAll()
-        shutdownInternal()
+        tearDownDataPlane(tcp: .graceful)
         purgeOutputBuffer()
         lwip_bridge_set_host_ctx(nil)
         OutboundConnector.setRoutingContext(nil)
@@ -169,36 +162,30 @@ extension TunnelStack {
         restartStack(configuration: newConfiguration)
     }
 
-    func handleWake() {
-        pendingSuspend = false
-        guard phase.isActive, let configuration else {
-            if phase == .starting { pendingWake = true }
-            return
-        }
-        logger.info("[VPN] Device wake")
-        if phase == .suspended {
-            transition(to: .running)
-        }
-        invalidateOutboundState(configuration: configuration)
-    }
-
-    func suspendOutbound() {
+    // MARK: - Sleep / Wake
+    
+    func suspend() {
         switch phase {
         case .running:
-            logger.info("[VPN] Path offline/sleep")
+            logger.info("[VPN] Device sleep")
             transition(to: .suspended)
+            tearDownDataPlane(tcp: .abortive)
+            flushOutputBuffer()
         case .starting:
-            logger.info("[VPN] Path offline/sleep during start")
+            logger.info("[VPN] Device sleep during start")
             pendingSuspend = true
-            pendingWake = false
-            return
-        case .suspended:
-            logger.info("[VPN] Path offline/sleep while suspended")
-        case .idle, .stopping, .stopped:
+        case .suspended, .idle, .stopping, .stopped:
             return
         }
-        reclaimAllOutboundPools()
-        reclaimInstanceTransports(rebuildMultiplexerPool: false)
+    }
+    
+    func wake() {
+        pendingSuspend = false
+        guard phase == .suspended, let configuration else { return }
+        logger.info("[VPN] Device wake")
+        transition(to: .running)
+        bringUpDataPlane(configuration: configuration)
+        udpCleanupResume.yield(())
     }
 
     func updateNetworkContext(isWiFi: Bool, isCellular: Bool, ssid: String?) {
@@ -214,10 +201,48 @@ extension TunnelStack {
         restartStack(configuration: configuration, revalidateMode: true)
     }
 
-    private func invalidateOutboundState(configuration: ProxyConfiguration) {
-        closeAllActiveTCP()
+    // MARK: - Data plane
+
+    private enum TCPTeardown {
+        case graceful
+        case abortive
+    }
+    
+    private func bringUpDataPlane(configuration: ProxyConfiguration) {
+        guard !dataPlaneUp else {
+            logger.error("[TunnelStack] Data plane already up; bring-up ignored")
+            return
+        }
+        dataPlaneUp = true
+        installLwipCallbacks()
+        lwip_bridge_init()
+        startLwipTick()
+        submitPlaneCommand(.setMultiplexerPool(configuration.makeUDPMultiplexerPool()))
+        logger.debug("[TunnelStack] Data plane up")
+    }
+    
+    private func tearDownDataPlane(tcp: TCPTeardown) {
+        guard dataPlaneUp else { return }
+        dataPlaneUp = false
+
+        lwipTick?.cancel()
+        lwipTick = nil
+
+        purgeOutputBuffer()
+
+        switch tcp {
+        case .graceful: closeAllActiveTCP()
+        case .abortive: abortAllActiveTCP()
+        }
+
         reclaimAllOutboundPools()
-        reclaimInstanceTransports(rebuildMultiplexerPool: true)
+        submitPlaneCommand(.reclaim)
+
+        lwipAbortContext.store(.teardown, ordering: .relaxed)
+        lwip_bridge_shutdown()
+        lwipAbortContext.store(.none, ordering: .relaxed)
+        FlowGauge.publishTCPTable(0)
+        logger.debug("[TunnelStack] Data plane down")
     }
 
     private func closeAllActiveTCP() {
@@ -227,38 +252,19 @@ extension TunnelStack {
         }
     }
 
+    private func abortAllActiveTCP() {
+        lwip_bridge_for_each_tcp { arg in
+            guard let arg else { return }
+            BridgeContext.unretained(arg, as: TCPConnection.self).assumeIsolated { $0.abort() }
+        }
+    }
+
     private func reclaimAllOutboundPools() {
         TransportReclaim.reclaimAll()
         MITMScriptHTTP2Pool.shared.reclaim()
     }
 
-    private func reclaimInstanceTransports(rebuildMultiplexerPool: Bool) {
-        let rebuiltMultiplexerPool: (any UDPMultiplexerPool)?
-        if rebuildMultiplexerPool, let configuration {
-            rebuiltMultiplexerPool = configuration.makeUDPMultiplexerPool()
-        } else {
-            rebuiltMultiplexerPool = nil
-        }
-        submitPlaneCommand(.reclaim(replacementMultiplexerPool: rebuiltMultiplexerPool))
-    }
-
-    private func shutdownInternal() {
-        lwipTick?.cancel()
-        lwipTick = nil
-
-        purgeOutputBuffer()
-
-        closeAllActiveTCP()
-
-        reclaimAllOutboundPools()
-        reclaimInstanceTransports(rebuildMultiplexerPool: false)
-
-        lwipAbortContext.store(.teardown, ordering: .relaxed)
-        lwip_bridge_shutdown()
-        lwipAbortContext.store(.none, ordering: .relaxed)
-        FlowGauge.publishTCPTable(0)
-        logger.debug("[TunnelStack] Shutdown complete")
-    }
+    // MARK: - Restart
 
     private func restartStack(configuration: ProxyConfiguration, revalidateMode: Bool = false) {
         if revalidateMode, deferredRestartScheduled { return }
@@ -304,15 +310,17 @@ extension TunnelStack {
         deferredRestartScheduled = false
         lastRestartTime = MonotonicClock.now
 
-        shutdownInternal()
+        tearDownDataPlane(tcp: .graceful)
 
         connectionRouter.clearRejectMarks()
 
         self.configuration = configuration
         configureRuntime(for: configuration)
-        installLwipCallbacks()
-        lwip_bridge_init()
-        startLwipTick()
+        guard phase == .running else {
+            logger.debug("[TunnelStack] Reconfigured while suspended; data plane returns on wake")
+            return
+        }
+        bringUpDataPlane(configuration: configuration)
         logger.debug("[TunnelStack] Restarted")
     }
 
