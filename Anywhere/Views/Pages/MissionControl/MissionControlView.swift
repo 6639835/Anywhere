@@ -72,6 +72,7 @@ struct MissionControlView: View {
                 }
             }
             .colorScheme(appSettings.homeColorScheme.colorScheme)
+            .toolbarColorScheme(appSettings.homeColorScheme.colorScheme, for: statusBar)
             .toolbarColorScheme(appSettings.homeColorScheme.colorScheme, for: .navigationBar)
             .toolbarColorScheme(appSettings.homeColorScheme.colorScheme, for: .tabBar)
             .onGeometryChange(for: CGFloat.self) { proxy in
@@ -79,6 +80,14 @@ struct MissionControlView: View {
             } action: { height in
                 viewportHeight = height
             }
+        }
+    }
+    
+    private var statusBar: ToolbarPlacement {
+        if #available(iOS 27.0, *) {
+            return ToolbarPlacement.statusBar
+        } else {
+            return ToolbarPlacement.automatic
         }
     }
 }

@@ -49,16 +49,42 @@ struct LaunchpadView: View {
                 
                 VStack(spacing: 0) {
                     VStack(spacing: 20) {
-                        powerButton
-                        statusLabel
+                        PowerButton(
+                            isConnected: isConnected,
+                            isTransitioning: isTransitioning,
+                            isLoading: isLoading,
+                            isDisabled: isLoading
+                                || ((!tunnelController.isManagerReady || isTransitioning)
+                                    && configurationStore.hasConfigurations),
+                            animatesChanges: connectionEffectsEnabled
+                        ) {
+                            guard !isLoading else { return }
+                            if configurationStore.hasConfigurations {
+                                withAnimation(.spring(response: 0.5, dampingFraction: 0.7)) {
+                                    operations.tunnel.toggle()
+                                }
+                            } else {
+                                showingAddSheet = true
+                            }
+                        }
+                        
+                        Text(tunnelController.status.localizedText)
+                            .font(.headline)
+                            .foregroundStyle(.secondary)
                     }
                     .layoutPriority(1)
+                    
                     Rectangle()
                         .fill(.clear)
                         .frame(idealHeight: 100, maxHeight: 100)
-                    configurationCard
-                        .frame(maxWidth: Self.maxControlWidth)
-                        .layoutPriority(1)
+                    
+                    ConfigurationCapsule(
+                        isConnected: isConnected,
+                        showingProxiesPage: $showingProxiesView,
+                        showingAddSheet: $showingAddSheet
+                    )
+                    .frame(maxWidth: Self.maxControlWidth)
+                    .layoutPriority(1)
                 }
                 .padding(.horizontal)
                 .animation(connectionEffectsEnabled ? Animation.bouncy : nil, value: isConnected)
@@ -77,6 +103,7 @@ struct LaunchpadView: View {
                 }
             }
             .colorScheme(appSettings.homeColorScheme.colorScheme)
+            .toolbarColorScheme(appSettings.homeColorScheme.colorScheme, for: statusBar)
             .toolbarColorScheme(appSettings.homeColorScheme.colorScheme, for: .navigationBar)
             .toolbarColorScheme(appSettings.homeColorScheme.colorScheme, for: .tabBar)
             .sheet(isPresented: $showingProxiesView) {
@@ -114,40 +141,13 @@ struct LaunchpadView: View {
             }
         }
     }
-
-    private var powerButton: some View {
-        PowerButton(
-            isConnected: isConnected,
-            isTransitioning: isTransitioning,
-            isLoading: isLoading,
-            isDisabled: isLoading
-                || ((!tunnelController.isManagerReady || isTransitioning)
-                    && configurationStore.hasConfigurations),
-            animatesChanges: connectionEffectsEnabled
-        ) {
-            guard !isLoading else { return }
-            if configurationStore.hasConfigurations {
-                withAnimation(.spring(response: 0.5, dampingFraction: 0.7)) {
-                    operations.tunnel.toggle()
-                }
-            } else {
-                showingAddSheet = true
-            }
+    
+    private var statusBar: ToolbarPlacement {
+        if #available(iOS 27.0, *) {
+            return ToolbarPlacement.statusBar
+        } else {
+            return ToolbarPlacement.automatic
         }
-    }
-
-    private var configurationCard: some View {
-        ConfigurationCapsule(
-            isConnected: isConnected,
-            showingProxiesPage: $showingProxiesView,
-            showingAddSheet: $showingAddSheet
-        )
-    }
-
-    private var statusLabel: some View {
-        Text(tunnelController.status.localizedText)
-            .font(.headline)
-            .foregroundStyle(.secondary)
     }
 }
 
@@ -202,7 +202,7 @@ private struct PowerButton: View {
 
 private struct ConfigurationCapsule: View {
     @Environment(ProxySelection.self) private var selection
-    @Environment(ConfigurationStore.self) private var configStore
+    @Environment(ConfigurationStore.self) private var configurationStore
 
     let isConnected: Bool
     @Binding var showingProxiesPage: Bool
@@ -211,7 +211,7 @@ private struct ConfigurationCapsule: View {
     var body: some View {
         if let configuration = selection.selectedConfiguration {
             selectedCapsule(configuration)
-        } else if configStore.isLoaded {
+        } else if configurationStore.isLoaded {
             emptyCapsule
         } else {
             loadingCapsule
