@@ -50,6 +50,15 @@ nonisolated struct NowhereConfiguration: Hashable, Sendable {
         }
         return (tcpPort, udpPort)
     }
+
+    var securityLayer: GenericSecurityLayer {
+        .tls(TLSConfiguration(
+            serverName: serverName,
+            alpn: [NowhereProtocol.applicationProtocol],
+            minVersion: .tls13,
+            maxVersion: .tls13
+        ))
+    }
 }
 
 nonisolated extension NowhereConfiguration: Codable {
@@ -107,7 +116,7 @@ nonisolated extension NowhereConfiguration: Codable {
     }
 }
 
-nonisolated struct NowhereTransportIdentityKey: Hashable, Sendable {
+nonisolated struct NowhereTransportIdentity: Hashable, Sendable {
     let configurationID: UUID
     let proxyHost: String
     let proxyTCPPort: UInt16?
@@ -117,7 +126,7 @@ nonisolated struct NowhereTransportIdentityKey: Hashable, Sendable {
     let downlink: NowhereNetwork
     let multiplex: Bool
     let morph: Bool
-    let tls: TLSConfiguration
+    let serverName: String
 }
 
 nonisolated struct NowhereRuntimeConfiguration: Hashable, Sendable {
@@ -130,8 +139,7 @@ nonisolated struct NowhereRuntimeConfiguration: Hashable, Sendable {
     let multiplex: Bool
     let morph: Bool
     let sessionID: Data
-    let tls: TLSConfiguration
-    let alpn: String
+    let serverName: String
     let authKey: NowhereProtocol.AuthKey
     let morphKeys: NowhereMorph.Keys?
 
@@ -170,16 +178,15 @@ nonisolated struct NowhereRuntimeConfiguration: Hashable, Sendable {
         self.multiplex = multiplex && (uplink == .tcp || downlink == .tcp)
         self.morph = morph
         self.sessionID = sessionID
-        self.tls = TLSConfiguration(serverName: serverName, alpn: [NowhereProtocol.defaultALPN], minVersion: .tls13, maxVersion: .tls13)
-        self.alpn = NowhereProtocol.defaultALPN
+        self.serverName = serverName
         self.authKey = try NowhereProtocol.deriveAuthKey(sharedKey: key)
         self.morphKeys = morph ? try NowhereMorph.deriveKeys(sharedKey: key) : nil
     }
 
-    var tcpTLSConfiguration: TLSConfiguration {
+    var tlsConfiguration: TLSConfiguration {
         TLSConfiguration(
-            serverName: tls.serverName,
-            alpn: [alpn],
+            serverName: serverName,
+            alpn: [NowhereProtocol.applicationProtocol],
             minVersion: .tls13,
             maxVersion: .tls13,
             insecureSkipVerify: false
@@ -192,10 +199,6 @@ nonisolated struct NowhereRuntimeConfiguration: Hashable, Sendable {
             throw AnywhereError.proxy(.nowhere, .protocolViolation(detail: "Nowhere carrier port unavailable"))
         }
         return port
-    }
-
-    func acceptsNegotiatedALPN(_ negotiated: String) -> Bool {
-        negotiated.utf8.elementsEqual(alpn.utf8)
     }
 }
 
@@ -230,13 +233,13 @@ nonisolated final class NowhereTransportIdentityRegistry: Sendable {
         var activeFlowIDs: Set<UInt32>
     }
 
-    private let states = Mutex<[NowhereTransportIdentityKey: State]>([:])
+    private let states = Mutex<[NowhereTransportIdentity: State]>([:])
 
     init() {}
 
-    func identity(for identityKey: NowhereTransportIdentityKey) throws -> Data {
+    func sessionID(for transportIdentity: NowhereTransportIdentity) throws -> Data {
         try states.withLock { states in
-            if let state = states[identityKey] { return state.sessionID }
+            if let state = states[transportIdentity] { return state.sessionID }
             var bytes = Data(count: 16)
             let status = bytes.withUnsafeMutableBytes { raw -> Int32 in
                 guard let base = raw.baseAddress else { return errSecAllocate }
@@ -245,17 +248,17 @@ nonisolated final class NowhereTransportIdentityRegistry: Sendable {
             guard status == errSecSuccess else {
                 throw AnywhereError.proxy(.nowhere, .connectionClosed(detail: "Failed to generate session ID"))
             }
-            states[identityKey] = State(sessionID: bytes, nextFlowID: 1, activeFlowIDs: [])
+            states[transportIdentity] = State(sessionID: bytes, nextFlowID: 1, activeFlowIDs: [])
             return bytes
         }
     }
 
     func leaseFlowID(
-        for identityKey: NowhereTransportIdentityKey,
+        for transportIdentity: NowhereTransportIdentity,
         sessionID expectedSessionID: Data
     ) throws -> NowhereFlowIDLease {
         let flowID = try states.withLock { states -> UInt32 in
-            guard var state = states[identityKey], state.sessionID == expectedSessionID else {
+            guard var state = states[transportIdentity], state.sessionID == expectedSessionID else {
                 throw AnywhereError.proxy(.nowhere, .streamClosed)
             }
             var candidate = max(state.nextFlowID, 1)
@@ -264,7 +267,7 @@ nonisolated final class NowhereTransportIdentityRegistry: Sendable {
                     state.activeFlowIDs.insert(candidate)
                     state.nextFlowID = candidate &+ 1
                     if state.nextFlowID > NowhereProtocol.maximumFlowID { state.nextFlowID = 1 }
-                    states[identityKey] = state
+                    states[transportIdentity] = state
                     return candidate
                 }
                 candidate &+= 1
@@ -273,19 +276,19 @@ nonisolated final class NowhereTransportIdentityRegistry: Sendable {
             throw AnywhereError.proxy(.nowhere, .connectionClosed(detail: "Nowhere flow ID space exhausted"))
         }
         return NowhereFlowIDLease(flowID: flowID) { [weak self] released in
-            self?.releaseFlowID(released, for: identityKey, sessionID: expectedSessionID)
+            self?.releaseFlowID(released, for: transportIdentity, sessionID: expectedSessionID)
         }
     }
 
     private func releaseFlowID(
         _ flowID: UInt32,
-        for identityKey: NowhereTransportIdentityKey,
+        for transportIdentity: NowhereTransportIdentity,
         sessionID expectedSessionID: Data
     ) {
         states.withLock { states in
-            guard var state = states[identityKey], state.sessionID == expectedSessionID else { return }
+            guard var state = states[transportIdentity], state.sessionID == expectedSessionID else { return }
             state.activeFlowIDs.remove(flowID)
-            states[identityKey] = state
+            states[transportIdentity] = state
         }
     }
 

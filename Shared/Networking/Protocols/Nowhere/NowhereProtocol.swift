@@ -11,7 +11,7 @@ import Darwin
 
 nonisolated enum NowhereProtocol {
     static let closeErrCodeOK: UInt64 = 0x100
-    static let defaultALPN = "nw2"
+    static let applicationProtocol = "nw2"
     static let authFrameSize = 32
     static let flowHeaderSize = 5
     static let flowResultSize = 1
@@ -272,21 +272,6 @@ nonisolated enum NowhereProtocol {
         return output
     }
 
-    static func decodeFlowHeader(_ data: Data) -> FlowHeader? {
-        guard data.count == flowHeaderSize else { return nil }
-        let flags = data.byte(at: 0)
-        guard let role = FlowRole(rawValue: flags & 0x03) else { return nil }
-        let header = FlowHeader(
-            role: role,
-            flowID: data.uint32(at: 1),
-            kind: (flags & 0x04) == 0 ? .tcp : .udp,
-            uplink: (flags & 0x08) == 0 ? .tcp : .udp,
-            downlink: (flags & 0x10) == 0 ? .tcp : .udp,
-            hops: flags >> 5
-        )
-        return (try? header.validate()) == nil ? nil : header
-    }
-
     static func encodeFlowRequest(
         header: FlowHeader,
         target: Target?,
@@ -302,13 +287,6 @@ nonisolated enum NowhereProtocol {
         target?.appendEncoded(to: &output)
         if let initialData, !initialData.isEmpty { output.append(initialData) }
         return output
-    }
-
-    static func encodeFlowResult(_ result: FlowResult) -> Data {
-        switch result {
-        case .ready: return Data([0])
-        case .reject(let code): return Data([code.rawValue])
-        }
     }
 
     static func decodeFlowResult(_ data: Data, offset: Int = 0) -> FlowResult? {
