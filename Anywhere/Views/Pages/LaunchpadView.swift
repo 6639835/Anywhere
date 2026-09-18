@@ -9,8 +9,6 @@ import SwiftUI
 import NetworkExtension
 
 struct LaunchpadView: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(AppSettings.self) private var appSettings
     @Environment(Operations.self) private var operations
     @Environment(TunnelController.self) private var tunnelController
@@ -21,11 +19,6 @@ struct LaunchpadView: View {
     @Environment(GroupStore.self) private var groupStore
     @Environment(SubscriptionStore.self) private var subscriptionStore
     @Environment(RoutingRuleSetStore.self) private var routingRuleSetStore
-
-    private static let horizontalPadding: CGFloat = 20
-    private static let maxControlWidth: CGFloat = 500
-
-    @State private var viewportHeight: CGFloat = 0
 
     @State private var connectionEffectsEnabled = false
 
@@ -83,31 +76,21 @@ struct LaunchpadView: View {
                         showingProxiesPage: $showingProxiesView,
                         showingAddSheet: $showingAddSheet
                     )
-                    .frame(maxWidth: Self.maxControlWidth)
+                    .frame(maxWidth: 500)
                     .layoutPriority(1)
                 }
-                .padding(.horizontal)
+                .padding()
                 .animation(connectionEffectsEnabled ? Animation.bouncy : nil, value: isConnected)
                 .sensoryFeedback(trigger: isConnected) { _, _ in
                     guard connectionEffectsEnabled else { return nil }
                     return .impact
                 }
             }
-            .navigationTitle("Launchpad")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .title) {
-                    if horizontalSizeClass == .compact {
-                        Text("Anywhere")
-                    }
-                }
-            }
             .colorScheme(appSettings.homeColorScheme.colorScheme)
-            .toolbarColorScheme(appSettings.homeColorScheme.colorScheme, for: statusBar)
-            .toolbarColorScheme(appSettings.homeColorScheme.colorScheme, for: .navigationBar)
-            .toolbarColorScheme(appSettings.homeColorScheme.colorScheme, for: .tabBar)
+            .toolbarColorScheme(appSettings.homeColorScheme.colorScheme, for: statusBar, .navigationBar, .tabBar)
             .sheet(isPresented: $showingProxiesView) {
                 ProxiesView()
+                    .presentationDetents([.medium, .large])
                     .environment(operations)
                     .environment(proxySelection)
                     .environment(latencyCenter)

@@ -48,6 +48,8 @@ struct MissionControlView: View {
                     ContentUnavailableView("Not Connected", systemImage: "power")
                 }
             }
+            .colorScheme(appSettings.homeColorScheme.colorScheme)
+            .toolbarColorScheme(appSettings.homeColorScheme.colorScheme, for: statusBar, .navigationBar, .tabBar)
             .navigationTitle("Mission Control")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -71,10 +73,6 @@ struct MissionControlView: View {
                     }
                 }
             }
-            .colorScheme(appSettings.homeColorScheme.colorScheme)
-            .toolbarColorScheme(appSettings.homeColorScheme.colorScheme, for: statusBar)
-            .toolbarColorScheme(appSettings.homeColorScheme.colorScheme, for: .navigationBar)
-            .toolbarColorScheme(appSettings.homeColorScheme.colorScheme, for: .tabBar)
             .onGeometryChange(for: CGFloat.self) { proxy in
                 proxy.size.height
             } action: { height in
