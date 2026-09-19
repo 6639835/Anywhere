@@ -20,8 +20,8 @@ private struct ServerDrafts: Equatable {
 }
 
 struct DNSSettingsView: View {
-    @Environment(AppSettings.self) private var settings
     @Environment(\.editMode) private var editMode
+    @Environment(AppSettings.self) private var settings
 
     @State private var drafts = ServerDrafts()
 

@@ -167,18 +167,36 @@ nonisolated final class AWCore {
     }
 
     enum ThemeColorSlot: String {
-        case connectedBackgroundStart
-        case connectedBackgroundEnd
-        case disconnectedBackgroundStart
-        case disconnectedBackgroundEnd
-    }
-    
-    static func getHomeColorScheme() -> String? {
-        userDefaults.string(forKey: UserDefaultsKey.homeColorScheme)
+        case connectedBackgroundLightStart
+        case connectedBackgroundLightEnd
+        case connectedBackgroundDarkStart
+        case connectedBackgroundDarkEnd
+        case disconnectedBackgroundLightStart
+        case disconnectedBackgroundLightEnd
+        case disconnectedBackgroundDarkStart
+        case disconnectedBackgroundDarkEnd
     }
 
-    static func setHomeColorScheme(_ rawValue: String) {
-        userDefaults.set(rawValue, forKey: UserDefaultsKey.homeColorScheme)
+    /// Theme colors saved before light/dark variants existed applied to whichever
+    /// home appearance was selected at the time, so move them into those slots.
+    static func migrateLegacyThemeColorsIfNeeded() {
+        let wasLight = userDefaults.string(forKey: UserDefaultsKey.homeColorScheme) == "light"
+        let legacySlots: [(key: String, light: ThemeColorSlot, dark: ThemeColorSlot)] = [
+            ("connectedBackgroundStart", .connectedBackgroundLightStart, .connectedBackgroundDarkStart),
+            ("connectedBackgroundEnd", .connectedBackgroundLightEnd, .connectedBackgroundDarkEnd),
+            ("disconnectedBackgroundStart", .disconnectedBackgroundLightStart, .disconnectedBackgroundDarkStart),
+            ("disconnectedBackgroundEnd", .disconnectedBackgroundLightEnd, .disconnectedBackgroundDarkEnd),
+        ]
+        for legacy in legacySlots {
+            let key = "themeColor.\(legacy.key)"
+            guard let data = userDefaults.data(forKey: key) else { continue }
+            let target = wasLight ? legacy.light : legacy.dark
+            if getThemeColorData(target) == nil {
+                setThemeColorData(target, data)
+            }
+            userDefaults.removeObject(forKey: key)
+        }
+        userDefaults.removeObject(forKey: UserDefaultsKey.homeColorScheme)
     }
     
     static func getThemeColorData(_ slot: ThemeColorSlot) -> Data? {

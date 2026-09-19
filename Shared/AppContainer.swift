@@ -18,7 +18,7 @@ final class AppContainer {
     let tunnel: TunnelController
     let selection = ProxySelection()
     let latency = LatencyCenter()
-    let stats = ConnectionStatsModel()
+    let stats = ConnectionStats()
     let appState = AppState()
 
     let configurationStore: ConfigurationStore

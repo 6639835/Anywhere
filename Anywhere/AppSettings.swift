@@ -30,24 +30,36 @@ final class AppSettings {
         didSet { AWCore.setShowVoyagerCard(showVoyagerCard) }
     }
 
-    var homeColorScheme: HomeColorScheme {
-        didSet { AWCore.setHomeColorScheme(homeColorScheme.rawValue) }
+    var connectedBackgroundLightStartData: Data? {
+        didSet { AWCore.setThemeColorData(.connectedBackgroundLightStart, connectedBackgroundLightStartData) }
     }
 
-    var connectedBackgroundStartData: Data? {
-        didSet { AWCore.setThemeColorData(.connectedBackgroundStart, connectedBackgroundStartData) }
+    var connectedBackgroundLightEndData: Data? {
+        didSet { AWCore.setThemeColorData(.connectedBackgroundLightEnd, connectedBackgroundLightEndData) }
     }
 
-    var connectedBackgroundEndData: Data? {
-        didSet { AWCore.setThemeColorData(.connectedBackgroundEnd, connectedBackgroundEndData) }
+    var connectedBackgroundDarkStartData: Data? {
+        didSet { AWCore.setThemeColorData(.connectedBackgroundDarkStart, connectedBackgroundDarkStartData) }
     }
 
-    var disconnectedBackgroundStartData: Data? {
-        didSet { AWCore.setThemeColorData(.disconnectedBackgroundStart, disconnectedBackgroundStartData) }
+    var connectedBackgroundDarkEndData: Data? {
+        didSet { AWCore.setThemeColorData(.connectedBackgroundDarkEnd, connectedBackgroundDarkEndData) }
     }
 
-    var disconnectedBackgroundEndData: Data? {
-        didSet { AWCore.setThemeColorData(.disconnectedBackgroundEnd, disconnectedBackgroundEndData) }
+    var disconnectedBackgroundLightStartData: Data? {
+        didSet { AWCore.setThemeColorData(.disconnectedBackgroundLightStart, disconnectedBackgroundLightStartData) }
+    }
+
+    var disconnectedBackgroundLightEndData: Data? {
+        didSet { AWCore.setThemeColorData(.disconnectedBackgroundLightEnd, disconnectedBackgroundLightEndData) }
+    }
+
+    var disconnectedBackgroundDarkStartData: Data? {
+        didSet { AWCore.setThemeColorData(.disconnectedBackgroundDarkStart, disconnectedBackgroundDarkStartData) }
+    }
+
+    var disconnectedBackgroundDarkEndData: Data? {
+        didSet { AWCore.setThemeColorData(.disconnectedBackgroundDarkEnd, disconnectedBackgroundDarkEndData) }
     }
     
     var subscriptionDNSMode: DNSMode {
@@ -323,11 +335,15 @@ final class AppSettings {
     init() {
         experimentalEnabled = AWCore.getExperimentalEnabled()
         iCloudSyncEnabled = AWCore.getICloudSyncEnabled()
-        homeColorScheme = AWCore.getHomeColorScheme().flatMap(HomeColorScheme.init(rawValue:)) ?? .dark
-        connectedBackgroundStartData = AWCore.getThemeColorData(.connectedBackgroundStart)
-        connectedBackgroundEndData = AWCore.getThemeColorData(.connectedBackgroundEnd)
-        disconnectedBackgroundStartData = AWCore.getThemeColorData(.disconnectedBackgroundStart)
-        disconnectedBackgroundEndData = AWCore.getThemeColorData(.disconnectedBackgroundEnd)
+        AWCore.migrateLegacyThemeColorsIfNeeded()
+        connectedBackgroundLightStartData = AWCore.getThemeColorData(.connectedBackgroundLightStart)
+        connectedBackgroundLightEndData = AWCore.getThemeColorData(.connectedBackgroundLightEnd)
+        connectedBackgroundDarkStartData = AWCore.getThemeColorData(.connectedBackgroundDarkStart)
+        connectedBackgroundDarkEndData = AWCore.getThemeColorData(.connectedBackgroundDarkEnd)
+        disconnectedBackgroundLightStartData = AWCore.getThemeColorData(.disconnectedBackgroundLightStart)
+        disconnectedBackgroundLightEndData = AWCore.getThemeColorData(.disconnectedBackgroundLightEnd)
+        disconnectedBackgroundDarkStartData = AWCore.getThemeColorData(.disconnectedBackgroundDarkStart)
+        disconnectedBackgroundDarkEndData = AWCore.getThemeColorData(.disconnectedBackgroundDarkEnd)
         remnawaveHWIDEnabled = AWCore.getRemnawaveHWIDEnabled()
         showVoyagerCard = AWCore.getShowVoyagerCard()
         subscriptionDNSMode = AWCore.getSubscriptionDNSMode()

@@ -1,5 +1,5 @@
 //
-//  ConnectionStatsModel.swift
+//  ConnectionStats.swift
 //  Anywhere
 //
 //  Created by NodePassProject on 3/29/26.
@@ -11,7 +11,7 @@ import Observation
 
 @MainActor
 @Observable
-class ConnectionStatsModel {
+class ConnectionStats {
     private(set) var bytesIn: Int64 = 0
     private(set) var bytesOut: Int64 = 0
     
@@ -142,10 +142,9 @@ class ConnectionStatsModel {
 }
 
 #if DEBUG
-extension ConnectionStatsModel {
-    /// Preview-seeded model; lives here because the `private(set)` setters are file-scoped.
-    static func previewSeeded() -> ConnectionStatsModel {
-        let model = ConnectionStatsModel()
+extension ConnectionStats {
+    static func previewSeeded() -> ConnectionStats {
+        let model = ConnectionStats()
         model.routes = [
             RouteTrafficEntry(target: .proxy(UUID()), bytesIn: 1_600_000_000, bytesOut: 280_000_000),
             RouteTrafficEntry(target: .direct, bytesIn: 240_000_000, bytesOut: 40_000_000),

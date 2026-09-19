@@ -18,7 +18,7 @@ struct LaunchpadView: View {
     @Environment(ChainStore.self) private var chainStore
     @Environment(GroupStore.self) private var groupStore
     @Environment(SubscriptionStore.self) private var subscriptionStore
-    @Environment(RoutingRuleSetStore.self) private var routingRuleSetStore
+    @Environment(ConnectionStats.self) private var connectionStats
 
     @State private var connectionEffectsEnabled = false
 
@@ -40,54 +40,86 @@ struct LaunchpadView: View {
                 BackgroundGradient(isConnected: isConnected)
                     .ignoresSafeArea()
                 
-                VStack(spacing: 0) {
-                    VStack(spacing: 20) {
-                        PowerButton(
-                            isConnected: isConnected,
-                            isTransitioning: isTransitioning,
-                            isLoading: isLoading,
-                            isDisabled: isLoading
-                                || ((!tunnelController.isManagerReady || isTransitioning)
-                                    && configurationStore.hasConfigurations),
-                            animatesChanges: connectionEffectsEnabled
-                        ) {
-                            guard !isLoading else { return }
-                            if configurationStore.hasConfigurations {
-                                withAnimation(.spring(response: 0.5, dampingFraction: 0.7)) {
-                                    operations.tunnel.toggle()
+                TabView {
+                    Tab {
+                        VStack(spacing: 0) {
+                            VStack(spacing: 20) {
+                                PowerButton(
+                                    isConnected: isConnected,
+                                    isTransitioning: isTransitioning,
+                                    isLoading: isLoading,
+                                    isDisabled: isLoading
+                                    || ((!tunnelController.isManagerReady || isTransitioning)
+                                        && configurationStore.hasConfigurations),
+                                    animatesChanges: connectionEffectsEnabled
+                                ) {
+                                    guard !isLoading else { return }
+                                    if configurationStore.hasConfigurations {
+                                        withAnimation(.spring(response: 0.5, dampingFraction: 0.7)) {
+                                            operations.tunnel.toggle()
+                                        }
+                                    } else {
+                                        showingAddSheet = true
+                                    }
                                 }
-                            } else {
-                                showingAddSheet = true
+                                
+                                Text(tunnelController.status.localizedText)
+                                    .font(.headline)
+                                    .foregroundStyle(.secondary)
                             }
+                            .layoutPriority(1)
+                            
+                            Rectangle()
+                                .fill(.clear)
+                                .frame(idealHeight: 80, maxHeight: 80)
+                            
+                            ConfigurationCapsule(
+                                isConnected: isConnected,
+                                showingProxiesPage: $showingProxiesView,
+                                showingAddSheet: $showingAddSheet
+                            )
+                            .frame(maxWidth: 500)
+                            .layoutPriority(1)
                         }
-                        
-                        Text(tunnelController.status.localizedText)
-                            .font(.headline)
-                            .foregroundStyle(.secondary)
+                        .padding()
+                        .animation(connectionEffectsEnabled ? Animation.bouncy : nil, value: isConnected)
                     }
-                    .layoutPriority(1)
-                    
-                    Rectangle()
-                        .fill(.clear)
-                        .frame(idealHeight: 100, maxHeight: 100)
-                    
-                    ConfigurationCapsule(
-                        isConnected: isConnected,
-                        showingProxiesPage: $showingProxiesView,
-                        showingAddSheet: $showingAddSheet
-                    )
-                    .frame(maxWidth: 500)
-                    .layoutPriority(1)
+                    Tab {
+                        MissionControlView()
+                    }
                 }
-                .padding()
-                .animation(connectionEffectsEnabled ? Animation.bouncy : nil, value: isConnected)
+                .tabViewStyle(.page)
+                .ignoresSafeArea(edges: [.bottom])
                 .sensoryFeedback(trigger: isConnected) { _, _ in
                     guard connectionEffectsEnabled else { return nil }
                     return .impact
                 }
             }
-            .colorScheme(appSettings.homeColorScheme.colorScheme)
-            .toolbarColorScheme(appSettings.homeColorScheme.colorScheme, for: statusBar, .navigationBar, .tabBar)
+            .navigationTitle("Launchpad")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                if #available(iOS 27.0, *) {
+                    ToolbarOverflowMenu {
+                        Button {
+                            Task { await connectionStats.resetStats() }
+                        } label: {
+                            Label("Reset Stats", systemImage: "0.circle")
+                        }
+                        .disabled(!isConnected)
+                    }
+                } else {
+                    ToolbarItem {
+                        Menu("More", systemImage: "ellipsis") {
+                            Button {
+                                Task { await connectionStats.resetStats() }
+                            } label: {
+                                Label("Reset Stats", systemImage: "0.circle")
+                            }
+                            .disabled(!isConnected)
+                        }
+                    }
+                }
+            }
             .sheet(isPresented: $showingProxiesView) {
                 ProxiesView()
                     .presentationDetents([.medium, .large])
@@ -122,14 +154,6 @@ struct LaunchpadView: View {
                 guard ready, !connectionEffectsEnabled else { return }
                 Task { @MainActor in connectionEffectsEnabled = true }
             }
-        }
-    }
-    
-    private var statusBar: ToolbarPlacement {
-        if #available(iOS 27.0, *) {
-            return ToolbarPlacement.statusBar
-        } else {
-            return ToolbarPlacement.automatic
         }
     }
 }
@@ -340,7 +364,7 @@ private struct ProminentCircle<Content: View>: View {
         .environment(container.configurationStore)
         .environment(container.chainStore)
         .environment(container.subscriptionStore)
-        .environment(ConnectionStatsModel.previewSeeded())
+        .environment(ConnectionStats.previewSeeded())
         .colorScheme(.dark)
 }
 #endif

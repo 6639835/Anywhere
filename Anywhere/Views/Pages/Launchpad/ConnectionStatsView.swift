@@ -9,7 +9,7 @@ import SwiftUI
 import Charts
 
 struct ConnectionStatsView: View {
-    @Environment(ConnectionStatsModel.self) private var stats
+    @Environment(ConnectionStats.self) private var connectionStats
     @Environment(ConfigurationStore.self) private var configStore
     @Environment(ChainStore.self) private var chainStore
 
@@ -118,52 +118,76 @@ struct ConnectionStatsView: View {
         switch unit {
         case .upload:
             StatCard("Upload", systemImage: "arrow.up") {
-                StatValue(Self.formatBytes(stats.bytesOut))
+                StatValue(Self.formatBytes(connectionStats.bytesOut))
                 Spacer()
-                StatDetailRow(label: "Rate", value: Self.formatBytesPerSecond(stats.uploadBytesPerSecond))
+                StatDetailRow(
+                    label: "Rate",
+                    value: Self.formatBytesPerSecond(connectionStats.uploadBytesPerSecond)
+                )
             }
         case .download:
             StatCard("Download", systemImage: "arrow.down") {
-                StatValue(Self.formatBytes(stats.bytesIn))
+                StatValue(Self.formatBytes(connectionStats.bytesIn))
                 Spacer()
-                StatDetailRow(label: "Rate", value: Self.formatBytesPerSecond(stats.downloadBytesPerSecond))
+                StatDetailRow(
+                    label: "Rate",
+                    value: Self.formatBytesPerSecond(connectionStats.downloadBytesPerSecond)
+                )
             }
         case .route:
             RouteBreakdownCard(
-                routes: stats.routes,
+                routes: connectionStats.routes,
                 name: routeName
             )
         case .tcp:
             StatCard("TCP", systemImage: "arrow.left.arrow.right") {
-                StatValue("\(stats.tcpConnectionCount)")
+                StatValue("\(connectionStats.tcpConnectionCount)")
                 Spacer()
-                PressureGauge(value: Double(stats.tcpConnectionCount), ceiling: Self.tcpConnectionCeiling)
+                PressureGauge(
+                    value: Double(connectionStats.tcpConnectionCount),
+                    ceiling: Self.tcpConnectionCeiling
+                )
             }
         case .udp:
             StatCard("UDP", systemImage: "arrow.left.and.right") {
-                StatValue("\(stats.udpConnectionCount)")
+                StatValue("\(connectionStats.udpConnectionCount)")
                 Spacer()
-                PressureGauge(value: Double(stats.udpConnectionCount), ceiling: Self.udpConnectionCeiling)
+                PressureGauge(
+                    value: Double(connectionStats.udpConnectionCount),
+                    ceiling: Self.udpConnectionCeiling
+                )
             }
         case .memory:
             StatCard("Memory", systemImage: "memorychip") {
-                StatValue(Self.formatBytes(Int64(stats.memoryBytes)))
+                StatValue(Self.formatBytes(Int64(connectionStats.memoryBytes)))
                 Spacer()
-                PressureGauge(value: Double(stats.memoryBytes), ceiling: Self.memoryCeiling)
+                PressureGauge(
+                    value: Double(connectionStats.memoryBytes),
+                    ceiling: Self.memoryCeiling
+                )
             }
         case .sleepWake:
-            SleepWakeCard(wakeSeconds: stats.wakeSeconds, sleepSeconds: stats.sleepSeconds)
+            SleepWakeCard(
+                wakeSeconds: connectionStats.wakeSeconds,
+                sleepSeconds: connectionStats.sleepSeconds
+            )
         case .dial:
             StatCard("Dial", systemImage: "phone") {
-                StatValue(Self.formatMilliseconds(stats.dialMs))
+                StatValue(Self.formatMilliseconds(connectionStats.dialMs))
                 Spacer()
-                StatDetailRow(label: "Average", value: Self.formatMilliseconds(stats.avgDialMs))
+                StatDetailRow(
+                    label: "Average",
+                    value: Self.formatMilliseconds(connectionStats.avgDialMs)
+                )
             }
         case .handshake:
             StatCard("Handshake", systemImage: "recordingtape") {
-                StatValue(Self.formatMilliseconds(stats.handshakeMs))
+                StatValue(Self.formatMilliseconds(connectionStats.handshakeMs))
                 Spacer()
-                StatDetailRow(label: "Average", value: Self.formatMilliseconds(stats.avgHandshakeMs))
+                StatDetailRow(
+                    label: "Average",
+                    value: Self.formatMilliseconds(connectionStats.avgHandshakeMs)
+                )
             }
         }
     }
@@ -208,13 +232,11 @@ enum StatCardSize {
     static let maxUnitLength: CGFloat = 200
 
     static let spacing: CGFloat = 10
-
-    /// How many minimum-size unit columns fit in `width`, spacing included.
+    
     static func columnCount(fitting width: CGFloat) -> Int {
         max(1, Int((width + spacing) / (minUnitLength + spacing)))
     }
-
-    /// Total width spanned by `columns` unit columns, spacing included.
+    
     static func gridWidth(columns: Int, unitLength: CGFloat) -> CGFloat {
         CGFloat(columns) * unitLength + CGFloat(columns - 1) * spacing
     }
@@ -232,7 +254,6 @@ enum StatCardSize {
 }
 
 extension EnvironmentValues {
-    /// Edge of a 1×1 stat card, set by `ConnectionStatsView` from measured width.
     @Entry var statCardUnitLength: CGFloat = 170
 }
 
@@ -280,7 +301,7 @@ struct StatValue: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 28, design: .rounded))
+            .font(.system(size: 28, weight: .semibold, design: .rounded))
             .lineLimit(1)
             .minimumScaleFactor(0.6)
             .contentTransition(.numericText())
@@ -295,12 +316,12 @@ private struct StatDetailRow: View {
     var body: some View {
         HStack {
             Text(label)
-                .foregroundStyle(.primary.opacity(0.6))
             Spacer()
             Text(value)
                 .contentTransition(.numericText())
                 .animation(.default, value: value)
         }
+        .foregroundStyle(.primary.opacity(0.6))
         .font(.system(size: 14))
     }
 }
@@ -322,10 +343,10 @@ private struct PressureGauge: View {
 private struct StatCardChrome: ViewModifier {
     func body(content: Content) -> some View {
         content
-            .contentShape(RoundedRectangle(cornerRadius: 16))
+            .contentShape(RoundedRectangle(cornerRadius: 24))
             .background(
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(.primary.opacity(0.1))
+                RoundedRectangle(cornerRadius: 24)
+                    .fill(.white.opacity(0.1))
             )
     }
 }
@@ -386,24 +407,34 @@ private struct SleepWakeCard: View {
     let wakeSeconds: TimeInterval
     let sleepSeconds: TimeInterval
 
-    private static let wakeColor: Color = .cyan
+    private static let wakeColor: Color = .blue
     private static let sleepColor: Color = .indigo
 
     var body: some View {
         StatCard("Caffeine", systemImage: "cup.and.heat.waves") {
             DonutChart(segments: [
-                DonutSegment(id: "wake",
-                             value: wakeSeconds + sleepSeconds > 0 ? wakeSeconds : 1,
-                             color: Self.wakeColor),
-                DonutSegment(id: "sleep", value: sleepSeconds, color: Self.sleepColor),
+                DonutSegment(
+                    id: "wake",
+                    value: wakeSeconds + sleepSeconds > 0 ? wakeSeconds : 1,
+                    color: Self.wakeColor
+                ),
+                DonutSegment(
+                    id: "sleep",
+                    value: sleepSeconds,
+                    color: Self.sleepColor
+                ),
             ])
             VStack {
-                LegendRow(color: Self.wakeColor,
-                          label: String(localized: "Wake"),
-                          value: ConnectionStatsView.formatDuration(wakeSeconds))
-                LegendRow(color: Self.sleepColor,
-                          label: String(localized: "Sleep"),
-                          value: ConnectionStatsView.formatDuration(sleepSeconds))
+                LegendRow(
+                    color: Self.wakeColor,
+                    label: String(localized: "Wake"),
+                    value: ConnectionStatsView.formatDuration(wakeSeconds)
+                )
+                LegendRow(
+                    color: Self.sleepColor,
+                    label: String(localized: "Sleep"),
+                    value: ConnectionStatsView.formatDuration(sleepSeconds)
+                )
             }
         }
     }
@@ -423,7 +454,7 @@ private struct RouteBreakdownCard: View {
     let name: (RouteTarget) -> String
 
     private static let proxyPalette: [Color] =
-    [.cyan, .orange, .purple, .pink, .yellow, .mint, .indigo, .teal]
+    [.blue, .orange, .purple, .pink, .yellow, .mint, .indigo, .teal]
     private static let directColor: Color = .green
     private static let otherColor: Color = .gray
 
@@ -443,21 +474,34 @@ private struct RouteBreakdownCard: View {
         var rows: [RouteSlice] = []
         for index in shown.indices {
             let proxy = shown[index]
-            rows.append(RouteSlice(
-                id: proxy.id,
-                label: name(proxy.target),
-                bytes: proxy.totalBytes,
-                color: Self.proxyPalette[index % Self.proxyPalette.count]
-            ))
+            rows.append(
+                RouteSlice(
+                    id: proxy.id,
+                    label: name(proxy.target),
+                    bytes: proxy.totalBytes,
+                    color: Self.proxyPalette[index % Self.proxyPalette.count]
+                )
+            )
         }
         if overflow {
             var otherBytes: Int64 = 0
             for proxy in proxies.dropFirst(shownCount) { otherBytes += proxy.totalBytes }
-            rows.append(RouteSlice(id: "__other__", label: String(localized: "Other"),
-                                   bytes: otherBytes, color: Self.otherColor))
+            rows.append(
+                RouteSlice(
+                    id: "__other__",
+                    label: String(localized: "Other"),
+                    bytes: otherBytes,
+                    color: Self.otherColor)
+            )
         }
-        rows.append(RouteSlice(id: "__direct__", label: name(.direct),
-                               bytes: directBytes, color: Self.directColor))
+        rows.append(
+            RouteSlice(
+                id: "__direct__",
+                label: name(.direct),
+                bytes: directBytes,
+                color: Self.directColor
+            )
+        )
         return rows
     }
 
@@ -498,7 +542,7 @@ private struct RouteLegend: View {
 // MARK: - Gauge style
 
 struct AnywhereLinearGaugeStyle: GaugeStyle {
-    var color: Color = .cyan
+    var color: Color = .blue
 
     func makeBody(configuration: Configuration) -> some View {
         VStack(alignment: .leading) {
@@ -508,7 +552,7 @@ struct AnywhereLinearGaugeStyle: GaugeStyle {
                 let fillWidth = fraction == 0 ? 0 : max(proxy.size.width * fraction, proxy.size.height)
                 ZStack(alignment: .leading) {
                     Capsule()
-                        .foregroundStyle(.primary.opacity(0.2))
+                        .foregroundStyle(.primary.opacity(0.1))
                     Capsule()
                         .foregroundStyle(color)
                         .frame(width: fillWidth)
@@ -521,7 +565,7 @@ struct AnywhereLinearGaugeStyle: GaugeStyle {
 }
 
 struct AnywhereRingGaugeStyle: GaugeStyle {
-    var color: Color = .cyan
+    var color: Color = .blue
 
     func makeBody(configuration: Configuration) -> some View {
         ZStack {
@@ -544,14 +588,14 @@ struct AnywhereRingGaugeStyle: GaugeStyle {
 #Preview {
     ZStack {
         LinearGradient(
-            colors: [Color.connectedBackgroundStart, Color.connectedBackgroundEnd],
+            colors: [Color.connectedBackgroundDarkStart, Color.connectedBackgroundDarkEnd],
             startPoint: .top,
             endPoint: .bottom
         )
         .ignoresSafeArea()
         ScrollView {
             ConnectionStatsView()
-                .environment(ConnectionStatsModel.previewSeeded())
+                .environment(ConnectionStats.previewSeeded())
                 .environment(ConfigurationStore(syncStore: .shared))
                 .environment(ChainStore(syncStore: .shared))
                 .padding(24)
@@ -570,7 +614,7 @@ struct AnywhereRingGaugeStyle: GaugeStyle {
     ]
     return ZStack {
         LinearGradient(
-            colors: [Color.connectedBackgroundStart, Color.connectedBackgroundEnd],
+            colors: [Color.connectedBackgroundDarkStart, Color.connectedBackgroundDarkEnd],
             startPoint: .top,
             endPoint: .bottom
         )
@@ -601,7 +645,7 @@ struct AnywhereRingGaugeStyle: GaugeStyle {
 #Preview("Sleep / Wake") {
     ZStack {
         LinearGradient(
-            colors: [Color.connectedBackgroundStart, Color.connectedBackgroundEnd],
+            colors: [Color.connectedBackgroundDarkStart, Color.connectedBackgroundDarkEnd],
             startPoint: .top,
             endPoint: .bottom
         )

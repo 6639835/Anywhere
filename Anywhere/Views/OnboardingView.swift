@@ -34,12 +34,8 @@ struct OnboardingView: View {
                 .padding(.bottom, 16)
         }
         .background(
-            LinearGradient(
-                colors: [Color.disconnectedBackgroundStart, Color.disconnectedBackgroundEnd],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
+            BackgroundGradient(isConnected: false)
+                .ignoresSafeArea()
         )
         .onAppear {
             if let country = CountryBypassCatalog.shared.suggestedCountryCode() {

@@ -11,7 +11,7 @@ import NetworkExtension
 @MainActor
 struct TunnelSessionReaction {
     let tunnel: TunnelController
-    let stats: ConnectionStatsModel
+    let stats: ConnectionStats
     let selection: ProxySelection
 
     func run() {

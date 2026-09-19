@@ -19,77 +19,33 @@ struct CustomizeThemeView: View {
                 VoyagerNotice(description: "Custom themes are available to Anywhere Voyager members.")
             }
             
-            Section {
-                Picker(selection: $settings.homeColorScheme) {
-                    ForEach(HomeColorScheme.allCases, id: \.self) { scheme in
-                        Text(label(for: scheme)).tag(scheme)
-                    }
-                } label: {
-                    TextWithColorfulIcon(title: "Home Appearance", systemName: "circle.lefthalf.filled", foregroundStyle: .white, backgroundStyle: .black.gradient)
-                }
-            }
+            backgroundSection(
+                "Background (Connected, Light)",
+                start: $settings.connectedBackgroundLightStartData, startDefault: .connectedBackgroundLightStart,
+                end: $settings.connectedBackgroundLightEndData, endDefault: .connectedBackgroundLightEnd
+            )
             
-            .disabled(!voyagerStore.isMember)
+            backgroundSection(
+                "Background (Connected, Dark)",
+                start: $settings.connectedBackgroundDarkStartData, startDefault: .connectedBackgroundDarkStart,
+                end: $settings.connectedBackgroundDarkEndData, endDefault: .connectedBackgroundDarkEnd
+            )
             
-            Section {
-                ColorPicker(
-                    "Top",
-                    selection: colorBinding($settings.connectedBackgroundStartData, default: .connectedBackgroundStart),
-                    supportsOpacity: false
-                )
-                ColorPicker(
-                    "Bottom",
-                    selection: colorBinding($settings.connectedBackgroundEndData, default: .connectedBackgroundEnd),
-                    supportsOpacity: false
-                )
-            } header: {
-                Text("Background (Connected)")
-            }
+            backgroundSection(
+                "Background (Disconnected, Light)",
+                start: $settings.disconnectedBackgroundLightStartData, startDefault: .disconnectedBackgroundLightStart,
+                end: $settings.disconnectedBackgroundLightEndData, endDefault: .disconnectedBackgroundLightEnd
+            )
             
-            .disabled(!voyagerStore.isMember)
+            backgroundSection(
+                "Background (Disconnected, Dark)",
+                start: $settings.disconnectedBackgroundDarkStartData, startDefault: .disconnectedBackgroundDarkStart,
+                end: $settings.disconnectedBackgroundDarkEndData, endDefault: .disconnectedBackgroundDarkEnd
+            )
             
-            Section {
-                ColorPicker(
-                    "Top",
-                    selection: colorBinding($settings.disconnectedBackgroundStartData, default: .disconnectedBackgroundStart),
-                    supportsOpacity: false
-                )
-                ColorPicker(
-                    "Bottom",
-                    selection: colorBinding($settings.disconnectedBackgroundEndData, default: .disconnectedBackgroundEnd),
-                    supportsOpacity: false
-                )
-            } header: {
-                Text("Background (Disconnected)")
-            }
+            previewSection("Preview (Connected)", light: connectedLightColors, dark: connectedDarkColors)
             
-            .disabled(!voyagerStore.isMember)
-            
-            Section {
-                HStack {
-                    Spacer()
-                    swatch(
-                        title: "Connected",
-                        colors: [
-                            resolved(settings.connectedBackgroundStartData, default: .connectedBackgroundStart),
-                            resolved(settings.connectedBackgroundEndData, default: .connectedBackgroundEnd),
-                        ]
-                    )
-                    Spacer()
-                    swatch(
-                        title: "Disconnected",
-                        colors: [
-                            resolved(settings.disconnectedBackgroundStartData, default: .disconnectedBackgroundStart),
-                            resolved(settings.disconnectedBackgroundEndData, default: .disconnectedBackgroundEnd),
-                        ]
-                    )
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 4)
-            } header: {
-                Text("Preview")
-            }
+            previewSection("Preview (Disconnected)", light: disconnectedLightColors, dark: disconnectedDarkColors)
         }
         .onGeometryChange(for: CGFloat.self) { proxy in
             let width = proxy.size.width + proxy.safeAreaInsets.leading + proxy.safeAreaInsets.trailing
@@ -110,32 +66,101 @@ struct CustomizeThemeView: View {
         }
     }
     
+    // MARK: - Sections
+    
+    private func backgroundSection(
+        _ header: LocalizedStringKey,
+        start: Binding<Data?>, startDefault: Color,
+        end: Binding<Data?>, endDefault: Color
+    ) -> some View {
+        Section {
+            ColorPicker(
+                "Top",
+                selection: colorBinding(start, default: startDefault),
+                supportsOpacity: false
+            )
+            ColorPicker(
+                "Bottom",
+                selection: colorBinding(end, default: endDefault),
+                supportsOpacity: false
+            )
+        } header: {
+            Text(header)
+        }
+        .disabled(!voyagerStore.isMember)
+    }
+    
+    private func previewSection(_ header: LocalizedStringKey, light: [Color], dark: [Color]) -> some View {
+        Section {
+            HStack {
+                Spacer()
+                swatch(title: "Light", colors: light, colorScheme: .light)
+                Spacer()
+                swatch(title: "Dark", colors: dark, colorScheme: .dark)
+                Spacer()
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 4)
+        } header: {
+            Text(header)
+        }
+    }
+    
+    // MARK: - Resolved colors
+    
+    private var connectedLightColors: [Color] {
+        [
+            resolved(settings.connectedBackgroundLightStartData, default: .connectedBackgroundLightStart),
+            resolved(settings.connectedBackgroundLightEndData, default: .connectedBackgroundLightEnd),
+        ]
+    }
+    
+    private var connectedDarkColors: [Color] {
+        [
+            resolved(settings.connectedBackgroundDarkStartData, default: .connectedBackgroundDarkStart),
+            resolved(settings.connectedBackgroundDarkEndData, default: .connectedBackgroundDarkEnd),
+        ]
+    }
+    
+    private var disconnectedLightColors: [Color] {
+        [
+            resolved(settings.disconnectedBackgroundLightStartData, default: .disconnectedBackgroundLightStart),
+            resolved(settings.disconnectedBackgroundLightEndData, default: .disconnectedBackgroundLightEnd),
+        ]
+    }
+    
+    private var disconnectedDarkColors: [Color] {
+        [
+            resolved(settings.disconnectedBackgroundDarkStartData, default: .disconnectedBackgroundDarkStart),
+            resolved(settings.disconnectedBackgroundDarkEndData, default: .disconnectedBackgroundDarkEnd),
+        ]
+    }
+    
     // MARK: - Customization state
     
     private var isCustomized: Bool {
-        settings.homeColorScheme != .dark
-        || settings.connectedBackgroundStartData != nil
-        || settings.connectedBackgroundEndData != nil
-        || settings.disconnectedBackgroundStartData != nil
-        || settings.disconnectedBackgroundEndData != nil
+        settings.connectedBackgroundLightStartData != nil
+        || settings.connectedBackgroundLightEndData != nil
+        || settings.connectedBackgroundDarkStartData != nil
+        || settings.connectedBackgroundDarkEndData != nil
+        || settings.disconnectedBackgroundLightStartData != nil
+        || settings.disconnectedBackgroundLightEndData != nil
+        || settings.disconnectedBackgroundDarkStartData != nil
+        || settings.disconnectedBackgroundDarkEndData != nil
     }
     
     private func reset() {
-        settings.homeColorScheme = .dark
-        settings.connectedBackgroundStartData = nil
-        settings.connectedBackgroundEndData = nil
-        settings.disconnectedBackgroundStartData = nil
-        settings.disconnectedBackgroundEndData = nil
+        settings.connectedBackgroundLightStartData = nil
+        settings.connectedBackgroundLightEndData = nil
+        settings.connectedBackgroundDarkStartData = nil
+        settings.connectedBackgroundDarkEndData = nil
+        settings.disconnectedBackgroundLightStartData = nil
+        settings.disconnectedBackgroundLightEndData = nil
+        settings.disconnectedBackgroundDarkStartData = nil
+        settings.disconnectedBackgroundDarkEndData = nil
     }
     
     // MARK: - Helpers
-    
-    private func label(for scheme: HomeColorScheme) -> LocalizedStringKey {
-        switch scheme {
-        case .dark: "Dark"
-        case .light: "Light"
-        }
-    }
     
     private func colorBinding(_ data: Binding<Data?>, default fallback: Color) -> Binding<Color> {
         Binding(
@@ -148,7 +173,7 @@ struct CustomizeThemeView: View {
         data.flatMap(Color.init(archivedData:)) ?? fallback
     }
     
-    private func swatch(title: LocalizedStringKey, colors: [Color]) -> some View {
+    private func swatch(title: LocalizedStringKey, colors: [Color], colorScheme: ColorScheme) -> some View {
         let maxDimension: CGFloat = 170
         let size = screenAspectRatio < 1
             ? CGSize(width: maxDimension * screenAspectRatio, height: maxDimension)
@@ -167,7 +192,7 @@ struct CustomizeThemeView: View {
                     Image(systemName: "power")
                         .font(.system(size: 28, weight: .light))
                 }
-                .colorScheme(settings.homeColorScheme == .light ? .light : .dark)
+                .colorScheme(colorScheme)
             Text(title)
                 .font(.caption)
                 .foregroundStyle(.secondary)

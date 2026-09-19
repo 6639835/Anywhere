@@ -37,21 +37,7 @@ struct HomeView: View {
     }
 
     var body: some View {
-        Group {
-            switch horizontalSizeClass {
-            case .regular:
-                splitView
-            case .compact:
-                tabView
-            default:
-                splitView
-            }
-        }
-        .onChange(of: horizontalSizeClass) { _, newValue in
-            if newValue == .regular && selectedPage == .toolbox {
-                selectedPage = .launchpad
-            }
-        }
+        splitView
     }
     
     @ViewBuilder
@@ -66,10 +52,6 @@ struct HomeView: View {
                 Section {
                     TextWithColorfulIconAndCustomImage(title: "Launchpad", imageName: "anywhere", foregroundStyle: .white, backgroundStyle: .anywhere.gradient)
                         .tag(Page.launchpad)
-                    if isConnected {
-                        TextWithColorfulIcon(title: "Mission Control", systemName: "rectangle.3.group.fill", foregroundStyle: .white, backgroundStyle: .black.gradient)
-                            .tag(Page.missionControl)
-                    }
                 }
                 Section {
                     TextWithColorfulIcon(title: "Data", systemName: "cylinder.split.1x2.fill", foregroundStyle: .white, backgroundStyle: .gray.gradient)
@@ -139,29 +121,6 @@ struct HomeView: View {
     }
     
     @ViewBuilder
-    private var tabView: some View {
-        TabView(selection: $selectedPage) {
-            Tab(value: .launchpad) {
-                LaunchpadView()
-            } label: {
-                Image("anywhere")
-            }
-            if isConnected {
-                Tab(value: .missionControl) {
-                    MissionControlView()
-                } label: {
-                    Image(systemName: "rectangle.3.group.fill")
-                }
-            }
-            Tab(value: .toolbox) {
-                ToolboxView()
-            } label: {
-                Image(systemName: "latch.2.case.fill")
-            }
-        }
-    }
-    
-    @ViewBuilder
     private var voyagerMemberCard: some View {
         VoyagerMemberCard()
             .listRowInsets(EdgeInsets())
@@ -195,7 +154,7 @@ struct HomeView: View {
         .environment(container.configurationStore)
         .environment(container.chainStore)
         .environment(container.subscriptionStore)
-        .environment(ConnectionStatsModel.previewSeeded())
+        .environment(ConnectionStats.previewSeeded())
         .colorScheme(.dark)
 }
 #endif
