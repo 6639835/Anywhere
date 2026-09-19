@@ -196,6 +196,10 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
                 termination: termination,
                 onEnd: onEnd
             )
+            if state.flows.count + state.retiredFlows.count
+                >= NowhereMultiplexerConstants.maximumStreams {
+                state.draining = true
+            }
             Self.rebalanceFairCredits(&state)
             return StreamReservation(
                 flowID: flowID,
