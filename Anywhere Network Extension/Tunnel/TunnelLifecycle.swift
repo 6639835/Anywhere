@@ -46,7 +46,7 @@ nonisolated enum TunnelPhase: UInt8, AtomicRepresentable, CustomStringConvertibl
     }
 }
 
-nonisolated enum LwipAbortContext: UInt8, AtomicRepresentable {
+nonisolated enum IPStackAbortContext: UInt8, AtomicRepresentable {
     case none
     case teardown
 }

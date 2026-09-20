@@ -1,6 +1,15 @@
 {
-  "originHash" : "12bf9c401f5be0aafc6e1cd6ff79bb3032868a97c5385591c8fd27b6ef35d49c",
+  "originHash" : "617587971d56399b12128348fe6ce8e69baced11513cee50a98c3cbb4e677d62",
   "pins" : [
+    {
+      "identity" : "anywhereip",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hiDandelion/AnywhereIP.git",
+      "state" : {
+        "revision" : "edd26dc68cef6bc84ba40908d2d36ca5c0c638a5",
+        "version" : "1.0.0"
+      }
+    },
     {
       "identity" : "anywhererules",
       "kind" : "remoteSourceControl",

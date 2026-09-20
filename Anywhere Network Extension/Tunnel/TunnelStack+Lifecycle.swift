@@ -6,8 +6,9 @@
 //
 
 import Foundation
-import NetworkExtension
 import Synchronization
+import NetworkExtension
+import AnywhereIP
 
 nonisolated private let logger = AnywhereLogger(category: "TunnelStack+Lifecycle")
 
@@ -118,7 +119,6 @@ extension TunnelStack {
         TransportReclaim.sealAll()
         tearDownDataPlane(tcp: .graceful)
         purgeOutputBuffer()
-        lwip_bridge_set_host_ctx(nil)
         OutboundConnector.setRoutingContext(nil)
         fakeIPPool.reset()
         connectionRouter.clearRejectMarks()
@@ -214,9 +214,10 @@ extension TunnelStack {
             return
         }
         dataPlaneUp = true
-        installLwipCallbacks()
-        lwip_bridge_init()
-        startLwipTick()
+        let ipStack = IPStack()
+        self.ipStack = ipStack
+        installIPStackCallbacks(ipStack)
+        startIPStackTick()
         submitPlaneCommand(.setMultiplexerPool(configuration.makeUDPMultiplexerPool()))
         logger.debug("[TunnelStack] Data plane up")
     }
@@ -225,11 +226,12 @@ extension TunnelStack {
         guard dataPlaneUp else { return }
         dataPlaneUp = false
 
-        lwipTick?.cancel()
-        lwipTick = nil
+        ipStackTick?.cancel()
+        ipStackTick = nil
 
         purgeOutputBuffer()
 
+        ipStackAbortContext.store(.teardown, ordering: .relaxed)
         switch tcp {
         case .graceful: closeAllActiveTCP()
         case .abortive: abortAllActiveTCP()
@@ -238,25 +240,21 @@ extension TunnelStack {
         reclaimAllOutboundPools()
         submitPlaneCommand(.reclaim)
 
-        lwipAbortContext.store(.teardown, ordering: .relaxed)
-        lwip_bridge_shutdown()
-        lwipAbortContext.store(.none, ordering: .relaxed)
+        ipStack?.shutdown()
+        ipStack = nil
+        ipStackAbortContext.store(.none, ordering: .relaxed)
         FlowGauge.publishTCPTable(0)
         logger.debug("[TunnelStack] Data plane down")
     }
 
     private func closeAllActiveTCP() {
-        lwip_bridge_for_each_tcp { arg in
-            guard let arg else { return }
-            BridgeContext.unretained(arg, as: TCPConnection.self).assumeIsolated { $0.close() }
+        ipStack?.forEachConnection { connection in
+            (connection.delegate as? TCPConnection)?.assumeIsolated { $0.close() }
         }
     }
 
     private func abortAllActiveTCP() {
-        lwip_bridge_for_each_tcp { arg in
-            guard let arg else { return }
-            BridgeContext.unretained(arg, as: TCPConnection.self).assumeIsolated { $0.abort() }
-        }
+        ipStack?.abortAllConnections()
     }
 
     private func reclaimAllOutboundPools() {

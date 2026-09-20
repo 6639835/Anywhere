@@ -18,7 +18,7 @@ nonisolated final class AWCore {
         static let bundle = "com.argsment.Anywhere"
         static let errorDomain = bundle
         static let iCloudContainer = "iCloud.\(bundle)"
-        static let lwipQueue = "\(bundle).lwip"
+        static let ipStackQueue = "\(bundle).ip-stack"
     }
     
     static var isHostApp: Bool {

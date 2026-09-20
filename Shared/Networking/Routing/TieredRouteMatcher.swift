@@ -9,10 +9,6 @@ import Foundation
 
 // MARK: - Tiered route matching core
 //
-// The matching engine behind routing decisions, driving the Network
-// Extension's DomainRouter (hot path — lookups on the lwIP and UDP queues).
-// Payloads intern to `Int16` IDs.
-//
 // Semantics: within a tier, suffix beats keyword and the deepest suffix /
 // longest keyword wins, later insertion breaking ties; CIDR is longest-prefix
 // with more-specific prefixes winning and duplicates overwriting. Tier

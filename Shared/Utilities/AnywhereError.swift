@@ -198,7 +198,6 @@ nonisolated enum AnywhereError: Error {
         }
 
         case posix(Operation, errno: Int32)
-        case lwip(Operation, code: Int32)
         case notConnected
         case connectionFailed(endpoint: String?, detail: String)
         case timedOut(Operation, endpoint: String?, detail: String?)
@@ -342,7 +341,6 @@ nonisolated extension AnywhereError.Transport {
     var failureDescription: String {
         switch self {
         case .posix(let op, let errno): "\(op.rawValue) failed: \(String(cString: strerror(errno)))"
-        case .lwip(let op, let code): "\(op.rawValue) failed: \(Self.lwipName(code))"
         case .notConnected: "not connected"
         case .connectionFailed(let endpoint, let detail):
             "connect" + (endpoint.map { " to \($0)" } ?? "") + " failed: \(detail)"
@@ -351,29 +349,6 @@ nonisolated extension AnywhereError.Transport {
         case .terminated: "transport terminated"
         case .writeFailed(let pending, let sndbuf):
             "downlink write failed (pending \(pending), send buffer \(sndbuf))"
-        }
-    }
-
-    static func lwipName(_ err: Int32) -> String {
-        switch err {
-        case 0:   "ERR_OK"
-        case -1:  "ERR_MEM (out of memory)"
-        case -2:  "ERR_BUF (buffer error)"
-        case -3:  "ERR_TIMEOUT (timed out)"
-        case -4:  "ERR_RTE (routing problem)"
-        case -5:  "ERR_INPROGRESS"
-        case -6:  "ERR_VAL (illegal value)"
-        case -7:  "ERR_WOULDBLOCK"
-        case -8:  "ERR_USE (address in use)"
-        case -9:  "ERR_ALREADY (already connecting)"
-        case -10: "ERR_ISCONN (already connected)"
-        case -11: "ERR_CONN (not connected)"
-        case -12: "ERR_IF (low-level netif error)"
-        case -13: "ERR_ABRT (aborted locally)"
-        case -14: "ERR_RST (reset by peer)"
-        case -15: "ERR_CLSD (connection closed)"
-        case -16: "ERR_ARG (illegal argument)"
-        default:  "lwIP err=\(err)"
         }
     }
 }

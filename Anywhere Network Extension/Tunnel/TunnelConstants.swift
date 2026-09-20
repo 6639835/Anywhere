@@ -39,9 +39,9 @@ nonisolated enum TunnelConstants {
     
     static let tcpGlobalBufferBudget = 16 * 1024 * 1024
 
-    /// One lwIP window: mirrors `TCP_WND`/`TCP_SND_BUF` in `port/lwipopts.h`.
+    /// One AnywhereIP receive/send window.
     static let tcpWindowSize = 64 * 1460
-    /// Max bytes per `tcp_write` call: lwIP's `len` is `u16_t`.
+    /// Preserve partial progress when a small MSS makes queue slots the limit.
     static let tcpMaxWriteSize = Int(UInt16.max)
     static let drainLowWaterMark = 2 * tcpWindowSize
 
@@ -69,10 +69,8 @@ nonisolated enum TunnelConstants {
 
     // MARK: - Timer Intervals
 
-    /// lwIP tick interval (ms); pinned to `TCP_TMR_INTERVAL` by a static assert in `lwip_bridge.c`.
-    static let lwipTickIntervalMs = Int(LWIP_BRIDGE_TICK_INTERVAL_MS)
-    /// Leeway for the lwIP tick (ms); lets libdispatch coalesce wakeups.
-    static let lwipTickLeewayMs = 10
+    /// Leeway for the IPStack tick (ms); lets libdispatch coalesce wakeups.
+    static let ipStackTickLeewayMs = 10
     static let udpCleanupIntervalSec = 1
     /// Leeway for the UDP cleanup reaper (ms); reaping tolerates the slack.
     static let udpCleanupLeewayMs = 250

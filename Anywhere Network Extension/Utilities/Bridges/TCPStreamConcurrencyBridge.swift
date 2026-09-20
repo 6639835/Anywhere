@@ -7,14 +7,15 @@
 
 import Foundation
 import Synchronization
+import AnywhereIP
 
 actor TCPStreamConcurrencyBridge {
     nonisolated var unownedExecutor: UnownedSerialExecutor {
         bridge.executor.asUnownedSerialExecutor()
     }
 
-    private let bridge: LWIPConcurrencyBridge
-    private let pcb: UnsafeMutableRawPointer
+    private let bridge: IPStackConcurrencyBridge
+    private let connection: IPStack.Connection
 
     private enum Phase: PhaseTransitionable {
         case open
@@ -75,9 +76,9 @@ actor TCPStreamConcurrencyBridge {
 
     private var pendingWriteCount: Int { pendingWrite.count - pendingWriteOffset }
 
-    init(bridge: LWIPConcurrencyBridge, pcb: LWIPPCBHandle) {
+    init(bridge: IPStackConcurrencyBridge, connection: IPStack.Connection) {
         self.bridge = bridge
-        self.pcb = pcb.raw
+        self.connection = connection
     }
 
     // MARK: - Intake
@@ -118,9 +119,9 @@ actor TCPStreamConcurrencyBridge {
         guard live > 0 else { return }
         let written = pendingWrite.withUnsafeBytes { buffer -> Int in
             guard let base = buffer.baseAddress else { return 0 }
-            return max(feedLWIP(base + pendingWriteOffset, count: live, retryOnEmpty: true), 0)
+            return max(feedIPStack(base + pendingWriteOffset, count: live), 0)
         }
-        if written > 0 { lwip_bridge_tcp_output(pcb) }
+        if written > 0 { connection.flush() }
     }
 
     // MARK: - Upload async surface
@@ -142,25 +143,16 @@ actor TCPStreamConcurrencyBridge {
 
     func flushReceiveWindowForClose() {
         guard !phase.isTerminated, unreceivedBytes > 0 else { return }
-        var remaining = unreceivedBytes
+        let count = unreceivedBytes
         unreceivedBytes = 0
-        while remaining > 0 {
-            let part = UInt16(min(remaining, Int(UInt16.max)))
-            remaining -= Int(part)
-            lwip_bridge_tcp_recved(pcb, part)
-        }
+        connection.didConsume(count)
     }
 
     private func ackUpload(_ byteCount: Int) {
         guard !phase.isTerminated, byteCount > 0 else { return }
         unreceivedBytes = max(0, unreceivedBytes - byteCount)
-        var remaining = byteCount
-        while remaining > 0 {
-            let part = UInt16(min(remaining, Int(UInt16.max)))
-            remaining -= Int(part)
-            lwip_bridge_tcp_recved(pcb, part)
-        }
-        lwip_bridge_tcp_output(pcb)
+        connection.didConsume(byteCount)
+        connection.flush()
     }
 
     // MARK: - Download async surface
@@ -251,10 +243,10 @@ actor TCPStreamConcurrencyBridge {
         if live > 0 {
             let written = pendingWrite.withUnsafeBytes { buffer -> Int in
                 guard let base = buffer.baseAddress else { return 0 }
-                return feedLWIP(base + pendingWriteOffset, count: live, retryOnEmpty: true)
+                return feedIPStack(base + pendingWriteOffset, count: live)
             }
             if written < 0 {
-                let error = AnywhereError.transport(.writeFailed(pending: live, sndbuf: Int(lwip_bridge_tcp_sndbuf(pcb))))
+                let error = AnywhereError.transport(.writeFailed(pending: live, sndbuf: connection.sendBufferSpace))
                 Phase.transition(&phase, to: .failed(error))
                 downloadNeedsAwaitedSend.claim()
                 resumeCreditWaiter()
@@ -272,7 +264,7 @@ actor TCPStreamConcurrencyBridge {
                     pendingWrite.removeSubrange(0..<pendingWriteOffset)
                     pendingWriteOffset = 0
                 }
-                lwip_bridge_tcp_output(pcb)
+                connection.flush()
             } else {
                 scheduleDrainRetry()
                 return
@@ -299,26 +291,16 @@ actor TCPStreamConcurrencyBridge {
         }
     }
 
-    private func feedLWIP(_ base: UnsafeRawPointer, count: Int, retryOnEmpty: Bool) -> Int {
-        var offset = 0
-        while offset < count {
-            var sndbuf = Int(lwip_bridge_tcp_sndbuf(pcb))
-            if sndbuf <= 0 {
-                if retryOnEmpty {
-                    lwip_bridge_tcp_output(pcb)
-                    sndbuf = Int(lwip_bridge_tcp_sndbuf(pcb))
-                }
-                guard sndbuf > 0 else { break }
-            }
-            let chunkSize = min(min(sndbuf, count - offset), TunnelConstants.tcpMaxWriteSize)
-            let error = lwip_bridge_tcp_write(pcb, base + offset, UInt16(chunkSize))
-            if error != 0 {
-                if error == -1 { break }
-                return -1
-            }
-            offset += chunkSize
+    private func feedIPStack(_ base: UnsafeRawPointer, count: Int) -> Int {
+        guard connection.isAttached else { return -1 }
+        var written = 0
+        while written < count {
+            let chunkSize = min(count - written, TunnelConstants.tcpMaxWriteSize)
+            let accepted = connection.write(UnsafeRawBufferPointer(start: base + written, count: chunkSize))
+            guard accepted > 0 else { break }
+            written += accepted
         }
-        return offset
+        return written
     }
 
     // MARK: - Waiter resumption

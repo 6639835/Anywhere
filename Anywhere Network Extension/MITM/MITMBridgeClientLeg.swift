@@ -23,7 +23,7 @@ nonisolated protocol MITMBridgeClientLegDelegate: AnyObject {
 actor MITMBridgeClientLeg: MITMResponseSink {
 
     nonisolated var unownedExecutor: UnownedSerialExecutor {
-        lwipBridge.executor.asUnownedSerialExecutor()
+        ipBridge.executor.asUnownedSerialExecutor()
     }
 
     weak var delegate: MITMBridgeClientLegDelegate?
@@ -31,7 +31,7 @@ actor MITMBridgeClientLeg: MITMResponseSink {
     private let host: String
     private let rewriter: MITMHTTP2Rewriter
     private let flowController: MITMHTTP2FlowController
-    private let lwipBridge: LWIPConcurrencyBridge
+    private let ipBridge: IPStackConcurrencyBridge
     private let decoder = HPACKDecoder()
 
     private typealias Codec = MITMHTTP2FrameCodec
@@ -134,12 +134,12 @@ actor MITMBridgeClientLeg: MITMResponseSink {
         host: String,
         rewriter: MITMHTTP2Rewriter,
         flowController: MITMHTTP2FlowController,
-        lwipBridge: LWIPConcurrencyBridge
+        ipBridge: IPStackConcurrencyBridge
     ) {
         self.host = host
         self.rewriter = rewriter
         self.flowController = flowController
-        self.lwipBridge = lwipBridge
+        self.ipBridge = ipBridge
     }
 
     func markTorn() {
@@ -176,12 +176,12 @@ actor MITMBridgeClientLeg: MITMResponseSink {
 
     // MARK: - Client → MITM
 
-    private func onLwipParked<T>(_ body: @escaping (CheckedContinuation<T, Never>) -> Void) async -> T {
-        await lwipBridge.runParked(body)
+    private func onIPStackParked<T>(_ body: @escaping (CheckedContinuation<T, Never>) -> Void) async -> T {
+        await ipBridge.runParked(body)
     }
 
     func feed(_ data: Data) async {
-        await onLwipParked { (continuation: CheckedContinuation<Void, Never>) in
+        await onIPStackParked { (continuation: CheckedContinuation<Void, Never>) in
             self.assumeIsolated { $0.feedOnQueue(data, continuation: continuation) }
         }
     }
@@ -571,7 +571,7 @@ actor MITMBridgeClientLeg: MITMResponseSink {
         Task { [weak self] in
             let gates = await rewriter.resolveRequestHeadGates(originalPath: head.originalPath)
             guard let self else { return }
-            self.lwipBridge.enqueue {
+            self.ipBridge.enqueue {
                 self.assumeIsolated { me in
                     guard me.phase != .torn, me.phase != .failed else {
                         let continuation = me.parkedContinuation; me.parkedContinuation = nil
@@ -783,7 +783,7 @@ actor MITMBridgeClientLeg: MITMResponseSink {
         Task { [weak self] in
             let outcome = await rewriter.applyScripts(message, phase: .httpRequest)
             guard let self else { return }
-            self.lwipBridge.enqueue {
+            self.ipBridge.enqueue {
                 self.assumeIsolated { me in
                     guard me.phase != .torn else { return }
                     guard me.streamMethods[streamID] != nil else { return }

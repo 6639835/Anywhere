@@ -25,7 +25,7 @@ nonisolated protocol MITMHTTP1StreamDelegate: AnyObject {
 
 actor MITMHTTP1Stream {
     nonisolated var unownedExecutor: UnownedSerialExecutor {
-        lwipBridge.executor.asUnownedSerialExecutor()
+        ipBridge.executor.asUnownedSerialExecutor()
     }
 
     private static let maxHeadBytes: Int = 64 * 1024
@@ -58,7 +58,7 @@ actor MITMHTTP1Stream {
 
     private let requestLog: MITMRequestLog
 
-    private let lwipBridge: LWIPConcurrencyBridge
+    private let ipBridge: IPStackConcurrencyBridge
 
     init(
         host: String,
@@ -67,7 +67,7 @@ actor MITMHTTP1Stream {
         policy: MITMRewritePolicy,
         effectiveAuthority: String?,
         requestLog: MITMRequestLog,
-        lwipBridge: LWIPConcurrencyBridge,
+        ipBridge: IPStackConcurrencyBridge,
         bridgeClientStreamID: UInt32? = nil
     ) {
         self.host = host
@@ -82,7 +82,7 @@ actor MITMHTTP1Stream {
         self.ruleSetID = matchedSet?.id
         self.effectiveAuthority = effectiveAuthority
         self.requestLog = requestLog
-        self.lwipBridge = lwipBridge
+        self.ipBridge = ipBridge
     }
 
     // MARK: - State
@@ -216,16 +216,16 @@ actor MITMHTTP1Stream {
 
     // MARK: - Public API
 
-    private func onLwip<T>(_ body: @escaping () -> T) async -> T {
-        await lwipBridge.run(body)
+    private func onIPStack<T>(_ body: @escaping () -> T) async -> T {
+        await ipBridge.run(body)
     }
 
-    private func onLwipParked<T>(_ body: @escaping (CheckedContinuation<T, Never>) -> Void) async -> T {
-        await lwipBridge.runParked(body)
+    private func onIPStackParked<T>(_ body: @escaping (CheckedContinuation<T, Never>) -> Void) async -> T {
+        await ipBridge.runParked(body)
     }
 
     func transform(_ data: Data) async -> Data {
-        await onLwipParked { (continuation: CheckedContinuation<Data, Never>) in
+        await onIPStackParked { (continuation: CheckedContinuation<Data, Never>) in
             self.transformOnQueue(data, continuation: continuation)
         }
     }
@@ -318,7 +318,7 @@ actor MITMHTTP1Stream {
     }
 
     func finish() async -> Data {
-        await onLwipParked { (continuation: CheckedContinuation<Data, Never>) in
+        await onIPStackParked { (continuation: CheckedContinuation<Data, Never>) in
             self.finishOnQueue(continuation: continuation)
         }
     }
@@ -616,7 +616,7 @@ actor MITMHTTP1Stream {
                 pendingHop = Task { [weak self] in
                     let outcome = await MITMScriptTransform.apply(message, rules: rules)
                     guard let self else { return }
-                    self.lwipBridge.enqueue {
+                    self.ipBridge.enqueue {
                         self.assumeIsolated {
                             $0.resumeHeadNoBody(
                                 outcome: outcome,
@@ -725,7 +725,7 @@ actor MITMHTTP1Stream {
         pendingHop = Task { [weak self] in
             let table = await MITMGateVerdictTable.resolve(rules: rules, url: url)
             guard let self else { return }
-            self.lwipBridge.enqueue {
+            self.ipBridge.enqueue {
                 self.assumeIsolated { $0.resumeGateResolution(slot: slot, table: table) }
             }
         }
@@ -1179,7 +1179,7 @@ actor MITMHTTP1Stream {
                 cursor: cursor
             )
             guard let self else { return }
-            self.lwipBridge.enqueue {
+            self.ipBridge.enqueue {
                 self.assumeIsolated { $0.resumeStreamingFrame(result: result, streaming: captured, postFrame: postFrame) }
             }
         }
@@ -1339,7 +1339,7 @@ actor MITMHTTP1Stream {
         pendingHop = Task { [weak self] in
             let outcome = await MITMScriptTransform.apply(message, rules: rules)
             guard let self else { return }
-            self.lwipBridge.enqueue {
+            self.ipBridge.enqueue {
                 self.assumeIsolated { $0.resumeBufferedBody(outcome: outcome, pending: pending, resumeMode: resumeMode) }
             }
         }

@@ -6,8 +6,9 @@
 //
 
 import Foundation
-import NetworkExtension
 import Synchronization
+import NetworkExtension
+import AnywhereIP
 
 nonisolated private let logger = AnywhereLogger(category: "TunnelStack+IO")
 
@@ -19,7 +20,7 @@ extension TunnelStack {
         while true {
             var packets: [Data] = []
             var protocols: [NSNumber] = []
-            var releases: [LWIPReleaseAction] = []
+            var releases: [PacketRelease] = []
 
             outputBuffer.withLock { buffer in
                 let pending = buffer.packets.count
@@ -40,9 +41,9 @@ extension TunnelStack {
 
             if !releases.isEmpty {
                 let toRelease = releases
-                lwipBridge.enqueue {
+                ipBridge.enqueue {
                     for release in toRelease {
-                        release.run()
+                        release()
                     }
                 }
             }
@@ -64,7 +65,7 @@ extension TunnelStack {
         guard !packets.isEmpty else { return }
         packetFlow.writePackets(packets, withProtocols: protocols)
         for release in releases {
-            release.run()
+            release()
         }
     }
 
@@ -73,7 +74,6 @@ extension TunnelStack {
         let needsKick: Bool = outputBuffer.withLock { buffer in
             buffer.packets.append(packet)
             buffer.protocols.append(proto)
-            buffer.releases.append(.noop)
             if buffer.drainInFlight { return false }
             buffer.drainInFlight = true
             return true
@@ -106,7 +106,7 @@ extension TunnelStack {
 
     private func processInboundBatch(_ packets: [Data], udpPlane: UDPPlane) async {
         let reflector = reflector()
-        var lwipBatch: [Data] = []
+        var ipBatch: [Data] = []
         var udpBatch: [Data] = []
 
         for packet in packets {
@@ -117,48 +117,45 @@ extension TunnelStack {
             if UDPPacket.ipProtocol(of: packet)?.proto == UDPPacket.ipProtocolUDP {
                 udpBatch.append(packet)
             } else {
-                lwipBatch.append(packet)
+                ipBatch.append(packet)
             }
         }
 
         await withTaskGroup(of: Void.self) { group in
-            group.addTask { [lwipBatch] in await self.feedLwipBatch(lwipBatch) }
+            group.addTask { [ipBatch] in await self.feedIPStackBatch(ipBatch) }
             group.addTask { [udpBatch] in await udpPlane.feed(udpBatch) }
         }
     }
 
-    func feedLwipBatch(_ packets: [Data]) {
-        guard dataPlaneUp, !packets.isEmpty else { return }
-        lwip_bridge_input_batch_begin()
-        for packet in packets {
-            packet.withUnsafeBytes { buffer in
-                guard let baseAddress = buffer.baseAddress else { return }
-                lwip_bridge_input(baseAddress, Int32(buffer.count))
+    func feedIPStackBatch(_ packets: [Data]) {
+        guard dataPlaneUp, let ipStack, !packets.isEmpty else { return }
+        ipStack.inputBatch { batch in
+            for packet in packets {
+                ipBridge.withInputPacket(packet) { batch.feed($0) }
             }
         }
-        lwip_bridge_input_batch_end()
-        FlowGauge.publishTCPTable(Int(lwip_bridge_active_tcp_count()))
-        if lwip_bridge_tcp_idle() == 0 {
-            lwipTick?.resume()
-        }
+        FlowGauge.publishTCPTable(ipStack.activeConnectionCount)
+        if !ipStack.isIdle { ipStackTick?.resume() }
     }
 
     // MARK: - Timers
-    
-    func startLwipTick() {
-        let tick = lwipBridge.makeTick(
-            intervalMs: TunnelConstants.lwipTickIntervalMs,
-            leewayMs: TunnelConstants.lwipTickLeewayMs
+
+    func startIPStackTick() {
+        let interval = IPStack.tickInterval.components
+        let tick = ipBridge.makeTick(
+            intervalMs: Int(interval.seconds * 1_000 + interval.attoseconds / 1_000_000_000_000_000),
+            leewayMs: TunnelConstants.ipStackTickLeewayMs
         ) { [weak self] in
-            guard let self, self.publishedPhase.load(ordering: .relaxed).isActive else { return }
-            lwip_bridge_tick()
-            FlowGauge.publishTCPTable(Int(lwip_bridge_active_tcp_count()))
-            if lwip_bridge_tcp_idle() != 0 {
-                self.assumeIsolated { $0.lwipTick?.suspend() }
+            guard let self else { return }
+            self.assumeIsolated { stack in
+                guard stack.phase.isActive, let ipStack = stack.ipStack else { return }
+                ipStack.tick()
+                FlowGauge.publishTCPTable(ipStack.activeConnectionCount)
+                if ipStack.isIdle { stack.ipStackTick?.suspend() }
             }
         }
         tick.suspend()
-        lwipTick = tick
+        ipStackTick = tick
     }
 
     nonisolated func runUDPCleanupLoop(udpPlane: UDPPlane) async {

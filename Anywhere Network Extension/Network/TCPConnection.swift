@@ -5,12 +5,13 @@
 //  Created by NodePassProject on 3/1/26.
 //
 
+import AnywhereIP
 import Foundation
 import Synchronization
 
 nonisolated private let logger = AnywhereLogger(category: "TCPConnection")
 
-actor TCPConnection: MITMSessionHost {
+actor TCPConnection: MITMSessionHost, TCPConnectionDelegate {
     nonisolated private var connectionID: ObjectIdentifier { ObjectIdentifier(self) }
     
     nonisolated var unownedExecutor: UnownedSerialExecutor {
@@ -19,10 +20,10 @@ actor TCPConnection: MITMSessionHost {
 
     private weak var stack: TunnelStack?
 
-    let pcb: UnsafeMutableRawPointer
+    private let connection: IPStack.Connection
     let dstPort: UInt16
 
-    let bridge: LWIPConcurrencyBridge
+    let bridge: IPStackConcurrencyBridge
 
     private(set) var dstHost: String
 
@@ -141,7 +142,7 @@ actor TCPConnection: MITMSessionHost {
 
     init(
         stack: TunnelStack,
-        pcb: LWIPPCBHandle,
+        connection: IPStack.Connection,
         dstHost: String,
         dstPort: UInt16,
         configuration: ProxyConfiguration,
@@ -149,11 +150,11 @@ actor TCPConnection: MITMSessionHost {
         ruleSetName: String? = nil,
         sniffSNI: Bool = false,
         hostIsResolvedDomain: Bool = false,
-        bridge: LWIPConcurrencyBridge
+        bridge: IPStackConcurrencyBridge
     ) {
         self.stack = stack
         self.bufferLedger = stack.tcpBufferLedger
-        self.pcb = pcb.raw
+        self.connection = connection
         self.dstHost = dstHost
         self.dstPort = dstPort
         self.configuration = configuration
@@ -171,12 +172,7 @@ actor TCPConnection: MITMSessionHost {
         markActivity()
     }
 
-    nonisolated func adopt() -> UnsafeMutableRawPointer {
-        assumeIsolated { $0.start() }
-        return BridgeContext.passRetained(self)
-    }
-
-    private func start() {
+    func start() {
         rootTask = Task { await self.run() }
     }
 
@@ -501,7 +497,8 @@ actor TCPConnection: MITMSessionHost {
     }
 
     private func installStream(seed: Data) -> TCPStreamConcurrencyBridge {
-        let stream = TCPStreamConcurrencyBridge(bridge: bridge, pcb: LWIPPCBHandle(raw: pcb))
+        nonisolated(unsafe) let nativeConnection = self.connection
+        let stream = TCPStreamConcurrencyBridge(bridge: bridge, connection: nativeConnection)
         if !seed.isEmpty { stream.assumeIsolated { $0.seedUpload(seed) } }
         self.stream = stream
         transition(to: .relaying)
@@ -699,40 +696,43 @@ actor TCPConnection: MITMSessionHost {
     private func acknowledgeReceivedBytes(_ byteCount: Int) {
         guard byteCount > 0 else { return }
         stack?.addBytesOut(Int64(byteCount), target: routeTarget)
-        var remaining = byteCount
-        while remaining > 0 {
-            let part = UInt16(min(remaining, Int(UInt16.max)))
-            remaining -= Int(part)
-            lwip_bridge_tcp_recved(pcb, part)
-        }
-        lwip_bridge_tcp_output(pcb)
+        connection.didConsume(byteCount)
+        connection.flush()
     }
 
-    // MARK: - lwIP callbacks
-
-    func handleReceivedData(bytes ptr: UnsafeRawPointer, count: Int) {
-        guard phase != .closed, count > 0 else { return }
-        markActivity()
-
-        let bytePtr = ptr.assumingMemoryBound(to: UInt8.self)
-
-        if let mitmSession {
-            let chunk = Data(bytes: bytePtr, count: count)
-            acknowledgeReceivedBytes(count)
-            mitmSession.assumeIsolated { $0.feedClientBytes(chunk) }
-            return
-        }
-
-        if let stream {
-            let uploadChunk = Data(bytes: ptr, count: count)
-            stream.assumeIsolated { $0.deliverUpload(uploadChunk) }
-            return
-        }
-
-        pendingData.append(bytePtr, count: count)
-        establishInbox.yield(())
-    }
+    // MARK: - IPStack delegate
     
+    nonisolated func connection(_ connection: IPStack.Connection, didReceive bytes: UnsafeRawBufferPointer) {
+        let data = bridge.receivedData(bytes)
+        assumeIsolated { $0.handleReceivedData(data) }
+    }
+
+    nonisolated func connectionDidReceiveFin(_ connection: IPStack.Connection) {
+        assumeIsolated { $0.handleRemoteClose() }
+    }
+
+    nonisolated func connection(_ connection: IPStack.Connection, didAcknowledge byteCount: Int) {
+        assumeIsolated { $0.handleSent() }
+    }
+
+    nonisolated func connection(_ connection: IPStack.Connection, didFailWith error: TCPConnectionError) {
+        assumeIsolated { $0.handleError(error) }
+    }
+
+    private func handleReceivedData(_ data: Data) {
+        guard phase != .closed, !data.isEmpty else { return }
+        markActivity()
+        if let mitmSession {
+            acknowledgeReceivedBytes(data.count)
+            mitmSession.assumeIsolated { $0.feedClientBytes(data) }
+        } else if let stream {
+            stream.assumeIsolated { $0.deliverUpload(data) }
+        } else {
+            pendingData.append(data)
+            establishInbox.yield(())
+        }
+    }
+
     private func syncBufferLedger() {
         guard phase != .closed else { return }
         let victims = bufferLedger.set(flow: connectionID, handle: self, bytes: pendingData.count)
@@ -772,7 +772,7 @@ actor TCPConnection: MITMSessionHost {
         abort()
     }
 
-    func handleSent(len: UInt16) {
+    func handleSent() {
         guard phase != .closed else { return }
         stream?.assumeIsolated { $0.deliverSendCredit() }
     }
@@ -782,19 +782,19 @@ actor TCPConnection: MITMSessionHost {
         close()
     }
 
-    func handleError(err: Int32) {
-        let reason = AnywhereError.Transport.lwipName(err)
-        if err == -15 {
-            logger.debug("[TCP] lwIP closed connection: \(endpointDescription): \(reason)")
-        } else if err == -14 {
-            logger.debug("[TCP] lwIP peer reset: \(endpointDescription): \(reason)")
-        } else if err == -13, stack?.lwipAbortContext.load(ordering: .relaxed) == .teardown {
-            logger.debug("[TCP] lwIP aborted connection (tunnel teardown): \(endpointDescription): \(reason)")
-        } else {
-            logger.warning("[TCP] lwIP aborted connection: \(endpointDescription): \(reason)")
+    func handleError(_ error: TCPConnectionError) {
+        switch error {
+        case .closed:
+            logger.debug("[TCP] IPStack closed connection: \(endpointDescription)")
+        case .reset:
+            logger.debug("[TCP] IPStack peer reset: \(endpointDescription)")
+        case .aborted where stack?.ipStackAbortContext.load(ordering: .relaxed) == .teardown:
+            logger.debug("[TCP] IPStack aborted connection (tunnel teardown): \(endpointDescription)")
+        case .aborted:
+            logger.warning("[TCP] IPStack aborted connection: \(endpointDescription)")
         }
         failureReporter.markReported()
-        finish(.lwipError)
+        finish(.stackError)
     }
 
     private var endpointDescription: String {
@@ -910,12 +910,13 @@ actor TCPConnection: MITMSessionHost {
             clientHello: initialClientHello,
             leafCache: cache,
             policy: stack.mitmPolicy,
-            lwipBridge: bridge,
+            ipBridge: bridge,
             isPlaintext: mitmPlaintext
         )
         session.assumeIsolated { $0.host = self }
-
-        let stream = TCPStreamConcurrencyBridge(bridge: bridge, pcb: LWIPPCBHandle(raw: pcb))
+        
+        nonisolated(unsafe) let nativeConnection = self.connection
+        let stream = TCPStreamConcurrencyBridge(bridge: bridge, connection: nativeConnection)
         self.stream = stream
         stream.assumeIsolated { s in
             s.onFatalWrite = { [weak self] error in
@@ -1191,7 +1192,7 @@ actor TCPConnection: MITMSessionHost {
         case graceful
         case abortive
         case silentReject
-        case lwipError
+        case stackError
     }
 
     private func finish(_ exit: Exit) {
@@ -1206,18 +1207,15 @@ actor TCPConnection: MITMSessionHost {
             } else {
                 flushPendingReceiveWindow()
             }
-            lwip_bridge_tcp_close(pcb)
-            BridgeContext.release(self)
+            connection.close()
             teardown(abortive: false)
         case .abortive:
-            lwip_bridge_tcp_abort(pcb)
-            BridgeContext.release(self)
+            connection.abort()
             teardown(abortive: true)
         case .silentReject:
-            lwip_bridge_tcp_discard(pcb)
-            BridgeContext.release(self)
+            connection.discard()
             teardown(abortive: true)
-        case .lwipError:
+        case .stackError:
             teardown(abortive: true)
         }
     }
@@ -1236,13 +1234,9 @@ actor TCPConnection: MITMSessionHost {
 
     private func flushPendingReceiveWindow() {
         guard !pendingData.isEmpty else { return }
-        var remaining = pendingData.count
+        let count = pendingData.count
         pendingData.removeAll(keepingCapacity: false)
-        while remaining > 0 {
-            let chunk = UInt16(min(remaining, Int(UInt16.max)))
-            remaining -= Int(chunk)
-            lwip_bridge_tcp_recved(pcb, chunk)
-        }
+        connection.didConsume(count)
     }
 
     private func rejectSilently() {
@@ -1258,18 +1252,8 @@ actor TCPConnection: MITMSessionHost {
 
     private func writeImmediate(_ data: Data) {
         guard !data.isEmpty else { return }
-        var written = 0
-        data.withUnsafeBytes { buffer in
-            guard let base = buffer.baseAddress else { return }
-            while written < data.count {
-                let sndbuf = Int(lwip_bridge_tcp_sndbuf(pcb))
-                guard sndbuf > 0 else { break }
-                let chunk = min(min(sndbuf, data.count - written), TunnelConstants.tcpMaxWriteSize)
-                guard lwip_bridge_tcp_write(pcb, base + written, UInt16(chunk)) == 0 else { break }
-                written += chunk
-            }
-        }
-        if written > 0 { lwip_bridge_tcp_output(pcb) }
+        let written = data.withUnsafeBytes { connection.write($0) }
+        if written > 0 { connection.flush() }
     }
 
     private func teardown(abortive: Bool) {

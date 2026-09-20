@@ -31,14 +31,14 @@ Most iOS proxy clients wrap sing-box or Xray-core in a Go/C++ bridge. Anywhere t
 
 ### Highlights
 
-- **Native core** — Swift 6 with strict concurrency, plus vendored C for lwIP, ngtcp2, and BLAKE3. No Go or C++ core, no bridging layer, no third-party networking packages. A single codebase builds the iOS, iPadOS, tvOS, and watchOS apps, the packet tunnel, and the Control Center controls.
+- **Native core** — Swift 6 with strict concurrency, the native AnywhereIP TCP/IP stack, and vendored C for ngtcp2 and BLAKE3. No Go or C++ core, no bridging layer, no third-party networking packages. A single codebase builds the iOS, iPadOS, tvOS, and watchOS apps, the packet tunnel, and the Control Center controls.
 - **Native TLS stack** — TLS 1.2 and 1.3, client and server, implemented in Swift. Browser-exact ClientHello fingerprints for Chrome, Firefox, Safari, and Edge; Encrypted Client Hello from an inline configuration or from DNS HTTPS records; hybrid X25519 and ML-KEM key shares. The same stack terminates TLS for MITM and provides the handshake primitives for Reality.
 - **Native QUIC stack** — ngtcp2 driven from Swift, with BBR, CUBIC, and Brutal congestion control, connection migration, DATAGRAM frames, session resumption, and pluggable packet obfuscation. One engine serves Hysteria2, Nowhere, and XHTTP over HTTP/3.
 - **Multi-stage routing** — a five-tier matcher built from domain-suffix tries, keyword automata, and CIDR tries classifies each destination at DNS time through Fake-IP, at connect time before the TCP handshake is accepted, and again mid-connection from the sniffed TLS SNI. Bundled service, ad-block, and country-bypass rule sets are complemented by importable and subscribable `.arrs` rule sets.
 - **Built-in MITM** — HTTPS is terminated with a generated root CA. HTTP/1.1 and HTTP/2 traffic is rewritten by declarative rules or JavaScript, HTTP/2 clients are bridged to HTTP/1.1 upstreams, and script-initiated HTTP requests are dialled through the tunnel's own routing.
 - **Purify and DNS** — a QUIC policy that fails HTTP/3 fast so that routing and MITM act on HTTP/2, WebRTC and UDP blocking, DNS-leak prevention, and independent plain or DoH resolvers for proxy servers, IP rules, subscriptions, ECH, and fallback.
 - **Platform integration** — a native Apple TV app, an Apple Watch companion, Control Center toggles for VPN and mode, and iCloud sync through CloudKit.
-- **Engineered for the extension budget** — global buffer ledgers, connection caps, and pressure throttling keep the packet tunnel within the Network Extension memory limit. The tunnel stack, TCP connections, and MITM sessions are actors bound to the lwIP serial executor, so the packet path never changes threads.
+- **Engineered for the extension budget** — global buffer ledgers, connection caps, and pressure throttling keep the packet tunnel within the Network Extension memory limit. The tunnel stack, TCP connections, and MITM sessions are actors bound to a per-tunnel serial executor, so the packet path never changes threads.
 
 ### Protocols
 
@@ -67,7 +67,7 @@ flowchart TB
     PTP -. "stats · requests · logs" .-> UI
 
     subgraph NE["Network Extension"]
-        PTP["PacketTunnelProvider"] --> STACK["TunnelStack<br/>userspace lwIP TCP/IP"]
+        PTP["PacketTunnelProvider"] --> STACK["TunnelStack<br/>AnywhereIP"]
         STACK -- "DNS" --> DNS["DNS interceptor<br/>Fake-IP pool"]
         STACK -- "TCP" --> TCP["TCPConnection<br/>SNI / HTTP sniffing"]
         STACK -- "UDP" --> UDP["UDPPlane<br/>QUIC · WebRTC policy"]

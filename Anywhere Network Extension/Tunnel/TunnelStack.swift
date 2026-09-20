@@ -6,8 +6,9 @@
 //
 
 import Foundation
-import NetworkExtension
 import Synchronization
+import NetworkExtension
+import AnywhereIP
 
 nonisolated private let logger = AnywhereLogger(category: "TunnelStack")
 
@@ -37,10 +38,12 @@ nonisolated struct TrafficByteCounts {
 
 actor TunnelStack {
     nonisolated var unownedExecutor: UnownedSerialExecutor {
-        lwipBridge.executor.asUnownedSerialExecutor()
+        ipBridge.executor.asUnownedSerialExecutor()
     }
 
-    nonisolated let lwipBridge = LWIPConcurrencyBridge(label: AWCore.Identifier.lwipQueue)
+    nonisolated let ipBridge = IPStackConcurrencyBridge(label: AWCore.Identifier.ipStackQueue)
+
+    var ipStack: IPStack?
 
     var udpPlane: UDPPlane!
 
@@ -69,7 +72,7 @@ actor TunnelStack {
     struct OutputBufferState {
         var packets: [Data] = []
         var protocols: [NSNumber] = []
-        var releases: [LWIPReleaseAction] = []
+        var releases: [PacketRelease] = []
         var drainInFlight = false
     }
     let outputBuffer = Mutex(OutputBufferState())
@@ -79,7 +82,7 @@ actor TunnelStack {
             buffer.packets.removeAll(keepingCapacity: true)
             buffer.protocols.removeAll(keepingCapacity: true)
             for release in buffer.releases {
-                release.run()
+                release()
             }
             buffer.releases.removeAll(keepingCapacity: true)
             buffer.drainInFlight = false
@@ -113,7 +116,7 @@ actor TunnelStack {
 
     nonisolated let publishedPhase = Atomic<TunnelPhase>(.idle)
 
-    nonisolated let lwipAbortContext = Atomic<LwipAbortContext>(.none)
+    nonisolated let ipStackAbortContext = Atomic<IPStackAbortContext>(.none)
 
     @discardableResult
     func transition(to new: TunnelPhase) -> Bool {
@@ -145,7 +148,7 @@ actor TunnelStack {
     var pendingSuspend = false
     var stopWaiters: [CheckedContinuation<Void, Never>] = []
 
-    var lwipTick: BridgeTimer?
+    var ipStackTick: BridgeTimer?
     
     var dataPlaneUp = false
     
@@ -420,23 +423,7 @@ actor TunnelStack {
     // MARK: - IP Address Helpers
 
     static func ipAddrToString(_ addr: UnsafeRawPointer, isIPv6: Bool) -> String {
-        var buffer = (
-            Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0),
-            Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0),
-            Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0),
-            Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0),
-            Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0),
-            Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0)
-        ) // 46 bytes = INET6_ADDRSTRLEN
-        return withUnsafeMutablePointer(to: &buffer) { pointer in
-            let cStr = pointer.withMemoryRebound(to: CChar.self, capacity: 46) { charPtr in
-                lwip_ip_to_string(addr, isIPv6 ? 1 : 0, charPtr, 46)
-            }
-            if let cStr {
-                return String(cString: cStr)
-            }
-            return "?"
-        }
+        IPAddress(bytes: addr, isIPv6: isIPv6).description
     }
 
     static func ipAddrToString(_ data: Data, isIPv6: Bool) -> String {
