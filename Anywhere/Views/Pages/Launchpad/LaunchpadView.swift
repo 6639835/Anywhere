@@ -21,6 +21,7 @@ struct LaunchpadView: View {
     @Environment(ConnectionStats.self) private var connectionStats
 
     @State private var connectionEffectsEnabled = false
+    @State private var page = 0
 
     @State private var showingProxiesView = false
     @State private var showingAddSheet = false
@@ -33,73 +34,86 @@ struct LaunchpadView: View {
     }
 
     private var isTransitioning: Bool { tunnelController.rawStatus.isTransitioning }
-
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                BackgroundGradient(isConnected: isConnected)
-                    .ignoresSafeArea()
-                
-                TabView {
-                    Tab {
-                        VStack(spacing: 0) {
-                            VStack(spacing: 20) {
-                                PowerButton(
-                                    isConnected: isConnected,
-                                    isTransitioning: isTransitioning,
-                                    isLoading: isLoading,
-                                    isDisabled: isLoading
-                                    || ((!tunnelController.isManagerReady || isTransitioning)
-                                        && configurationStore.hasConfigurations),
-                                    animatesChanges: connectionEffectsEnabled
-                                ) {
-                                    guard !isLoading else { return }
-                                    if configurationStore.hasConfigurations {
-                                        withAnimation(.spring(response: 0.5, dampingFraction: 0.7)) {
-                                            operations.tunnel.toggle()
-                                        }
-                                    } else {
-                                        showingAddSheet = true
-                                    }
-                                }
-                                
-                                Text(tunnelController.status.localizedText)
-                                    .font(.headline)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .layoutPriority(1)
-                            
-                            Rectangle()
-                                .fill(.clear)
-                                .frame(idealHeight: 80, maxHeight: 80)
-                            
-                            ConfigurationCapsule(
-                                isConnected: isConnected,
-                                showingProxiesPage: $showingProxiesView,
-                                showingAddSheet: $showingAddSheet
-                            )
-                            .frame(maxWidth: 500)
-                            .layoutPriority(1)
-                        }
-                        .padding()
-                        .animation(connectionEffectsEnabled ? Animation.bouncy : nil, value: isConnected)
-                    }
-                    Tab {
-                        MissionControlView()
-                    }
-                }
-                .tabViewStyle(.page)
-                .ignoresSafeArea(edges: [.bottom])
-                .sensoryFeedback(trigger: isConnected) { _, _ in
-                    guard connectionEffectsEnabled else { return nil }
-                    return .impact
+    
+    private var isPowerButtonDisabled: Bool {
+        if configurationStore.hasConfigurations {
+            if !isTransitioning {
+                if tunnelController.isManagerReady {
+                    return false
                 }
             }
-            .navigationTitle("Launchpad")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                if #available(iOS 27.0, *) {
-                    ToolbarOverflowMenu {
+        }
+        return true
+    }
+
+    var body: some View {
+        ZStack {
+            BackgroundGradient(isConnected: isConnected)
+                .ignoresSafeArea()
+            
+            PageView(selection: $page) {
+                VStack(spacing: 0) {
+                    VStack(spacing: 20) {
+                        PowerButton(
+                            isConnected: isConnected,
+                            isTransitioning: isTransitioning,
+                            isLoading: isLoading,
+                            isDisabled: isPowerButtonDisabled,
+                            animatesChanges: connectionEffectsEnabled
+                        ) {
+                            guard !isLoading else { return }
+                            if configurationStore.hasConfigurations {
+                                withAnimation(.spring(response: 0.5, dampingFraction: 0.7)) {
+                                    operations.tunnel.toggle()
+                                }
+                            } else {
+                                showingAddSheet = true
+                            }
+                        }
+                        
+                        Text(tunnelController.status.localizedText)
+                            .font(.headline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .layoutPriority(1)
+                    
+                    Rectangle()
+                        .fill(.clear)
+                        .frame(idealHeight: 80, maxHeight: 80)
+                    
+                    ConfigurationCapsule(
+                        isConnected: isConnected,
+                        showingProxiesPage: $showingProxiesView,
+                        showingAddSheet: $showingAddSheet
+                    )
+                    .frame(maxWidth: 500)
+                    .layoutPriority(1)
+                }
+                .padding()
+                .animation(connectionEffectsEnabled ? Animation.bouncy : nil, value: isConnected)
+                .pageIndicator(Image("anywhere"), label: "Launchpad")
+                
+                MissionControlView()
+                    .pageIndicator(Image(systemName: "rectangle.3.group.fill"), label: "Mission Control")
+            }
+            .sensoryFeedback(trigger: isConnected) { _, _ in
+                guard connectionEffectsEnabled else { return nil }
+                return .impact
+            }
+        }
+        .toolbar {
+            if #available(iOS 27.0, *) {
+                ToolbarOverflowMenu {
+                    Button {
+                        Task { await connectionStats.resetStats() }
+                    } label: {
+                        Label("Reset Stats", systemImage: "0.circle")
+                    }
+                    .disabled(!isConnected)
+                }
+            } else {
+                ToolbarItem {
+                    Menu("More", systemImage: "ellipsis") {
                         Button {
                             Task { await connectionStats.resetStats() }
                         } label: {
@@ -107,53 +121,42 @@ struct LaunchpadView: View {
                         }
                         .disabled(!isConnected)
                     }
-                } else {
-                    ToolbarItem {
-                        Menu("More", systemImage: "ellipsis") {
-                            Button {
-                                Task { await connectionStats.resetStats() }
-                            } label: {
-                                Label("Reset Stats", systemImage: "0.circle")
-                            }
-                            .disabled(!isConnected)
-                        }
-                    }
                 }
             }
-            .sheet(isPresented: $showingProxiesView) {
-                ProxiesView()
-                    .presentationDetents([.medium, .large])
+        }
+        .sheet(isPresented: $showingProxiesView) {
+            ProxiesView()
+                .presentationDetents([.medium, .large])
+                .environment(operations)
+                .environment(proxySelection)
+                .environment(latencyCenter)
+                .environment(configurationStore)
+                .environment(chainStore)
+                .environment(groupStore)
+                .environment(subscriptionStore)
+        }
+        .sheet(isPresented: $showingAddSheet) {
+            DynamicSheet(animation: .snappy(duration: 0.3, extraBounce: 0)) {
+                AddProxyView(showingManualAddSheet: $showingManualAddSheet)
                     .environment(operations)
-                    .environment(proxySelection)
-                    .environment(latencyCenter)
-                    .environment(configurationStore)
-                    .environment(chainStore)
-                    .environment(groupStore)
-                    .environment(subscriptionStore)
             }
-            .sheet(isPresented: $showingAddSheet) {
-                DynamicSheet(animation: .snappy(duration: 0.3, extraBounce: 0)) {
-                    AddProxyView(showingManualAddSheet: $showingManualAddSheet)
-                        .environment(operations)
-                }
+        }
+        .sheet(isPresented: $showingManualAddSheet) {
+            ProxyEditorView { configuration in
+                operations.configurations.add(configuration); operations.selection.selectIfNone(configuration)
             }
-            .sheet(isPresented: $showingManualAddSheet) {
-                ProxyEditorView { configuration in
-                    operations.configurations.add(configuration); operations.selection.selectIfNone(configuration)
-                }
-            }
-            .alert("VPN Error", isPresented: Binding(
-                get: { tunnelController.startError != nil },
-                set: { if !$0 { tunnelController.startError = nil } }
-            )) {
-                Button("OK") { tunnelController.startError = nil }
-            } message: {
-                Text(tunnelController.startError ?? "")
-            }
-            .onChange(of: tunnelController.isManagerReady, initial: true) { _, ready in
-                guard ready, !connectionEffectsEnabled else { return }
-                Task { @MainActor in connectionEffectsEnabled = true }
-            }
+        }
+        .alert("VPN Error", isPresented: Binding(
+            get: { tunnelController.startError != nil },
+            set: { if !$0 { tunnelController.startError = nil } }
+        )) {
+            Button("OK") { tunnelController.startError = nil }
+        } message: {
+            Text(tunnelController.startError ?? "")
+        }
+        .onChange(of: tunnelController.isManagerReady, initial: true) { _, ready in
+            guard ready, !connectionEffectsEnabled else { return }
+            Task { @MainActor in connectionEffectsEnabled = true }
         }
     }
 }

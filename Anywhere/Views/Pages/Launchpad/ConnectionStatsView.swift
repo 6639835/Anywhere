@@ -407,7 +407,7 @@ private struct SleepWakeCard: View {
     let wakeSeconds: TimeInterval
     let sleepSeconds: TimeInterval
 
-    private static let wakeColor: Color = .blue
+    private static let wakeColor: Color = .cyan
     private static let sleepColor: Color = .indigo
 
     var body: some View {
@@ -454,7 +454,7 @@ private struct RouteBreakdownCard: View {
     let name: (RouteTarget) -> String
 
     private static let proxyPalette: [Color] =
-    [.blue, .orange, .purple, .pink, .yellow, .mint, .indigo, .teal]
+    [.cyan, .orange, .purple, .pink, .yellow, .mint, .indigo, .teal]
     private static let directColor: Color = .green
     private static let otherColor: Color = .gray
 
@@ -509,13 +509,19 @@ private struct RouteBreakdownCard: View {
         let slices = makeSlices()
         let total = slices.reduce(0) { $0 + $1.bytes }
         StatCard("Traffic by Route", systemImage: "chart.pie", size: .medium) {
-            HStack(spacing: 18) {
-                DonutChart(segments: slices.map {
-                    DonutSegment(id: $0.id, value: Double($0.bytes), color: $0.color)
-                })
-                .frame(maxWidth: .infinity)
-                RouteLegend(slices: slices, total: total)
+            if slices.count == 1, slices[0].bytes == 0 {
+                Text("No Data")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                HStack(spacing: 18) {
+                    DonutChart(segments: slices.map {
+                        DonutSegment(id: $0.id, value: Double($0.bytes), color: $0.color)
+                    })
                     .frame(maxWidth: .infinity)
+                    RouteLegend(slices: slices, total: total)
+                        .frame(maxWidth: .infinity)
+                }
             }
         }
     }
@@ -559,7 +565,7 @@ struct AnywhereLinearGaugeStyle: GaugeStyle {
                         .animation(.default, value: fraction)
                 }
             }
-            .frame(height: 10)
+            .frame(height: 5)
         }
     }
 }
