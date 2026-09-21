@@ -18,20 +18,19 @@ nonisolated struct MITMDialResult {
 nonisolated protocol MITMSessionHost: AnyObject, Sendable {
     func mitmDialUpstream(host: String, port: UInt16) async throws -> MITMDialResult
     func mitmSessionSendToClient(_ data: Data)
+    func mitmSessionWriteToClient(_ data: Data) async throws
     func mitmSessionDidTearDown(error: Error?)
 }
 
 actor MITMSession: MITMHTTP1StreamDelegate {
 
     nonisolated var unownedExecutor: UnownedSerialExecutor {
-        ipBridge.executor.asUnownedSerialExecutor()
+        sessionContext.executor.asUnownedSerialExecutor()
     }
 
     // MARK: - Inner Transport
 
     final class InnerTransport: ByteTransport, Sendable {
-        let ipBridge: IPStackConcurrencyBridge
-
         private let inbox = AsyncInbox<Data>()
         private enum Phase: PhaseTransitionable {
             case open, closed
@@ -57,18 +56,14 @@ actor MITMSession: MITMHTTP1StreamDelegate {
             state.withLock { $0.host = host }
         }
 
-        init(ipBridge: IPStackConcurrencyBridge) {
-            self.ipBridge = ipBridge
-        }
-
         // MARK: ByteTransport
 
         func send(_ data: Data) async throws {
             guard !state.withLock({ $0.phase == .closed }) else { throw AnywhereError.transport(.notConnected) }
-            ipBridge.enqueue { [self] in
-                let host = state.withLock { $0.phase == .closed ? nil : $0.host }
-                host?.mitmSessionSendToClient(data)
+            guard let host = state.withLock({ $0.phase == .closed ? nil : $0.host }) else {
+                throw AnywhereError.transport(.terminated)
             }
+            try await host.mitmSessionWriteToClient(data)
         }
 
         func receive() async throws -> TransportChunk {
@@ -94,7 +89,7 @@ actor MITMSession: MITMHTTP1StreamDelegate {
     private let dstHost: String
     private let dstPort: UInt16
 
-    private let ipBridge: IPStackConcurrencyBridge
+    private let sessionContext: SessionExecutionContext
 
     private let isPlaintext: Bool
 
@@ -345,7 +340,7 @@ actor MITMSession: MITMHTTP1StreamDelegate {
         clientHello: Data,
         leafCache: MITMLeafCertCache?,
         policy: MITMRewritePolicy,
-        ipBridge: IPStackConcurrencyBridge,
+        sessionContext: SessionExecutionContext,
         isPlaintext: Bool = false
     ) {
         self.dstHost = dstHost
@@ -353,9 +348,9 @@ actor MITMSession: MITMHTTP1StreamDelegate {
         self.pendingClientBytes = clientHello
         self.leafCache = leafCache
         self.policy = policy
-        self.ipBridge = ipBridge
+        self.sessionContext = sessionContext
         self.isPlaintext = isPlaintext
-        self.innerTransport = InnerTransport(ipBridge: ipBridge)
+        self.innerTransport = InnerTransport()
         (self.deferredActions, self.deferredActionContinuation) = AsyncStream.makeStream(of: DeferredAction.self)
         (self.sessionJobs, self.sessionJobContinuation) = AsyncStream.makeStream(of: SessionJob.self)
         let scheme = isPlaintext ? "http" : "https"
@@ -366,7 +361,7 @@ actor MITMSession: MITMHTTP1StreamDelegate {
             policy: policy,
             effectiveAuthority: nil,
             requestLog: requestLog,
-            ipBridge: ipBridge
+            sessionContext: sessionContext
         )
         self.responseStream = MITMHTTP1Stream(
             host: dstHost,
@@ -375,7 +370,7 @@ actor MITMSession: MITMHTTP1StreamDelegate {
             policy: policy,
             effectiveAuthority: nil,
             requestLog: requestLog,
-            ipBridge: ipBridge
+            sessionContext: sessionContext
         )
         self.h2Rewriter = MITMHTTP2Rewriter(
             host: dstHost,
@@ -1083,7 +1078,7 @@ extension MITMSession: TLSServerDelegate {
                 host: dstHost,
                 rewriter: h2Rewriter,
                 flowController: h2FlowController,
-                ipBridge: ipBridge
+                sessionContext: sessionContext
             )
             client.assumeIsolated { $0.delegate = self }
             bridgeClient = client
@@ -1343,7 +1338,7 @@ extension MITMSession: MITMBridgeClientLegDelegate, MITMUpstreamLegDelegate {
 
     private func bindH2Upstream(record: TLSRecordConnection) {
         upstreamProtocol = .h2
-        let leg = MITMHTTP2UpstreamLeg(host: dstHost, rewriter: h2Rewriter, flowController: h2FlowController, ipBridge: ipBridge)
+        let leg = MITMHTTP2UpstreamLeg(host: dstHost, rewriter: h2Rewriter, flowController: h2FlowController, sessionContext: sessionContext)
         h2Upstream = leg
         bridgeClient?.assumeIsolated { $0.uploadDrainCoupled = true }
         let events = pendingRequestEvents
@@ -1435,7 +1430,7 @@ extension MITMSession: MITMBridgeClientLegDelegate, MITMUpstreamLegDelegate {
         responseLog.recordHTTP1(method: head.method, url: url, originalUrl: head.originalURL)
         let responseStream = MITMHTTP1Stream(
             host: dstHost, direction: .httpResponse, policy: policy, effectiveAuthority: nil,
-            requestLog: responseLog, ipBridge: ipBridge,
+            requestLog: responseLog, sessionContext: sessionContext,
             bridgeClientStreamID: streamID
         )
         responseStream.assumeIsolated { $0.delegate = self }

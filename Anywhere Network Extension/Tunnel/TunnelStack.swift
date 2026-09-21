@@ -37,13 +37,8 @@ nonisolated struct TrafficByteCounts {
 // MARK: - TunnelStack
 
 actor TunnelStack {
-    nonisolated var unownedExecutor: UnownedSerialExecutor {
-        ipBridge.executor.asUnownedSerialExecutor()
-    }
-
-    nonisolated let ipBridge = IPStackConcurrencyBridge(label: AWCore.Identifier.ipStackQueue)
-
     var ipStack: IPStack?
+    nonisolated let dataPlaneGeneration = Atomic<UInt64>(0)
 
     var udpPlane: UDPPlane!
 
@@ -70,21 +65,18 @@ actor TunnelStack {
     static let ipv6Proto = NSNumber(value: AF_INET6)
 
     struct OutputBufferState {
+        var generation: UInt64 = 0
         var packets: [Data] = []
         var protocols: [NSNumber] = []
-        var releases: [PacketRelease] = []
         var drainInFlight = false
     }
     let outputBuffer = Mutex(OutputBufferState())
     
     func purgeOutputBuffer() {
         outputBuffer.withLock { buffer in
+            buffer.generation = dataPlaneGeneration.load(ordering: .acquiring)
             buffer.packets.removeAll(keepingCapacity: true)
             buffer.protocols.removeAll(keepingCapacity: true)
-            for release in buffer.releases {
-                release()
-            }
-            buffer.releases.removeAll(keepingCapacity: true)
             buffer.drainInFlight = false
         }
     }
@@ -148,7 +140,7 @@ actor TunnelStack {
     var pendingSuspend = false
     var stopWaiters: [CheckedContinuation<Void, Never>] = []
 
-    var ipStackTick: BridgeTimer?
+    var ipStackTick: Task<Void, Never>?
     
     var dataPlaneUp = false
     
@@ -280,7 +272,12 @@ actor TunnelStack {
     
     nonisolated let tcpBufferLedger = TCPBufferLedger(budget: TunnelConstants.tcpGlobalBufferBudget)
 
-    var tcpPressureLog = PressureEventThrottle(label: "TCP", cap: TunnelLimits.tcpMaxConnections)
+    nonisolated let tcpPressureLog = Mutex(PressureEventThrottle(label: "TCP", cap: TunnelLimits.tcpMaxConnections))
+    nonisolated let tcpConnections = Mutex<[ObjectIdentifier: TCPConnection]>([:])
+
+    nonisolated func removeTCPConnection(_ id: ObjectIdentifier) {
+        _ = tcpConnections.withLock { $0.removeValue(forKey: id) }
+    }
 
     nonisolated let fakeIPPool: FakeIPPool
 

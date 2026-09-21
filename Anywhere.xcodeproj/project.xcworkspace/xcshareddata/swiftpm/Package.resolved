@@ -1,13 +1,13 @@
 {
-  "originHash" : "617587971d56399b12128348fe6ce8e69baced11513cee50a98c3cbb4e677d62",
+  "originHash" : "ac049ddc6b0d225049de12badcd0b174d9d03247401afff49c41c3260046654c",
   "pins" : [
     {
       "identity" : "anywhereip",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/hiDandelion/AnywhereIP.git",
+      "location" : "https://github.com/NodePassProject/AnywhereIP.git",
       "state" : {
-        "revision" : "edd26dc68cef6bc84ba40908d2d36ca5c0c638a5",
-        "version" : "1.0.0"
+        "revision" : "7f73f95870a879cfbcdf35d40dfeded3d7b20bd4",
+        "version" : "2.0.0"
       }
     },
     {

@@ -10,7 +10,6 @@ import NetworkExtension
 import Synchronization
 
 nonisolated final class PathMonitorConcurrencyBridge: Sendable {
-
     private let queue: DispatchQueue
 
     init() {

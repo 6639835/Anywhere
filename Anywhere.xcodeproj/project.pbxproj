@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		38EEBB0130604018005417B3 /* AnywhereIP in Frameworks */ = {isa = PBXBuildFile; productRef = 38EEBB0030604018005417B3 /* AnywhereIP */; };
+		38EE05753061125A005417B3 /* AnywhereIP in Frameworks */ = {isa = PBXBuildFile; productRef = 38EE05743061125A005417B3 /* AnywhereIP */; };
 		7870E4302FF89000006C0F14 /* Anywhere Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 7870E41A2FF88ED5006C0F14 /* Anywhere Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		CB1C107A2F23B82F00B74CD8 /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CB1C10792F23B82F00B74CD8 /* NetworkExtension.framework */; };
 		CB1C10822F23B82F00B74CD8 /* Anywhere Network Extension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = CB1C10772F23B82F00B74CD8 /* Anywhere Network Extension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -107,20 +107,6 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		78170FEA300DEEC9003A8100 /* Exceptions for "Anywhere Network Extension" folder in "Anywhere" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				Tunnel/NetworkExtensionConcurrencyBridge.swift,
-			);
-			target = CB1C10642F23B81500B74CD8 /* Anywhere */;
-		};
-		78170FEB300DEEC9003A8100 /* Exceptions for "Anywhere Network Extension" folder in "Anywhere TV" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				Tunnel/NetworkExtensionConcurrencyBridge.swift,
-			);
-			target = CB2B549B2F6C3E2700F24AC2 /* Anywhere TV */;
-		};
 		7870E4262FF88FDC006C0F14 /* Exceptions for "Shared" folder in "Anywhere Watch App" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
@@ -502,8 +488,6 @@
 		CB1C107B2F23B82F00B74CD8 /* Anywhere Network Extension */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				78170FEA300DEEC9003A8100 /* Exceptions for "Anywhere Network Extension" folder in "Anywhere" target */,
-				78170FEB300DEEC9003A8100 /* Exceptions for "Anywhere Network Extension" folder in "Anywhere TV" target */,
 				CB1C10832F23B82F00B74CD8 /* Exceptions for "Anywhere Network Extension" folder in "Anywhere Network Extension" target */,
 			);
 			path = "Anywhere Network Extension";
@@ -564,7 +548,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				38EEBB0130604018005417B3 /* AnywhereIP in Frameworks */,
+				38EE05753061125A005417B3 /* AnywhereIP in Frameworks */,
 				CB1C107A2F23B82F00B74CD8 /* NetworkExtension.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -721,7 +705,7 @@
 			);
 			name = "Anywhere Network Extension";
 			packageProductDependencies = (
-				38EEBB0030604018005417B3 /* AnywhereIP */,
+				38EE05743061125A005417B3 /* AnywhereIP */,
 			);
 			productName = "Network Extension";
 			productReference = CB1C10772F23B82F00B74CD8 /* Anywhere Network Extension.appex */;
@@ -824,7 +808,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				CBFA0DE000000000000000A1 /* XCRemoteSwiftPackageReference "AnywhereRules" */,
-				38EEBAFF30604018005417B3 /* XCRemoteSwiftPackageReference "AnywhereIP" */,
+				38EE05733061125A005417B3 /* XCRemoteSwiftPackageReference "AnywhereIP" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = CB1C10662F23B81500B74CD8 /* Products */;
@@ -1694,12 +1678,12 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		38EEBAFF30604018005417B3 /* XCRemoteSwiftPackageReference "AnywhereIP" */ = {
+		38EE05733061125A005417B3 /* XCRemoteSwiftPackageReference "AnywhereIP" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/hiDandelion/AnywhereIP.git";
+			repositoryURL = "https://github.com/NodePassProject/AnywhereIP.git";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 1.0.0;
+				minimumVersion = 2.0.0;
 			};
 		};
 		CBFA0DE000000000000000A1 /* XCRemoteSwiftPackageReference "AnywhereRules" */ = {
@@ -1713,9 +1697,9 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		38EEBB0030604018005417B3 /* AnywhereIP */ = {
+		38EE05743061125A005417B3 /* AnywhereIP */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 38EEBAFF30604018005417B3 /* XCRemoteSwiftPackageReference "AnywhereIP" */;
+			package = 38EE05733061125A005417B3 /* XCRemoteSwiftPackageReference "AnywhereIP" */;
 			productName = AnywhereIP;
 		};
 		CBFA0DE000000000000000B1 /* AnywhereRules */ = {

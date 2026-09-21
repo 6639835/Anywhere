@@ -25,7 +25,7 @@ nonisolated protocol MITMHTTP1StreamDelegate: AnyObject {
 
 actor MITMHTTP1Stream {
     nonisolated var unownedExecutor: UnownedSerialExecutor {
-        ipBridge.executor.asUnownedSerialExecutor()
+        sessionContext.executor.asUnownedSerialExecutor()
     }
 
     private static let maxHeadBytes: Int = 64 * 1024
@@ -58,7 +58,7 @@ actor MITMHTTP1Stream {
 
     private let requestLog: MITMRequestLog
 
-    private let ipBridge: IPStackConcurrencyBridge
+    private let sessionContext: SessionExecutionContext
 
     init(
         host: String,
@@ -67,7 +67,7 @@ actor MITMHTTP1Stream {
         policy: MITMRewritePolicy,
         effectiveAuthority: String?,
         requestLog: MITMRequestLog,
-        ipBridge: IPStackConcurrencyBridge,
+        sessionContext: SessionExecutionContext,
         bridgeClientStreamID: UInt32? = nil
     ) {
         self.host = host
@@ -82,7 +82,7 @@ actor MITMHTTP1Stream {
         self.ruleSetID = matchedSet?.id
         self.effectiveAuthority = effectiveAuthority
         self.requestLog = requestLog
-        self.ipBridge = ipBridge
+        self.sessionContext = sessionContext
     }
 
     // MARK: - State
@@ -217,11 +217,11 @@ actor MITMHTTP1Stream {
     // MARK: - Public API
 
     private func onIPStack<T>(_ body: @escaping () -> T) async -> T {
-        await ipBridge.run(body)
+        await sessionContext.run(body)
     }
 
     private func onIPStackParked<T>(_ body: @escaping (CheckedContinuation<T, Never>) -> Void) async -> T {
-        await ipBridge.runParked(body)
+        await sessionContext.runParked(body)
     }
 
     func transform(_ data: Data) async -> Data {
@@ -616,7 +616,7 @@ actor MITMHTTP1Stream {
                 pendingHop = Task { [weak self] in
                     let outcome = await MITMScriptTransform.apply(message, rules: rules)
                     guard let self else { return }
-                    self.ipBridge.enqueue {
+                    self.sessionContext.enqueue {
                         self.assumeIsolated {
                             $0.resumeHeadNoBody(
                                 outcome: outcome,
@@ -725,7 +725,7 @@ actor MITMHTTP1Stream {
         pendingHop = Task { [weak self] in
             let table = await MITMGateVerdictTable.resolve(rules: rules, url: url)
             guard let self else { return }
-            self.ipBridge.enqueue {
+            self.sessionContext.enqueue {
                 self.assumeIsolated { $0.resumeGateResolution(slot: slot, table: table) }
             }
         }
@@ -1179,7 +1179,7 @@ actor MITMHTTP1Stream {
                 cursor: cursor
             )
             guard let self else { return }
-            self.ipBridge.enqueue {
+            self.sessionContext.enqueue {
                 self.assumeIsolated { $0.resumeStreamingFrame(result: result, streaming: captured, postFrame: postFrame) }
             }
         }
@@ -1339,7 +1339,7 @@ actor MITMHTTP1Stream {
         pendingHop = Task { [weak self] in
             let outcome = await MITMScriptTransform.apply(message, rules: rules)
             guard let self else { return }
-            self.ipBridge.enqueue {
+            self.sessionContext.enqueue {
                 self.assumeIsolated { $0.resumeBufferedBody(outcome: outcome, pending: pending, resumeMode: resumeMode) }
             }
         }

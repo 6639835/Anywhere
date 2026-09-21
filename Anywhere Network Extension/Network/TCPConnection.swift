@@ -5,25 +5,26 @@
 //  Created by NodePassProject on 3/1/26.
 //
 
-import AnywhereIP
 import Foundation
 import Synchronization
+import AnywhereIP
 
 nonisolated private let logger = AnywhereLogger(category: "TCPConnection")
 
-actor TCPConnection: MITMSessionHost, TCPConnectionDelegate {
+actor TCPConnection: MITMSessionHost {
     nonisolated private var connectionID: ObjectIdentifier { ObjectIdentifier(self) }
     
     nonisolated var unownedExecutor: UnownedSerialExecutor {
-        bridge.executor.asUnownedSerialExecutor()
+        sessionContext.executor.asUnownedSerialExecutor()
     }
 
     private weak var stack: TunnelStack?
 
-    private let connection: IPStack.Connection
+    private let connection: AnywhereIP.Stream
+    private let stackGeneration: UInt64
     let dstPort: UInt16
 
-    let bridge: IPStackConcurrencyBridge
+    let sessionContext = SessionExecutionContext(label: "Anywhere.TCP.Session")
 
     private(set) var dstHost: String
 
@@ -78,6 +79,7 @@ actor TCPConnection: MITMSessionHost, TCPConnectionDelegate {
             }
             return false
         }
+        pressurePhase.store(new == .closed ? 2 : (new == .relaying ? 1 : 0), ordering: .relaxed)
         return true
     }
 
@@ -101,7 +103,9 @@ actor TCPConnection: MITMSessionHost, TCPConnectionDelegate {
 
     // MARK: Relay
 
-    private var stream: TCPStreamConcurrencyBridge?
+    private var stream: AnywhereIP.Stream?
+    private nonisolated let uploadInbox = AsyncInbox<Data>()
+    private nonisolated let pressurePhase = Atomic<UInt8>(0)
 
     // MARK: - Idle timer
 
@@ -142,23 +146,22 @@ actor TCPConnection: MITMSessionHost, TCPConnectionDelegate {
 
     init(
         stack: TunnelStack,
-        connection: IPStack.Connection,
+        connection: AnywhereIP.Stream,
         dstHost: String,
         dstPort: UInt16,
         configuration: ProxyConfiguration,
         routeTarget: RouteTarget,
         ruleSetName: String? = nil,
         sniffSNI: Bool = false,
-        hostIsResolvedDomain: Bool = false,
-        bridge: IPStackConcurrencyBridge
+        hostIsResolvedDomain: Bool = false
     ) {
         self.stack = stack
         self.bufferLedger = stack.tcpBufferLedger
         self.connection = connection
+        self.stackGeneration = stack.dataPlaneGeneration.load(ordering: .acquiring)
         self.dstHost = dstHost
         self.dstPort = dstPort
         self.configuration = configuration
-        self.bridge = bridge
         self.routeTarget = routeTarget
         self.ruleMatched = ruleSetName != nil
         self.ruleSetName = ruleSetName
@@ -173,11 +176,13 @@ actor TCPConnection: MITMSessionHost, TCPConnectionDelegate {
     }
 
     func start() {
+        guard connection.isAttached else { finish(.stackError); return }
         rootTask = Task { await self.run() }
     }
 
     private func run() async {
         await withDiscardingTaskGroup { group in
+            group.addTask { await self.runInput() }
             group.addTask { await self.runLifecycle() }
             group.addTask { await self.runIdleWatch() }
             for await job in self.nurseryJobs {
@@ -204,7 +209,7 @@ actor TCPConnection: MITMSessionHost, TCPConnectionDelegate {
     }
 
     private enum Establishment {
-        case relay(ProxyConnection, TCPStreamConcurrencyBridge)
+        case relay(ProxyConnection, AnywhereIP.Stream)
         case mitm
         case done
     }
@@ -496,14 +501,12 @@ actor TCPConnection: MITMSessionHost, TCPConnectionDelegate {
         return .relay(connection, installStream(seed: seed))
     }
 
-    private func installStream(seed: Data) -> TCPStreamConcurrencyBridge {
-        nonisolated(unsafe) let nativeConnection = self.connection
-        let stream = TCPStreamConcurrencyBridge(bridge: bridge, connection: nativeConnection)
-        if !seed.isEmpty { stream.assumeIsolated { $0.seedUpload(seed) } }
-        self.stream = stream
+    private func installStream(seed: Data) -> AnywhereIP.Stream {
+        if !seed.isEmpty { uploadInbox.yield(seed) }
+        stream = connection
         transition(to: .relaying)
         startIdleTimer()
-        return stream
+        return connection
     }
 
     // MARK: Proxy connection
@@ -592,25 +595,9 @@ actor TCPConnection: MITMSessionHost, TCPConnectionDelegate {
 
     // MARK: - Relay
 
-    private func runRelayAndClose(_ connection: ProxyConnection, stream: TCPStreamConcurrencyBridge) async {
-        startRelaySetup(stream: stream)
+    private func runRelayAndClose(_ connection: ProxyConnection, stream: AnywhereIP.Stream) async {
         let context = RelayContext(stack: stack, routeTarget: routeTarget)
         await runRelay(connection, stream: stream, context: context)
-    }
-
-    private func startRelaySetup(stream: TCPStreamConcurrencyBridge) {
-        stream.assumeIsolated { s in
-            s.onFatalWrite = { [weak self] error in
-                guard let self else { return }
-                self.bridge.enqueue {
-                    self.assumeIsolated { me in
-                        guard me.phase != .closed else { return }
-                        me.reportFailure("Write", error: error)
-                        me.abort()
-                    }
-                }
-            }
-        }
     }
 
     private struct RelayContext: Sendable {
@@ -619,7 +606,7 @@ actor TCPConnection: MITMSessionHost, TCPConnectionDelegate {
     }
 
     @concurrent
-    private nonisolated func runRelay(_ connection: ProxyConnection, stream: TCPStreamConcurrencyBridge, context: RelayContext) async {
+    private nonisolated func runRelay(_ connection: ProxyConnection, stream: AnywhereIP.Stream, context: RelayContext) async {
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await self.runUploadRelay(connection, stream, context: context) }
             group.addTask { await self.runDownloadRelay(connection, stream, context: context) }
@@ -629,9 +616,8 @@ actor TCPConnection: MITMSessionHost, TCPConnectionDelegate {
     }
 
     @concurrent
-    private nonisolated func runUploadRelay(_ connection: ProxyConnection, _ stream: TCPStreamConcurrencyBridge, context: RelayContext) async {
-        var unacked = 0
-        while let chunk = await stream.receiveUpload(acking: unacked) {
+    private nonisolated func runUploadRelay(_ connection: ProxyConnection, _ stream: AnywhereIP.Stream, context: RelayContext) async {
+        while let chunk = try? await uploadInbox.next() {
             do {
                 try await connection.send(chunk)
             } catch {
@@ -640,12 +626,12 @@ actor TCPConnection: MITMSessionHost, TCPConnectionDelegate {
             }
             markActivity()
             context.stack?.addBytesOut(Int64(chunk.count), target: context.routeTarget)
-            unacked = chunk.count
+            stream.didConsume(chunk.count)
         }
     }
 
     @concurrent
-    private nonisolated func runDownloadRelay(_ connection: ProxyConnection, _ stream: TCPStreamConcurrencyBridge, context: RelayContext) async {
+    private nonisolated func runDownloadRelay(_ connection: ProxyConnection, _ stream: AnywhereIP.Stream, context: RelayContext) async {
         while true {
             let data: Data?
             do {
@@ -658,22 +644,16 @@ actor TCPConnection: MITMSessionHost, TCPConnectionDelegate {
                 await boundDownlinkDrain()
                 break
             }
-            if stream.canPushDownload {
-                stream.pushDownload(data)
-            } else {
-                do {
-                    try await stream.sendDownload(data)
-                } catch {
-                    if case AnywhereError.transport(.writeFailed) = error {
-                        await relayFailed("Write", error: error)
-                    }
-                    return
-                }
+            do {
+                try await stream.send(data)
+            } catch {
+                await relayFailed("Write", error: error)
+                return
             }
             markActivity()
             context.stack?.addBytesIn(Int64(data.count), target: context.routeTarget)
         }
-        await stream.awaitDownloadDrained()
+        try? await stream.waitUntilAcknowledged()
     }
 
     private func boundDownlinkDrain() {
@@ -697,26 +677,24 @@ actor TCPConnection: MITMSessionHost, TCPConnectionDelegate {
         guard byteCount > 0 else { return }
         stack?.addBytesOut(Int64(byteCount), target: routeTarget)
         connection.didConsume(byteCount)
-        connection.flush()
     }
 
-    // MARK: - IPStack delegate
-    
-    nonisolated func connection(_ connection: IPStack.Connection, didReceive bytes: UnsafeRawBufferPointer) {
-        let data = bridge.receivedData(bytes)
-        assumeIsolated { $0.handleReceivedData(data) }
-    }
+    // MARK: - TCP stream intake
 
-    nonisolated func connectionDidReceiveFin(_ connection: IPStack.Connection) {
-        assumeIsolated { $0.handleRemoteClose() }
-    }
-
-    nonisolated func connection(_ connection: IPStack.Connection, didAcknowledge byteCount: Int) {
-        assumeIsolated { $0.handleSent() }
-    }
-
-    nonisolated func connection(_ connection: IPStack.Connection, didFailWith error: TCPConnectionError) {
-        assumeIsolated { $0.handleError(error) }
+    private func runInput() async {
+        do {
+            while let data = try await connection.receive() {
+                guard phase != .closed else { return }
+                handleReceivedData(data)
+            }
+            if phase != .closed { handleRemoteClose() }
+        } catch is CancellationError {
+            return
+        } catch let error as AnywhereIP.ConnectionError {
+            if phase != .closed { handleError(error) }
+        } catch {
+            if phase != .closed { reportFailure("Read", error: error); abort() }
+        }
     }
 
     private func handleReceivedData(_ data: Data) {
@@ -725,8 +703,8 @@ actor TCPConnection: MITMSessionHost, TCPConnectionDelegate {
         if let mitmSession {
             acknowledgeReceivedBytes(data.count)
             mitmSession.assumeIsolated { $0.feedClientBytes(data) }
-        } else if let stream {
-            stream.assumeIsolated { $0.deliverUpload(data) }
+        } else if stream != nil {
+            uploadInbox.yield(data)
         } else {
             pendingData.append(data)
             establishInbox.yield(())
@@ -753,28 +731,30 @@ actor TCPConnection: MITMSessionHost, TCPConnectionDelegate {
         case established(idleFor: TimeInterval)
     }
     
-    func connectionPressureCandidate(now: TimeInterval) -> PressureVictimTier? {
+    nonisolated func connectionPressureCandidate(now: TimeInterval) -> PressureVictimTier? {
+        guard connection.isAttached else { return nil }
         let idleFor = now - lastActivityTick.load(ordering: .relaxed)
-        switch phase {
-        case .establishing:
+        switch pressurePhase.load(ordering: .relaxed) {
+        case 0:
             return .establishing(idleFor: idleFor)
-        case .relaying:
+        case 1:
             return idleFor >= TunnelConstants.pressureIdleTimeout ? .established(idleFor: idleFor) : nil
-        case .closed:
+        default:
             return nil
         }
     }
 
-    func evictForConnectionPressure(idleFor: TimeInterval) {
+    nonisolated func evictForConnectionPressure(idleFor: TimeInterval) {
+        guard connectionPressureCandidate(now: MonotonicClock.now) != nil else { return }
+        connection.cancel()
+        Task { await self.finishPressureEviction(idleFor: idleFor) }
+    }
+
+    private func finishPressureEviction(idleFor: TimeInterval) {
         guard phase != .closed else { return }
         logger.debug("[TCP] Connection table full; evicting \(endpointDescription) idle \(Int(idleFor))s")
         failureReporter.markReported()
         abort()
-    }
-
-    func handleSent() {
-        guard phase != .closed else { return }
-        stream?.assumeIsolated { $0.deliverSendCredit() }
     }
 
     func handleRemoteClose() {
@@ -782,14 +762,17 @@ actor TCPConnection: MITMSessionHost, TCPConnectionDelegate {
         close()
     }
 
-    func handleError(_ error: TCPConnectionError) {
+    func handleError(_ error: AnywhereIP.ConnectionError) {
         switch error {
         case .closed:
             logger.debug("[TCP] IPStack closed connection: \(endpointDescription)")
         case .reset:
             logger.debug("[TCP] IPStack peer reset: \(endpointDescription)")
-        case .aborted where stack?.ipStackAbortContext.load(ordering: .relaxed) == .teardown:
+        case .aborted where stack?.ipStackAbortContext.load(ordering: .relaxed) == .teardown
+            || stack?.dataPlaneGeneration.load(ordering: .acquiring) != stackGeneration:
             logger.debug("[TCP] IPStack aborted connection (tunnel teardown): \(endpointDescription)")
+        case .concurrentOperation, .bufferLimit:
+            logger.error("[TCP] IPStack stream contract failed: \(endpointDescription)")
         case .aborted:
             logger.warning("[TCP] IPStack aborted connection: \(endpointDescription)")
         }
@@ -910,26 +893,12 @@ actor TCPConnection: MITMSessionHost, TCPConnectionDelegate {
             clientHello: initialClientHello,
             leafCache: cache,
             policy: stack.mitmPolicy,
-            ipBridge: bridge,
+            sessionContext: sessionContext,
             isPlaintext: mitmPlaintext
         )
         session.assumeIsolated { $0.host = self }
         
-        nonisolated(unsafe) let nativeConnection = self.connection
-        let stream = TCPStreamConcurrencyBridge(bridge: bridge, connection: nativeConnection)
-        self.stream = stream
-        stream.assumeIsolated { s in
-            s.onFatalWrite = { [weak self] error in
-                guard let self else { return }
-                self.bridge.enqueue {
-                    self.assumeIsolated { me in
-                        guard me.phase != .closed else { return }
-                        me.reportFailure("MITM downlink", error: error)
-                        me.abort()
-                    }
-                }
-            }
-        }
+        self.stream = connection
         mitmSession = session
         transition(to: .relaying)
 
@@ -1064,17 +1033,19 @@ actor TCPConnection: MITMSessionHost, TCPConnectionDelegate {
     }
 
     nonisolated func mitmSessionSendToClient(_ data: Data) {
-        bridge.enqueue {
-            self.assumeIsolated { me in
-                guard me.phase != .closed, let stream = me.stream else { return }
-                me.markActivity()
-                stream.assumeIsolated { $0.deliverDownload(data) }
-            }
+        markActivity()
+        if !connection.enqueue(data) {
+            Task { await self.relayFailed("MITM downlink", error: AnywhereIP.ConnectionError.bufferLimit) }
         }
     }
 
+    nonisolated func mitmSessionWriteToClient(_ data: Data) async throws {
+        try await connection.send(data)
+        markActivity()
+    }
+
     nonisolated func mitmSessionDidTearDown(error: Error?) {
-        bridge.enqueue {
+        sessionContext.enqueue {
             self.assumeIsolated { me in
                 guard me.phase != .closed else { return }
                 if let error {
@@ -1179,7 +1150,7 @@ actor TCPConnection: MITMSessionHost, TCPConnectionDelegate {
             completeDeferredClose()
             return
         }
-        await stream.awaitDownloadDrained()
+        try? await stream.waitUntilAcknowledged()
         completeDeferredClose()
     }
 
@@ -1199,18 +1170,11 @@ actor TCPConnection: MITMSessionHost, TCPConnectionDelegate {
         guard transition(to: .closed) else { return }
         switch exit {
         case .graceful:
-            if let stream {
-                stream.assumeIsolated {
-                    $0.flushBestEffort()
-                    $0.flushReceiveWindowForClose()
-                }
-            } else {
-                flushPendingReceiveWindow()
-            }
-            connection.close()
+            flushPendingReceiveWindow()
+            connection.close(discardingReceived: true)
             teardown(abortive: false)
         case .abortive:
-            connection.abort()
+            connection.cancel()
             teardown(abortive: true)
         case .silentReject:
             connection.discard()
@@ -1252,8 +1216,7 @@ actor TCPConnection: MITMSessionHost, TCPConnectionDelegate {
 
     private func writeImmediate(_ data: Data) {
         guard !data.isEmpty else { return }
-        let written = data.withUnsafeBytes { connection.write($0) }
-        if written > 0 { connection.flush() }
+        if !connection.enqueue(data) { abort() }
     }
 
     private func teardown(abortive: Bool) {
@@ -1271,7 +1234,6 @@ actor TCPConnection: MITMSessionHost, TCPConnectionDelegate {
         let connection = proxyConnection
         let client = proxyClient
         let session = mitmSession
-        let stream = self.stream
         proxyConnection = nil
         proxyClient = nil
         self.stream = nil
@@ -1283,7 +1245,8 @@ actor TCPConnection: MITMSessionHost, TCPConnectionDelegate {
         closePending = false
 
         session?.assumeIsolated { $0.cancel(error: nil) }
-        stream?.assumeIsolated { $0.terminate() }
+        uploadInbox.finish()
+        stack?.removeTCPConnection(connectionID)
         if abortive {
             connection?.abort()
         } else {

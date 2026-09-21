@@ -19,7 +19,7 @@ nonisolated protocol MITMUpstreamLegDelegate: AnyObject {
 
 actor MITMHTTP2UpstreamLeg {
     nonisolated var unownedExecutor: UnownedSerialExecutor {
-        ipBridge.executor.asUnownedSerialExecutor()
+        sessionContext.executor.asUnownedSerialExecutor()
     }
 
     weak var sink: MITMResponseSink?
@@ -28,7 +28,7 @@ actor MITMHTTP2UpstreamLeg {
     private let host: String
     private let rewriter: MITMHTTP2Rewriter
     private let flowController: MITMHTTP2FlowController
-    private let ipBridge: IPStackConcurrencyBridge
+    private let sessionContext: SessionExecutionContext
     private let decoder = HPACKDecoder()
 
     private typealias Codec = MITMHTTP2FrameCodec
@@ -232,12 +232,12 @@ actor MITMHTTP2UpstreamLeg {
         host: String,
         rewriter: MITMHTTP2Rewriter,
         flowController: MITMHTTP2FlowController,
-        ipBridge: IPStackConcurrencyBridge
+        sessionContext: SessionExecutionContext
     ) {
         self.host = host
         self.rewriter = rewriter
         self.flowController = flowController
-        self.ipBridge = ipBridge
+        self.sessionContext = sessionContext
     }
 
     func markTorn() {
@@ -464,7 +464,7 @@ actor MITMHTTP2UpstreamLeg {
     // MARK: - Upstream h2 → response IR
 
     func feed(_ data: Data) async {
-        await ipBridge.runParked { (continuation: CheckedContinuation<Void, Never>) in
+        await sessionContext.runParked { (continuation: CheckedContinuation<Void, Never>) in
             self.assumeIsolated { $0.feedOnQueue(data, continuation: continuation) }
         }
     }
@@ -785,7 +785,7 @@ actor MITMHTTP2UpstreamLeg {
         Task { [weak self] in
             let verdicts = await MITMGateVerdictTable.resolve(rules: rules, url: url)
             guard let self else { return }
-            self.ipBridge.enqueue {
+            self.sessionContext.enqueue {
                 self.assumeIsolated { leg in
                     guard leg.phase != .torn, leg.phase != .failed else {
                         let continuation = leg.parkedContinuation; leg.parkedContinuation = nil
@@ -971,7 +971,7 @@ actor MITMHTTP2UpstreamLeg {
         Task { [weak self] in
             let outcome = await rewriter.applyScripts(message, phase: .httpResponse)
             guard let self else { return }
-            self.ipBridge.enqueue {
+            self.sessionContext.enqueue {
                 self.assumeIsolated { leg in
                     guard leg.phase != .torn else { return }
                     let regular = scriptedHeaders.filter { !$0.name.hasPrefix(":") }
@@ -1020,7 +1020,7 @@ actor MITMHTTP2UpstreamLeg {
                 cursor: cursor
             )
             guard let self else { return }
-            self.ipBridge.enqueue {
+            self.sessionContext.enqueue {
                 self.assumeIsolated { leg in
                     guard leg.phase != .torn else { return }
                     leg.advanceStreaming(streamID, growth: result.body.count - body.count)

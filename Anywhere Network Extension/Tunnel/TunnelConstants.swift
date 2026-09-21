@@ -10,40 +10,23 @@ import Foundation
 nonisolated enum TunnelConstants {
 
     // MARK: - Tunnel Addresses
-
-    /// The tunnel's IPv4 interface/peer address; also the in-tunnel DNS
-    /// resolver apps are told to use. Shared by the provider's network
-    /// settings and the UDP/53 interception table.
+    
     static let tunnelAddressIPv4 = "10.8.0.1"
-    /// The tunnel's IPv6 interface address and in-tunnel DNS resolver,
-    /// advertised only when IPv6 is enabled.
     static let tunnelAddressIPv6 = "fd00::1"
 
     // MARK: - Connection Timeouts
-
-    /// Inactivity timeout for TCP connections.
+    
     static let connectionIdleTimeout: TimeInterval = 300
-    /// Stall bound for TCPConnection's drain-before-close flush.
     static let drainBeforeCloseTimeout: TimeInterval = 5
-    /// Timeout for the entire connection setup phase.
     static let handshakeTimeout: TimeInterval = 10
-    /// Max wait for a TLS ClientHello before falling back to IP-based routing,
-    /// so server-speaks-first protocols (SSH, SMTP, FTP) don't stall.
     static let sniffDeadline: TimeInterval = 0.5
-    /// When the TCP/UDP tables are at their entry cap, an established (TCP)
-    /// or assured (UDP) entry may be evicted for a newcomer only once it has
-    /// been idle this long.
     static let pressureIdleTimeout: TimeInterval = 10
 
     // MARK: - TCP Buffer Sizes
     
     static let tcpGlobalBufferBudget = 16 * 1024 * 1024
-
-    /// One AnywhereIP receive/send window.
+    
     static let tcpWindowSize = 64 * 1460
-    /// Preserve partial progress when a small MSS makes queue slots the limit.
-    static let tcpMaxWriteSize = Int(UInt16.max)
-    static let drainLowWaterMark = 2 * tcpWindowSize
 
     // MARK: - UDP Settings
     
@@ -58,51 +41,37 @@ nonisolated enum TunnelConstants {
 
     static let logRetentionInterval: CFAbsoluteTime = 300
     static let logMaxEntries = 50
-    /// Time window (seconds) to attribute connection errors to a recent tunnel interruption.
     static let recentTunnelInterruptionWindow: CFAbsoluteTime = 8
 
     // MARK: - Request Log
-
-    /// Matches the log buffer's retention window.
+    
     static let requestLogRetentionInterval: CFAbsoluteTime = 300
     static let requestLogMaxEntries = 50
 
     // MARK: - Timer Intervals
 
-    /// Leeway for the IPStack tick (ms); lets libdispatch coalesce wakeups.
-    static let ipStackTickLeewayMs = 10
     static let udpCleanupIntervalSec = 1
-    /// Leeway for the UDP cleanup reaper (ms); reaping tolerates the slack.
     static let udpCleanupLeewayMs = 250
-    /// Retry delay when TCP overflow drain makes no progress.
-    static let drainRetryDelayMs = 250
 
     // MARK: - Stack Lifecycle
-
-    /// Minimum interval between stack restarts; 2s absorbs back-to-back path and settings notifications.
+    
     static let restartThrottleInterval: CFAbsoluteTime = 2.0
 
     // MARK: - TLS Sniffer
-
-    /// Max bytes buffered while parsing a ClientHello for SNI; post-quantum key shares push ~4 KB.
+    
     static let tlsSnifferBufferLimit = 8192
 
     // MARK: - HTTP Sniffer
-
-    /// Max bytes buffered while parsing a cleartext HTTP request head.
+    
     static let httpSnifferBufferLimit = 64 * 1024
 
     // MARK: - Fake-IP Pool
-
-    /// Base IPv4 address for the fake-IP pool (198.18.0.0 in 198.18.0.0/15).
+    
     static let fakeIPPoolBaseIPv4: UInt32 = 0xC612_0000
-    /// Usable offsets in the fake-IP pool; bounds the backing maps in a long-running tunnel.
     static let fakeIPPoolSize = 16_384
 
     // MARK: - Synthesized DNS answers
-
-    /// TTL for fake-IP answers.
+    
     static let dnsFakeIPAnswerTTL: UInt32 = 300
-    /// TTL for zero-IP answers to reject-ruled domains.
     static let dnsBlockedAnswerTTL: UInt32 = 10
 }

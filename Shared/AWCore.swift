@@ -18,7 +18,6 @@ nonisolated final class AWCore {
         static let bundle = "com.argsment.Anywhere"
         static let errorDomain = bundle
         static let iCloudContainer = "iCloud.\(bundle)"
-        static let ipStackQueue = "\(bundle).ip-stack"
     }
     
     static var isHostApp: Bool {
@@ -632,6 +631,9 @@ nonisolated final class AWCore {
 
     static func setRemnawaveHWIDEnabled(_ value: Bool) {
         userDefaults.set(value, forKey: UserDefaultsKey.remnawaveHWIDEnabled)
+        if value {
+            userDefaults.set(UUID().uuidString, forKey: UserDefaultsKey.remnawaveHWID)
+        }
     }
     
     static func getRemnawaveHWID() -> String {

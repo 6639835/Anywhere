@@ -7,7 +7,7 @@
 
 import Foundation
 import Synchronization
-import NetworkExtension
+@preconcurrency import NetworkExtension
 import AnywhereIP
 
 nonisolated private let logger = AnywhereLogger(category: "TunnelStack+IO")
@@ -20,7 +20,6 @@ extension TunnelStack {
         while true {
             var packets: [Data] = []
             var protocols: [NSNumber] = []
-            var releases: [PacketRelease] = []
 
             outputBuffer.withLock { buffer in
                 let pending = buffer.packets.count
@@ -30,23 +29,12 @@ extension TunnelStack {
                 }
                 packets = buffer.packets
                 protocols = buffer.protocols
-                releases = buffer.releases
                 buffer.packets = []
                 buffer.protocols = []
-                buffer.releases = []
             }
 
             if packets.isEmpty { return }
             packetFlow.writePackets(packets, withProtocols: protocols)
-
-            if !releases.isEmpty {
-                let toRelease = releases
-                ipBridge.enqueue {
-                    for release in toRelease {
-                        release()
-                    }
-                }
-            }
 
             await Task.yield()
         }
@@ -54,19 +42,15 @@ extension TunnelStack {
     
     func flushOutputBuffer() {
         guard let packetFlow else { return }
-        let (packets, protocols, releases) = outputBuffer.withLock { buffer in
+        let (packets, protocols) = outputBuffer.withLock { buffer in
             defer {
                 buffer.packets.removeAll(keepingCapacity: true)
                 buffer.protocols.removeAll(keepingCapacity: true)
-                buffer.releases.removeAll(keepingCapacity: true)
             }
-            return (buffer.packets, buffer.protocols, buffer.releases)
+            return (buffer.packets, buffer.protocols)
         }
         guard !packets.isEmpty else { return }
         packetFlow.writePackets(packets, withProtocols: protocols)
-        for release in releases {
-            release()
-        }
     }
 
     nonisolated func enqueueOutbound(_ packet: Data, isIPv6: Bool) {
@@ -81,6 +65,20 @@ extension TunnelStack {
         if needsKick {
             kickOutputDrain()
         }
+    }
+
+    nonisolated func enqueueTCPOutput(_ packets: [OutboundPacket], generation: UInt64) {
+        let needsKick = outputBuffer.withLock { buffer in
+            guard buffer.generation == generation, !packets.isEmpty else { return false }
+            for packet in packets {
+                buffer.packets.append(packet.data)
+                buffer.protocols.append(packet.isIPv6 ? Self.ipv6Proto : Self.ipv4Proto)
+            }
+            guard !buffer.drainInFlight else { return false }
+            buffer.drainInFlight = true
+            return true
+        }
+        if needsKick { kickOutputDrain() }
     }
 
     // MARK: - Packet Reading
@@ -127,35 +125,22 @@ extension TunnelStack {
         }
     }
 
-    func feedIPStackBatch(_ packets: [Data]) {
+    func feedIPStackBatch(_ packets: [Data]) async {
         guard dataPlaneUp, let ipStack, !packets.isEmpty else { return }
-        ipStack.inputBatch { batch in
-            for packet in packets {
-                ipBridge.withInputPacket(packet) { batch.feed($0) }
-            }
-        }
-        FlowGauge.publishTCPTable(ipStack.activeConnectionCount)
-        if !ipStack.isIdle { ipStackTick?.resume() }
+        await ipStack.inputBatch(packets)
     }
 
     // MARK: - Timers
 
     func startIPStackTick() {
-        let interval = IPStack.tickInterval.components
-        let tick = ipBridge.makeTick(
-            intervalMs: Int(interval.seconds * 1_000 + interval.attoseconds / 1_000_000_000_000_000),
-            leewayMs: TunnelConstants.ipStackTickLeewayMs
-        ) { [weak self] in
-            guard let self else { return }
-            self.assumeIsolated { stack in
-                guard stack.phase.isActive, let ipStack = stack.ipStack else { return }
-                ipStack.tick()
-                FlowGauge.publishTCPTable(ipStack.activeConnectionCount)
-                if ipStack.isIdle { stack.ipStackTick?.suspend() }
+        guard let ipStack else { return }
+        let generation = dataPlaneGeneration.load(ordering: .acquiring)
+        ipStackTick = Task { [weak self] in
+            await ipStack.runTimer { [weak self] count in
+                guard let self, self.dataPlaneGeneration.load(ordering: .acquiring) == generation else { return }
+                FlowGauge.publishTCPTable(count)
             }
         }
-        tick.suspend()
-        ipStackTick = tick
     }
 
     nonisolated func runUDPCleanupLoop(udpPlane: UDPPlane) async {

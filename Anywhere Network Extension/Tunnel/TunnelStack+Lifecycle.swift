@@ -7,7 +7,7 @@
 
 import Foundation
 import Synchronization
-import NetworkExtension
+@preconcurrency import NetworkExtension
 import AnywhereIP
 
 nonisolated private let logger = AnywhereLogger(category: "TunnelStack+Lifecycle")
@@ -214,9 +214,8 @@ extension TunnelStack {
             return
         }
         dataPlaneUp = true
-        let ipStack = IPStack()
+        let ipStack = makeIPStack()
         self.ipStack = ipStack
-        installIPStackCallbacks(ipStack)
         startIPStackTick()
         submitPlaneCommand(.setMultiplexerPool(configuration.makeUDPMultiplexerPool()))
         logger.debug("[TunnelStack] Data plane up")
@@ -236,21 +235,21 @@ extension TunnelStack {
         case .graceful: closeAllActiveTCP()
         case .abortive: abortAllActiveTCP()
         }
+        dataPlaneGeneration.wrappingAdd(1, ordering: .acquiringAndReleasing)
 
         reclaimAllOutboundPools()
         submitPlaneCommand(.reclaim)
 
         ipStack?.shutdown()
         ipStack = nil
+        tcpConnections.withLock { $0.removeAll() }
         ipStackAbortContext.store(.none, ordering: .relaxed)
         FlowGauge.publishTCPTable(0)
         logger.debug("[TunnelStack] Data plane down")
     }
 
     private func closeAllActiveTCP() {
-        ipStack?.forEachConnection { connection in
-            (connection.delegate as? TCPConnection)?.assumeIsolated { $0.close() }
-        }
+        for connection in ipStack?.connections() ?? [] { connection.close() }
     }
 
     private func abortAllActiveTCP() {

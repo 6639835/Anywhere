@@ -12,71 +12,55 @@ import AnywhereIP
 nonisolated private let logger = AnywhereLogger(category: "TunnelStack+Callbacks")
 
 extension TunnelStack {
-    func installIPStackCallbacks(_ stack: IPStack) {
-        stack.outputHandler = { [weak self] (packet: consuming OutboundPacket) in
-            guard let self else { return }
-            let data = Data(
-                bytesNoCopy: UnsafeMutableRawPointer(mutating: packet.bytes.baseAddress!),
-                count: packet.bytes.count,
-                deallocator: .none
-            )
-            let isIPv6 = packet.isIPv6
-            let release = packet.deferRelease()
-            self.assumeIsolated { $0.ipStackDidOutput(data, isIPv6: isIPv6, release: release) }
-        }
-        stack.synFilter = { [weak self] _, destination in
-            guard let self else { return false }
-            return self.assumeIsolated { !$0.isRejectMarked(destination.address) && $0.ipStackSynVerdict() }
-        }
-        stack.strayFilter = { [weak self] _, destination in
-            guard let self else { return false }
-            return self.assumeIsolated { !$0.isRejectMarked(destination.address) }
-        }
-        stack.acceptHandler = { [weak self] connection in
-            guard let self else { return .reset }
-            nonisolated(unsafe) let acceptedConnection = connection
-            return self.assumeIsolated { $0.accept(acceptedConnection) }
-        }
+    func makeIPStack() -> IPStack {
+        let generation = dataPlaneGeneration.wrappingAdd(1, ordering: .acquiringAndReleasing).newValue
+        outputBuffer.withLock { $0.generation = generation }
+        return IPStack(
+            configuration: .init(
+                maximumConnections: TunnelLimits.tcpMaxConnections,
+                pendingSendBytes: TunnelConstants.tcpWindowSize
+            ),
+            output: { [weak self] packets in
+                self?.enqueueTCPOutput(packets, generation: generation)
+            },
+            accept: { [weak self] pending in
+                guard let self else { pending.reject(); return }
+                Task { await self.accept(pending, generation: generation) }
+            },
+            synFilter: { [weak self] _, destination in
+                guard let self else { return false }
+                return !self.isRejectMarked(destination.address) && self.ipStackSynVerdict()
+            },
+            strayFilter: { [weak self] _, destination in
+                self.map { !$0.isRejectMarked(destination.address) } ?? false
+            }
+        )
     }
 
-    private func isRejectMarked(_ address: IPAddress) -> Bool {
+    nonisolated private func isRejectMarked(_ address: IPAddress) -> Bool {
         withUnsafeTemporaryAllocation(byteCount: 16, alignment: 8) { bytes in
             address.write(to: bytes.baseAddress!)
             return connectionRouter.isRejectMarkedDestination(rawIP: bytes.baseAddress!, isIPv6: address.isIPv6)
         }
     }
 
-    func ipStackDidOutput(_ packet: Data, isIPv6: Bool, release: PacketRelease) {
-        let proto: NSNumber = isIPv6 ? Self.ipv6Proto : Self.ipv4Proto
-        let needsKick: Bool = outputBuffer.withLock { buffer in
-            buffer.packets.append(packet)
-            buffer.protocols.append(proto)
-            buffer.releases.append(release)
-            if buffer.drainInFlight { return false }
-            buffer.drainInFlight = true
-            return true
-        }
-        if needsKick { kickOutputDrain() }
-    }
-
-    private func ipStackSynVerdict() -> Bool {
-        guard let ipStack, ipStack.activeConnectionCount >= TunnelLimits.tcpMaxConnections else { return true }
+    nonisolated private func ipStackSynVerdict() -> Bool {
+        guard tcpConnections.withLock({ $0.count }) >= TunnelLimits.tcpMaxConnections else { return true }
         let now = MonotonicClock.now
         guard let victim = findPressureVictim(now: now) else {
-            tcpPressureLog.noteDropped(now: now, logger: logger)
+            tcpPressureLog.withLock { $0.noteDropped(now: now, logger: logger) }
             return false
         }
-        victim.connection.assumeIsolated { $0.evictForConnectionPressure(idleFor: victim.idleFor) }
-        tcpPressureLog.noteEvicted(now: now, logger: logger)
+        victim.connection.evictForConnectionPressure(idleFor: victim.idleFor)
+        tcpPressureLog.withLock { $0.noteEvicted(now: now, logger: logger) }
         return true
     }
 
-    private func findPressureVictim(now: TimeInterval) -> (connection: TCPConnection, idleFor: TimeInterval)? {
+    nonisolated private func findPressureVictim(now: TimeInterval) -> (connection: TCPConnection, idleFor: TimeInterval)? {
         var establishing: (connection: TCPConnection, idleFor: TimeInterval)?
         var established: (connection: TCPConnection, idleFor: TimeInterval)?
-        ipStack?.forEachConnection { connection in
-            guard let delegate = connection.delegate as? TCPConnection,
-                  let tier = delegate.assumeIsolated({ $0.connectionPressureCandidate(now: now) }) else { return }
+        for delegate in tcpConnections.withLock({ Array($0.values) }) {
+            guard let tier = delegate.connectionPressureCandidate(now: now) else { continue }
             switch tier {
             case .establishing(let idleFor):
                 if idleFor > (establishing?.idleFor ?? -1) { establishing = (delegate, idleFor) }
@@ -87,13 +71,13 @@ extension TunnelStack {
         return establishing ?? established
     }
 
-    private func accept(_ connection: IPStack.Connection) -> AcceptVerdict {
-        guard let defaultConfiguration = configuration else {
+    private func accept(_ pending: PendingConnection, generation: UInt64) {
+        guard dataPlaneUp, dataPlaneGeneration.load(ordering: .acquiring) == generation, let defaultConfiguration = configuration else {
             logger.debug("[TunnelStack] tcp_accept: guard failed")
-            return .reset
+            pending.reject(); return
         }
-        let dstIPString = connection.destination.address.description
-        let dstPort = connection.destination.port
+        let dstIPString = pending.destination.address.description
+        let dstPort = pending.destination.port
         let decision = connectionRouter.decision(forIP: dstIPString, port: dstPort, proto: "TCP")
 
         var connectionConfiguration = defaultConfiguration
@@ -117,10 +101,10 @@ extension TunnelStack {
             )
             let reason = decision.hostIsResolvedDomain ? "fake-IP domain rule" : "IP rule"
             logger.debug("[TCP] Rejected by \(reason) (going dark): \(decision.host):\(dstPort)")
-            return .drop
+            pending.reject(reset: false); return
         case .unreachable:
             logger.debug("[TCP] Aborted (stale fake-IP): \(dstIPString):\(dstPort)")
-            return .reset
+            pending.reject(); return
         }
 
         let dstHost = decision.host
@@ -130,7 +114,7 @@ extension TunnelStack {
             sniffSNI = true
         }
         
-        nonisolated(unsafe) let nativeConnection = connection
+        guard let nativeConnection = pending.accept() else { return }
         let delegate = TCPConnection(
             stack: self,
             connection: nativeConnection,
@@ -140,11 +124,9 @@ extension TunnelStack {
             routeTarget: routeTarget,
             ruleSetName: ruleSetName,
             sniffSNI: sniffSNI,
-            hostIsResolvedDomain: decision.hostIsResolvedDomain,
-            bridge: ipBridge
+            hostIsResolvedDomain: decision.hostIsResolvedDomain
         )
-        connection.delegate = delegate
-        delegate.assumeIsolated { $0.start() }
-        return .accept
+        tcpConnections.withLock { $0[ObjectIdentifier(delegate)] = delegate }
+        Task { await delegate.start() }
     }
 }
