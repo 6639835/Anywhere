@@ -35,6 +35,7 @@ actor NowhereTCPConnection: ProxyConnection, NowhereTerminationObservable {
         var tlsVersion: TLSVersion?
         var terminalError: Error?
         var monitorTask: Task<Void, Never>?
+        var bootstrapTask: Task<TLSRecordConnection, Error>?
         var flowKind: NowhereProtocol.FlowKind?
         var flowRole: NowhereProtocol.FlowRole?
     }
@@ -112,22 +113,61 @@ actor NowhereTCPConnection: ProxyConnection, NowhereTerminationObservable {
             let record: TLSRecordConnection
             if configuration.morph {
                 let base: any ByteTransport
+                let directTCP: TCPTransport?
                 if let tunnel {
                     base = TunneledTransport(tunnel: tunnel)
+                    directTCP = nil
                 } else {
                     let tcp = TCPTransport(
                         host: connectHost,
                         port: try configuration.proxyPort(for: .tcp),
                         resolvesViaProxyDNS: true
                     )
-                    try await tcp.connect()
                     base = tcp
+                    directTCP = tcp
                 }
                 guard let keys = configuration.morphKeys else {
                     base.cancel()
                     throw AnywhereError.proxy(.nowhere, .protocolViolation(detail: "Missing Morph keys"))
                 }
-                record = try await client.connect(transport: NowhereMorphTCPTransport(inner: base, keys: keys))
+                let adoptedBase = lifecycle.withLock { state -> Bool in
+                    guard state.phase == .opening else { return false }
+                    state.transport = base
+                    return true
+                }
+                guard adoptedBase else {
+                    base.cancel()
+                    throw terminalError()
+                }
+                let task = Task {
+                    try Task.checkCancellation()
+                    if let directTCP { try await directTCP.connect() }
+                    return try await NowhereMorph.connectTLS(
+                        client: client,
+                        base: base,
+                        keys: keys,
+                        prelude: configuration.morphPrelude
+                    )
+                }
+                let adoptedTask = lifecycle.withLock { state -> Bool in
+                    guard state.phase == .opening else { return false }
+                    state.bootstrapTask = task
+                    return true
+                }
+                if !adoptedTask { task.cancel() }
+                defer { lifecycle.withLock { $0.bootstrapTask = nil } }
+                record = try await withTaskCancellationHandler {
+                    let result = try await task.value
+                    guard !Task.isCancelled, lifecycle.withLock({ $0.phase == .opening }) else {
+                        result.cancel()
+                        throw terminalError(fallback: CancellationError())
+                    }
+                    return result
+                } onCancel: {
+                    task.cancel()
+                    base.cancel()
+                    client.cancel()
+                }
             } else if let tunnel {
                 record = try await client.connect(overTunnel: tunnel)
             } else {
@@ -314,17 +354,19 @@ actor NowhereTCPConnection: ProxyConnection, NowhereTerminationObservable {
     }
 
     private nonisolated func finish(error: Error?) {
-        let resources: (TLSClient?, (any ByteTransport)?, Task<Void, Never>?)? = lifecycle.withLock { state in
+        let resources: (TLSClient?, (any ByteTransport)?, Task<Void, Never>?, Task<TLSRecordConnection, Error>?)? = lifecycle.withLock { state in
             guard state.transition(to: .closed) else { return nil }
             state.terminalError = error
-            let resources = (state.tlsClient, state.transport, state.monitorTask)
+            let resources = (state.tlsClient, state.transport, state.monitorTask, state.bootstrapTask)
             state.tlsClient = nil
             state.transport = nil
             state.monitorTask = nil
+            state.bootstrapTask = nil
             return resources
         }
         guard let resources else { return }
         resources.2?.cancel()
+        resources.3?.cancel()
         resources.0?.cancel()
         resources.1?.cancel()
         termination.fire(error)

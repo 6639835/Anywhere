@@ -54,6 +54,7 @@ nonisolated final class NowhereClient: Sendable {
         let downlink: NowhereNetwork
         let serverName: String
         let morph: Bool
+        let morphPrelude: NowhereMorphPrelude
         let chain: [ProxyConfiguration]
         let sessionID: Data
     }
@@ -85,6 +86,7 @@ nonisolated final class NowhereClient: Sendable {
             downlink: configuration.downlink,
             serverName: configuration.serverName,
             morph: configuration.morph,
+            morphPrelude: configuration.morphPrelude,
             chain: [],
             sessionID: configuration.sessionID
         )
@@ -128,6 +130,7 @@ nonisolated final class NowhereClient: Sendable {
             downlink: configuration.downlink,
             serverName: configuration.serverName,
             morph: configuration.morph,
+            morphPrelude: configuration.morphPrelude,
             chain: chain,
             sessionID: configuration.sessionID
         )
@@ -440,6 +443,7 @@ nonisolated final class NowhereClient: Sendable {
             && key.downlink == configuration.downlink
             && key.serverName == configuration.serverName
             && key.morph == configuration.morph
+            && key.morphPrelude == configuration.morphPrelude
             && key.sessionID == configuration.sessionID
     }
 

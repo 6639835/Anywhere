@@ -85,6 +85,7 @@ nonisolated extension ProxyClient {
             downlink: downlink,
             multiplex: nowhere.multiplex,
             morph: nowhere.morph,
+            morphPrelude: nowhere.morphPrelude,
             serverName: nowhere.serverName
         )
         let sessionID = try NowhereTransportIdentityRegistry.shared.sessionID(for: transportIdentity)
@@ -97,6 +98,7 @@ nonisolated extension ProxyClient {
             downlink: downlink,
             multiplex: nowhere.multiplex,
             morph: nowhere.morph,
+            morphPrelude: nowhere.morphPrelude,
             sessionID: sessionID,
             serverName: nowhere.serverName
         )
@@ -739,7 +741,12 @@ nonisolated extension ProxyClient {
                 base.cancel()
                 throw AnywhereError.proxy(.nowhere, .protocolViolation(detail: "Missing Morph keys"))
             }
-            record = try await client.connect(transport: NowhereMorphTCPTransport(inner: base, keys: keys))
+            record = try await NowhereMorph.connectTLS(
+                client: client,
+                base: base,
+                keys: keys,
+                prelude: configuration.morphPrelude
+            )
         } else if let tunnel {
             record = try await client.connect(overTunnel: tunnel)
         } else {

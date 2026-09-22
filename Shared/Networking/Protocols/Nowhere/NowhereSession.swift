@@ -148,7 +148,10 @@ nonisolated final class NowhereSession: Sendable {
             guard let keys = configuration.morphKeys else {
                 throw AnywhereError.proxy(.nowhere, .protocolViolation(detail: "Missing Morph keys"))
             }
-            morphObfuscator = try NowhereMorphPacketObfuscator(key: keys.udp)
+            morphObfuscator = try NowhereMorphPacketObfuscator(
+                sendKey: keys.udpClientToServer,
+                receiveKey: keys.udpServerToClient
+            )
         } else {
             morphObfuscator = nil
         }
