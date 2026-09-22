@@ -1,5 +1,5 @@
 //
-//  MissionControlView.swift
+//  DashboardView.swift
 //  Anywhere
 //
 //  Created by NodePassProject on 8/21/26.
@@ -8,7 +8,7 @@
 import SwiftUI
 import NetworkExtension
 
-struct MissionControlView: View {
+struct DashboardView: View {
     @Environment(TunnelController.self) private var tunnelController
     @Environment(ConnectionStats.self) private var connectionStats
 
@@ -58,7 +58,7 @@ struct MissionControlView: View {
     let container = AppContainer.preview()
     container.tunnel.setStatusForPreview(.connected)
 
-    return MissionControlView()
+    return DashboardView()
         .environment(AppSettings())
         .environment(container.tunnel)
         .environment(container.configurationStore)
@@ -70,7 +70,7 @@ struct MissionControlView: View {
 #Preview("Disconnected") {
     let container = AppContainer.preview()
 
-    return MissionControlView()
+    return DashboardView()
         .environment(AppSettings())
         .environment(container.tunnel)
         .environment(container.configurationStore)

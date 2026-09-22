@@ -11,7 +11,6 @@ import NetworkExtension
 struct HomeView: View {
     private enum Page: Hashable {
         case launchpad
-        case missionControl
         case toolbox
         case data
         case personalization
@@ -25,16 +24,10 @@ struct HomeView: View {
         case about
     }
     
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(AppSettings.self) private var appSettings
-    @Environment(TunnelController.self) private var tunnelController
 
     @State private var selectedPage: Page? = .launchpad
     @State private var preferredColumn = NavigationSplitViewColumn.detail
-    
-    private var isConnected: Bool {
-        tunnelController.rawStatus == .connected
-    }
 
     var body: some View {
         splitView
@@ -89,8 +82,6 @@ struct HomeView: View {
             switch selectedPage {
             case .launchpad:
                 LaunchpadView()
-            case .missionControl:
-                MissionControlView()
             case .toolbox:
                 ToolboxView()
             case .data:
@@ -153,6 +144,7 @@ struct HomeView: View {
         .environment(container.latency)
         .environment(container.configurationStore)
         .environment(container.chainStore)
+        .environment(container.groupStore)
         .environment(container.subscriptionStore)
         .environment(ConnectionStats.previewSeeded())
         .colorScheme(.dark)
