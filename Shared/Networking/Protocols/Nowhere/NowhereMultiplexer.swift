@@ -298,7 +298,7 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
             let charged = Self.creditBytes(for: length)
             try await acquireSendCredit(flowID: flowID, count: charged)
             let end = offset + length
-            let payload = data.subdata(in: offset..<end)
+            let payload = data.subdata(in: (data.startIndex + offset)..<(data.startIndex + end))
             let header = try NowhereMultiplexerFrameHeader.data(
                 flowID: flowID,
                 payloadLength: length
