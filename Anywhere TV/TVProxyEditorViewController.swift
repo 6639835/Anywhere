@@ -27,6 +27,7 @@ class TVProxyEditorViewController: UITableViewController {
     private var nowhereDownlink: NowhereNetwork = .tcp
     private var nowhereMultiplex = false
     private var nowhereMorph = false
+    private var nowhereMorphPrelude: NowhereMorphPrelude = .low7
     private var nowhereSNI = ""
 
     private var vlessUUID = ""
@@ -158,7 +159,7 @@ class TVProxyEditorViewController: UITableViewController {
     private enum FieldKey {
         case name, address, port
         case outboundProtocol
-        case nowhereKey, nowhereTCPPort, nowhereUDPPort, nowhereSeparatePorts, nowhereUplink, nowhereDownlink, nowhereMultiplex, nowhereMorph, nowhereSNI
+        case nowhereKey, nowhereTCPPort, nowhereUDPPort, nowhereSeparatePorts, nowhereUplink, nowhereDownlink, nowhereMultiplex, nowhereMorph, nowhereMorphPrelude, nowhereSNI
         case vlessUUID, vlessEncryption, vlessTransport, vlessFlow, vlessSecurity
         case vlessWebSocketHost, vlessWebSocketPath
         case vlessHTTPUpgradeHost, vlessHTTPUpgradePath
@@ -311,6 +312,14 @@ class TVProxyEditorViewController: UITableViewController {
                 isOn: nowhereMorph,
                 key: .nowhereMorph
             ))
+            if nowhereMorph {
+                transportRows.append(.selection(
+                    label: String(localized: "Prelude"),
+                    value: nowhereMorphPrelude.displayName,
+                    options: NowhereMorphPrelude.allCases.map { ($0.displayName, $0.rawValue) },
+                    key: .nowhereMorphPrelude
+                ))
+            }
             sections.append((String(localized: "Network"), transportRows))
         } else if isVLESS {
             var transportRows: [RowType] = [
@@ -820,6 +829,10 @@ class TVProxyEditorViewController: UITableViewController {
             }
         case .nowhereMultiplex: nowhereMultiplex = value == "true"
         case .nowhereMorph: nowhereMorph = value == "true"
+        case .nowhereMorphPrelude:
+            if let prelude = NowhereMorphPrelude(rawValue: value) {
+                nowhereMorphPrelude = prelude
+            }
         case .nowhereSNI: nowhereSNI = value
         case .vlessUUID: vlessUUID = value
         case .vlessEncryption: vlessEncryption = value
@@ -932,6 +945,7 @@ class TVProxyEditorViewController: UITableViewController {
             nowhereDownlink = nowhere.downlink
             nowhereMultiplex = nowhere.multiplex
             nowhereMorph = nowhere.morph
+            nowhereMorphPrelude = nowhere.morphPrelude
             nowhereSNI = nowhere.serverName
         }
         if let vless = configuration.vless {
@@ -1214,6 +1228,7 @@ class TVProxyEditorViewController: UITableViewController {
                 downlink: nowhereDownlink,
                 multiplex: (nowhereUplink == .tcp || nowhereDownlink == .tcp) && nowhereMultiplex,
                 morph: nowhereMorph,
+                morphPrelude: nowhereMorphPrelude,
                 serverName: sni
             ))
         case .vless:

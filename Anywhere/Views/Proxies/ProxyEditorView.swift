@@ -26,6 +26,7 @@ struct ProxyEditorView: View {
     @State private var nowhereDownlink: NowhereNetwork = .tcp
     @State private var nowhereMultiplex = false
     @State private var nowhereMorph = false
+    @State private var nowhereMorphPrelude: NowhereMorphPrelude = .low7
     @State private var nowhereSNI = ""
 
     @State private var vlessUUID = ""
@@ -535,6 +536,15 @@ struct ProxyEditorView: View {
                 .disabled(nowhereUplink == .udp && nowhereDownlink == .udp)
                 Toggle(isOn: $nowhereMorph) {
                     TextWithColorfulIcon(title: "Morph", systemName: "waveform", foregroundStyle: .white, backgroundStyle: .indigo.gradient)
+                }
+                if nowhereMorph {
+                    Picker(selection: $nowhereMorphPrelude) {
+                        ForEach(NowhereMorphPrelude.allCases, id: \.self) { prelude in
+                            Text(prelude.displayName).tag(prelude)
+                        }
+                    } label: {
+                        TextWithColorfulIcon(title: "Prelude", systemName: "text.line.first.and.arrowtriangle.forward", foregroundStyle: .white, backgroundStyle: .indigo.gradient)
+                    }
                 }
             }
         } else if isVLESS {
@@ -1108,6 +1118,7 @@ struct ProxyEditorView: View {
             nowhereDownlink = nowhere.downlink
             nowhereMultiplex = nowhere.multiplex
             nowhereMorph = nowhere.morph
+            nowhereMorphPrelude = nowhere.morphPrelude
             nowhereSNI = nowhere.serverName
         }
         if let vless = configuration.vless {
@@ -1335,6 +1346,7 @@ struct ProxyEditorView: View {
                 downlink: nowhereDownlink,
                 multiplex: (nowhereUplink == .tcp || nowhereDownlink == .tcp) && nowhereMultiplex,
                 morph: nowhereMorph,
+                morphPrelude: nowhereMorphPrelude,
                 serverName: sni
             ))
         case .vless:

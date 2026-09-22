@@ -14,6 +14,18 @@ nonisolated enum NowhereNetwork: String, Codable, CaseIterable, Sendable {
     case tcp
 }
 
+nonisolated enum NowhereMorphPrelude: String, Codable, CaseIterable, Sendable {
+    case low7
+    case full8
+
+    var displayName: String {
+        switch self {
+        case .low7: String(localized: "7-bit Random")
+        case .full8: String(localized: "8-bit Random")
+        }
+    }
+}
+
 nonisolated struct NowhereConfiguration: Hashable, Sendable {
     let key: String
     let tcpPort: UInt16?
@@ -22,6 +34,7 @@ nonisolated struct NowhereConfiguration: Hashable, Sendable {
     let downlink: NowhereNetwork
     let multiplex: Bool
     let morph: Bool
+    let morphPrelude: NowhereMorphPrelude
     let serverName: String
 
     init(
@@ -32,6 +45,7 @@ nonisolated struct NowhereConfiguration: Hashable, Sendable {
         downlink: NowhereNetwork,
         multiplex: Bool,
         morph: Bool,
+        morphPrelude: NowhereMorphPrelude = .low7,
         serverName: String
     ) {
         self.key = key
@@ -41,6 +55,7 @@ nonisolated struct NowhereConfiguration: Hashable, Sendable {
         self.downlink = downlink
         self.multiplex = multiplex && (uplink == .tcp || downlink == .tcp)
         self.morph = morph
+        self.morphPrelude = morphPrelude
         self.serverName = serverName
     }
 
@@ -63,7 +78,7 @@ nonisolated struct NowhereConfiguration: Hashable, Sendable {
 
 nonisolated extension NowhereConfiguration: Codable {
     private enum CodingKeys: String, CodingKey {
-        case key, tcpPort, udpPort, uplink, downlink, multiplex, morph, serverName
+        case key, tcpPort, udpPort, uplink, downlink, multiplex, morph, morphPrelude, serverName
     }
 
     init(from decoder: Decoder) throws {
@@ -99,6 +114,7 @@ nonisolated extension NowhereConfiguration: Codable {
             downlink: downlink,
             multiplex: try container.decodeIfPresent(Bool.self, forKey: .multiplex) ?? false,
             morph: try container.decodeIfPresent(Bool.self, forKey: .morph) ?? false,
+            morphPrelude: try container.decodeIfPresent(NowhereMorphPrelude.self, forKey: .morphPrelude) ?? .low7,
             serverName: try container.decode(String.self, forKey: .serverName)
         )
     }
@@ -112,6 +128,7 @@ nonisolated extension NowhereConfiguration: Codable {
         try container.encode(downlink, forKey: .downlink)
         try container.encode(multiplex, forKey: .multiplex)
         try container.encode(morph, forKey: .morph)
+        try container.encode(morphPrelude, forKey: .morphPrelude)
         try container.encode(serverName, forKey: .serverName)
     }
 }
@@ -126,6 +143,7 @@ nonisolated struct NowhereTransportIdentity: Hashable, Sendable {
     let downlink: NowhereNetwork
     let multiplex: Bool
     let morph: Bool
+    let morphPrelude: NowhereMorphPrelude
     let serverName: String
 }
 
@@ -138,6 +156,7 @@ nonisolated struct NowhereRuntimeConfiguration: Hashable, Sendable {
     let downlink: NowhereNetwork
     let multiplex: Bool
     let morph: Bool
+    let morphPrelude: NowhereMorphPrelude
     let sessionID: Data
     let serverName: String
     let authKey: NowhereProtocol.AuthKey
@@ -152,6 +171,7 @@ nonisolated struct NowhereRuntimeConfiguration: Hashable, Sendable {
         downlink: NowhereNetwork,
         multiplex: Bool,
         morph: Bool,
+        morphPrelude: NowhereMorphPrelude = .low7,
         sessionID: Data,
         serverName: String
     ) throws {
@@ -177,6 +197,7 @@ nonisolated struct NowhereRuntimeConfiguration: Hashable, Sendable {
         self.downlink = downlink
         self.multiplex = multiplex && (uplink == .tcp || downlink == .tcp)
         self.morph = morph
+        self.morphPrelude = morphPrelude
         self.sessionID = sessionID
         self.serverName = serverName
         self.authKey = try NowhereProtocol.deriveAuthKey(sharedKey: key)

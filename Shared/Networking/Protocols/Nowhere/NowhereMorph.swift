@@ -12,12 +12,15 @@ import Synchronization
 
 nonisolated enum NowhereMorph {
     static let nonceSize = 12
+    static let tcpPreludeSize = 64
     static let byteLimit: UInt64 = (1 << 38) - 64
+    private static let handshakeDeadline: Duration = .seconds(30)
 
     struct Keys: Hashable, Sendable {
         let tcpClientToServer: Data
         let tcpServerToClient: Data
-        let udp: Data
+        let udpClientToServer: Data
+        let udpServerToClient: Data
     }
 
     static func deriveKeys(sharedKey: String) throws -> Keys {
@@ -37,8 +40,49 @@ nonisolated enum NowhereMorph {
         return Keys(
             tcpClientToServer: derive("tcp c2s"),
             tcpServerToClient: derive("tcp s2c"),
-            udp: derive("udp")
+            udpClientToServer: derive("udp c2s"),
+            udpServerToClient: derive("udp s2c")
         )
+    }
+
+    static func connectTLS(
+        client: TLSClient,
+        base: any ByteTransport,
+        keys: Keys,
+        prelude: NowhereMorphPrelude
+    ) async throws -> TLSRecordConnection {
+        do {
+            return try await withTaskCancellationHandler {
+                try Task.checkCancellation()
+                let record = try await withDialDeadline(handshakeDeadline, onExpiry: {
+                    base.cancel()
+                    client.cancel()
+                }, error: {
+                    AnywhereError.tls(.handshakeFailed(detail: "Morph bootstrap or TLS handshake timed out"))
+                }, discardingLateResult: { record in
+                    record.cancel()
+                }, operation: {
+                    let transport = try await NowhereMorphTCPTransport.bootstrap(
+                        inner: base,
+                        keys: keys,
+                        prelude: prelude
+                    )
+                    return try await client.connect(transport: transport)
+                })
+                guard !Task.isCancelled else {
+                    record.cancel()
+                    throw CancellationError()
+                }
+                return record
+            } onCancel: {
+                base.cancel()
+                client.cancel()
+            }
+        } catch {
+            base.cancel()
+            client.cancel()
+            throw error
+        }
     }
 
     static func apply(_ input: Data, key: Data, nonce: Data, offset: UInt64) throws -> Data {
@@ -138,17 +182,20 @@ nonisolated final class NowhereMorphPacketObfuscator: QUICPacketObfuscator {
         var handler: (@Sendable (Error) -> Void)?
     }
 
-    private let key: Data
+    private let sendKey: Data
+    private let receiveKey: Data
     private let nonceGenerator: NowhereMorphNonceGenerator
     private let failureState = Mutex(FailureState())
 
-    init(key: Data) throws {
-        self.key = key
+    init(sendKey: Data, receiveKey: Data) throws {
+        self.sendKey = sendKey
+        self.receiveKey = receiveKey
         nonceGenerator = try NowhereMorphNonceGenerator()
     }
 
-    init(key: Data, nonceGenerator: NowhereMorphNonceGenerator) {
-        self.key = key
+    init(sendKey: Data, receiveKey: Data, nonceGenerator: NowhereMorphNonceGenerator) {
+        self.sendKey = sendKey
+        self.receiveKey = receiveKey
         self.nonceGenerator = nonceGenerator
     }
 
@@ -165,7 +212,12 @@ nonisolated final class NowhereMorphPacketObfuscator: QUICPacketObfuscator {
     func seal(_ packet: UnsafeRawBufferPointer) -> [Data] {
         do {
             let nonce = try nonceGenerator.next()
-            let ciphertext = try NowhereMorph.apply(Data(packet), key: key, nonce: nonce, offset: 0)
+            let ciphertext = try NowhereMorph.apply(
+                Data(packet),
+                key: sendKey,
+                nonce: nonce,
+                offset: 0
+            )
             var output = Data(capacity: NowhereMorph.nonceSize + ciphertext.count)
             output.append(nonce)
             output.append(ciphertext)
@@ -185,7 +237,7 @@ nonisolated final class NowhereMorphPacketObfuscator: QUICPacketObfuscator {
         guard datagram.count > NowhereMorph.nonceSize else { return nil }
         let nonce = Data(datagram.prefix(NowhereMorph.nonceSize))
         let ciphertext = Data(datagram.dropFirst(NowhereMorph.nonceSize))
-        return try? NowhereMorph.apply(ciphertext, key: key, nonce: nonce, offset: 0)
+        return try? NowhereMorph.apply(ciphertext, key: receiveKey, nonce: nonce, offset: 0)
     }
 }
 
@@ -194,7 +246,6 @@ nonisolated final class NowhereMorphTCPTransport: ByteTransport, Sendable {
         let nonce: Data
         var sendOffset: UInt64 = 0
         var receiveOffset: UInt64 = 0
-        var nonceSent = false
     }
 
     private let inner: any ByteTransport
@@ -202,11 +253,7 @@ nonisolated final class NowhereMorphTCPTransport: ByteTransport, Sendable {
     private let serverToClientKey: Data
     private let state: Mutex<State>
 
-    convenience init(inner: any ByteTransport, keys: NowhereMorph.Keys) throws {
-        try self.init(inner: inner, keys: keys, nonce: NowhereMorphNonceGenerator().next())
-    }
-
-    init(inner: any ByteTransport, keys: NowhereMorph.Keys, nonce: Data) throws {
+    private init(inner: any ByteTransport, keys: NowhereMorph.Keys, nonce: Data) throws {
         guard nonce.count == NowhereMorph.nonceSize else {
             throw AnywhereError.proxy(.nowhere, .protocolViolation(detail: "Invalid Morph nonce"))
         }
@@ -214,6 +261,44 @@ nonisolated final class NowhereMorphTCPTransport: ByteTransport, Sendable {
         clientToServerKey = keys.tcpClientToServer
         serverToClientKey = keys.tcpServerToClient
         state = Mutex(State(nonce: nonce))
+    }
+
+    static func bootstrap(
+        inner: any ByteTransport,
+        keys: NowhereMorph.Keys,
+        prelude policy: NowhereMorphPrelude
+    ) async throws -> NowhereMorphTCPTransport {
+        do {
+            var prelude = try NowhereMorphNonceGenerator.secureRandomBytes(
+                count: NowhereMorph.tcpPreludeSize
+            )
+            guard prelude.count == NowhereMorph.tcpPreludeSize else {
+                throw AnywhereError.proxy(
+                    .nowhere,
+                    .connectionClosed(detail: "Failed to generate Morph TCP prelude")
+                )
+            }
+            switch policy {
+            case .low7:
+                prelude.withUnsafeMutableBytes { bytes in
+                    for index in bytes.indices {
+                        bytes[index] &= 0x7f
+                    }
+                }
+            case .full8:
+                break
+            }
+            let nonce = try NowhereMorphNonceGenerator.secureRandomBytes(
+                count: NowhereMorph.nonceSize
+            )
+            let transport = try NowhereMorphTCPTransport(inner: inner, keys: keys, nonce: nonce)
+            try await inner.send(prelude)
+            try await inner.send(nonce)
+            return transport
+        } catch {
+            inner.cancel()
+            throw error
+        }
     }
 
     var isReady: Bool { inner.isReady }
@@ -228,12 +313,7 @@ nonisolated final class NowhereMorphTCPTransport: ByteTransport, Sendable {
                     offset: state.sendOffset
                 )
                 state.sendOffset += UInt64(data.count)
-                if state.nonceSent { return ciphertext }
-                state.nonceSent = true
-                var output = Data(capacity: NowhereMorph.nonceSize + ciphertext.count)
-                output.append(state.nonce)
-                output.append(ciphertext)
-                return output
+                return ciphertext
             }
             try await inner.send(wire)
         } catch {
