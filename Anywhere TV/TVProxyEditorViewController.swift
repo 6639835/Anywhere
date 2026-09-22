@@ -312,7 +312,7 @@ class TVProxyEditorViewController: UITableViewController {
                 isOn: nowhereMorph,
                 key: .nowhereMorph
             ))
-            if nowhereMorph {
+            if nowhereMorph && (nowhereUplink == .tcp || nowhereDownlink == .tcp) {
                 transportRows.append(.selection(
                     label: String(localized: "Prelude"),
                     value: nowhereMorphPrelude.displayName,

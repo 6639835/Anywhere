@@ -537,7 +537,7 @@ struct ProxyEditorView: View {
                 Toggle(isOn: $nowhereMorph) {
                     TextWithColorfulIcon(title: "Morph", systemName: "waveform", foregroundStyle: .white, backgroundStyle: .indigo.gradient)
                 }
-                if nowhereMorph {
+                if nowhereMorph && (nowhereUplink == .tcp || nowhereDownlink == .tcp) {
                     Picker(selection: $nowhereMorphPrelude) {
                         ForEach(NowhereMorphPrelude.allCases, id: \.self) { prelude in
                             Text(prelude.displayName).tag(prelude)
