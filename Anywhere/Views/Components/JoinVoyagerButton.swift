@@ -22,7 +22,7 @@ struct JoinVoyagerButton: View {
                 .foregroundStyle(.white)
                 .padding(.vertical, 8)
                 .padding(.horizontal, 20)
-                .background(Color(hex: 0x5060F0).gradient, in: Capsule())
+                .background(Color.voyagerAccent.gradient, in: Capsule())
         }
         .buttonStyle(.plain)
     }

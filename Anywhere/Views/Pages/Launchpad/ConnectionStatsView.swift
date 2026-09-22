@@ -283,7 +283,7 @@ struct StatCard<Content: View>: View {
         VStack(alignment: .leading, spacing: 10) {
             Label(titleKey, systemImage: systemImage)
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(.primary.opacity(0.7))
+                .foregroundStyle(.secondary)
             content
         }
         .padding()
@@ -346,7 +346,7 @@ private struct StatCardChrome: ViewModifier {
             .contentShape(RoundedRectangle(cornerRadius: 24))
             .background(
                 RoundedRectangle(cornerRadius: 24)
-                    .fill(.white.opacity(0.1))
+                    .fill(.statCardBackground)
             )
     }
 }
@@ -594,7 +594,7 @@ struct AnywhereRingGaugeStyle: GaugeStyle {
 #Preview {
     ZStack {
         LinearGradient(
-            colors: [Color.connectedBackgroundDarkStart, Color.connectedBackgroundDarkEnd],
+            colors: [Color.homeBackgroundStart, Color.homeBackgroundEnd],
             startPoint: .top,
             endPoint: .bottom
         )
@@ -620,7 +620,7 @@ struct AnywhereRingGaugeStyle: GaugeStyle {
     ]
     return ZStack {
         LinearGradient(
-            colors: [Color.connectedBackgroundDarkStart, Color.connectedBackgroundDarkEnd],
+            colors: [Color.homeBackgroundStart, Color.homeBackgroundEnd],
             startPoint: .top,
             endPoint: .bottom
         )
@@ -651,7 +651,7 @@ struct AnywhereRingGaugeStyle: GaugeStyle {
 #Preview("Sleep / Wake") {
     ZStack {
         LinearGradient(
-            colors: [Color.connectedBackgroundDarkStart, Color.connectedBackgroundDarkEnd],
+            colors: [Color.homeBackgroundStart, Color.homeBackgroundEnd],
             startPoint: .top,
             endPoint: .bottom
         )

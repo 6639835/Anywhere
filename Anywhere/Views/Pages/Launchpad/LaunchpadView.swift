@@ -48,7 +48,7 @@ struct LaunchpadView: View {
 
     var body: some View {
         ZStack {
-            BackgroundGradient(isConnected: isConnected)
+            BackgroundGradient()
                 .ignoresSafeArea()
             
             PageView(selection: $page) {
@@ -126,7 +126,6 @@ struct LaunchpadView: View {
         }
         .sheet(isPresented: $showingProxiesView) {
             ProxiesView()
-                .presentationDetents([.medium, .large])
                 .environment(operations)
                 .environment(proxySelection)
                 .environment(latencyCenter)

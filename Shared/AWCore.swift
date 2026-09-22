@@ -166,32 +166,37 @@ nonisolated final class AWCore {
     }
 
     enum ThemeColorSlot: String {
-        case connectedBackgroundLightStart
-        case connectedBackgroundLightEnd
-        case connectedBackgroundDarkStart
-        case connectedBackgroundDarkEnd
-        case disconnectedBackgroundLightStart
-        case disconnectedBackgroundLightEnd
-        case disconnectedBackgroundDarkStart
-        case disconnectedBackgroundDarkEnd
+        case homeBackgroundLightStart
+        case homeBackgroundLightEnd
+        case homeBackgroundDarkStart
+        case homeBackgroundDarkEnd
     }
 
-    /// Theme colors saved before light/dark variants existed applied to whichever
-    /// home appearance was selected at the time, so move them into those slots.
+    /// Theme colors were once stored per connection state, and before that as a single
+    /// pair applied to whichever home appearance was selected. The home background is now
+    /// universal, so fold the disconnected pair (the closest match to the new default)
+    /// into the shared slots.
     static func migrateLegacyThemeColorsIfNeeded() {
         let wasLight = userDefaults.string(forKey: UserDefaultsKey.homeColorScheme) == "light"
-        let legacySlots: [(key: String, light: ThemeColorSlot, dark: ThemeColorSlot)] = [
-            ("connectedBackgroundStart", .connectedBackgroundLightStart, .connectedBackgroundDarkStart),
-            ("connectedBackgroundEnd", .connectedBackgroundLightEnd, .connectedBackgroundDarkEnd),
-            ("disconnectedBackgroundStart", .disconnectedBackgroundLightStart, .disconnectedBackgroundDarkStart),
-            ("disconnectedBackgroundEnd", .disconnectedBackgroundLightEnd, .disconnectedBackgroundDarkEnd),
+        let legacySlots: [(key: String, target: ThemeColorSlot)] = [
+            ("disconnectedBackgroundStart", wasLight ? .homeBackgroundLightStart : .homeBackgroundDarkStart),
+            ("disconnectedBackgroundEnd", wasLight ? .homeBackgroundLightEnd : .homeBackgroundDarkEnd),
+            ("connectedBackgroundStart", wasLight ? .homeBackgroundLightStart : .homeBackgroundDarkStart),
+            ("connectedBackgroundEnd", wasLight ? .homeBackgroundLightEnd : .homeBackgroundDarkEnd),
+            ("disconnectedBackgroundLightStart", .homeBackgroundLightStart),
+            ("disconnectedBackgroundLightEnd", .homeBackgroundLightEnd),
+            ("disconnectedBackgroundDarkStart", .homeBackgroundDarkStart),
+            ("disconnectedBackgroundDarkEnd", .homeBackgroundDarkEnd),
+            ("connectedBackgroundLightStart", .homeBackgroundLightStart),
+            ("connectedBackgroundLightEnd", .homeBackgroundLightEnd),
+            ("connectedBackgroundDarkStart", .homeBackgroundDarkStart),
+            ("connectedBackgroundDarkEnd", .homeBackgroundDarkEnd),
         ]
         for legacy in legacySlots {
             let key = "themeColor.\(legacy.key)"
             guard let data = userDefaults.data(forKey: key) else { continue }
-            let target = wasLight ? legacy.light : legacy.dark
-            if getThemeColorData(target) == nil {
-                setThemeColorData(target, data)
+            if getThemeColorData(legacy.target) == nil {
+                setThemeColorData(legacy.target, data)
             }
             userDefaults.removeObject(forKey: key)
         }

@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct CustomizeThemeView: View {
     @Environment(VoyagerStore.self) private var voyagerStore
@@ -20,32 +21,18 @@ struct CustomizeThemeView: View {
             }
             
             backgroundSection(
-                "Background (Connected, Light)",
-                start: $settings.connectedBackgroundLightStartData, startDefault: .connectedBackgroundLightStart,
-                end: $settings.connectedBackgroundLightEndData, endDefault: .connectedBackgroundLightEnd
+                "Background (Light)",
+                start: $settings.homeBackgroundLightStartData, startDefault: lightDefaults.start,
+                end: $settings.homeBackgroundLightEndData, endDefault: lightDefaults.end
             )
             
             backgroundSection(
-                "Background (Connected, Dark)",
-                start: $settings.connectedBackgroundDarkStartData, startDefault: .connectedBackgroundDarkStart,
-                end: $settings.connectedBackgroundDarkEndData, endDefault: .connectedBackgroundDarkEnd
+                "Background (Dark)",
+                start: $settings.homeBackgroundDarkStartData, startDefault: darkDefaults.start,
+                end: $settings.homeBackgroundDarkEndData, endDefault: darkDefaults.end
             )
             
-            backgroundSection(
-                "Background (Disconnected, Light)",
-                start: $settings.disconnectedBackgroundLightStartData, startDefault: .disconnectedBackgroundLightStart,
-                end: $settings.disconnectedBackgroundLightEndData, endDefault: .disconnectedBackgroundLightEnd
-            )
-            
-            backgroundSection(
-                "Background (Disconnected, Dark)",
-                start: $settings.disconnectedBackgroundDarkStartData, startDefault: .disconnectedBackgroundDarkStart,
-                end: $settings.disconnectedBackgroundDarkEndData, endDefault: .disconnectedBackgroundDarkEnd
-            )
-            
-            previewSection("Preview (Connected)", light: connectedLightColors, dark: connectedDarkColors)
-            
-            previewSection("Preview (Disconnected)", light: disconnectedLightColors, dark: disconnectedDarkColors)
+            previewSection("Preview", light: lightColors, dark: darkColors)
         }
         .onGeometryChange(for: CGFloat.self) { proxy in
             let width = proxy.size.width + proxy.safeAreaInsets.leading + proxy.safeAreaInsets.trailing
@@ -108,56 +95,39 @@ struct CustomizeThemeView: View {
     
     // MARK: - Resolved colors
     
-    private var connectedLightColors: [Color] {
+    private var lightColors: [Color] {
         [
-            resolved(settings.connectedBackgroundLightStartData, default: .connectedBackgroundLightStart),
-            resolved(settings.connectedBackgroundLightEndData, default: .connectedBackgroundLightEnd),
+            resolved(settings.homeBackgroundLightStartData, default: lightDefaults.start),
+            resolved(settings.homeBackgroundLightEndData, default: lightDefaults.end),
         ]
     }
     
-    private var connectedDarkColors: [Color] {
+    private var darkColors: [Color] {
         [
-            resolved(settings.connectedBackgroundDarkStartData, default: .connectedBackgroundDarkStart),
-            resolved(settings.connectedBackgroundDarkEndData, default: .connectedBackgroundDarkEnd),
+            resolved(settings.homeBackgroundDarkStartData, default: darkDefaults.start),
+            resolved(settings.homeBackgroundDarkEndData, default: darkDefaults.end),
         ]
     }
     
-    private var disconnectedLightColors: [Color] {
-        [
-            resolved(settings.disconnectedBackgroundLightStartData, default: .disconnectedBackgroundLightStart),
-            resolved(settings.disconnectedBackgroundLightEndData, default: .disconnectedBackgroundLightEnd),
-        ]
+    private var lightDefaults: (start: Color, end: Color) { defaults(for: .light) }
+    
+    private var darkDefaults: (start: Color, end: Color) { defaults(for: .dark) }
+    
+    private func defaults(for style: UIUserInterfaceStyle) -> (start: Color, end: Color) {
+        let traits = UITraitCollection(userInterfaceStyle: style)
+        return (
+            Color(uiColor: UIColor(resource: .homeBackgroundStart).resolvedColor(with: traits)),
+            Color(uiColor: UIColor(resource: .homeBackgroundEnd).resolvedColor(with: traits))
+        )
     }
     
-    private var disconnectedDarkColors: [Color] {
-        [
-            resolved(settings.disconnectedBackgroundDarkStartData, default: .disconnectedBackgroundDarkStart),
-            resolved(settings.disconnectedBackgroundDarkEndData, default: .disconnectedBackgroundDarkEnd),
-        ]
-    }
-    
-    // MARK: - Customization state
-    
-    private var isCustomized: Bool {
-        settings.connectedBackgroundLightStartData != nil
-        || settings.connectedBackgroundLightEndData != nil
-        || settings.connectedBackgroundDarkStartData != nil
-        || settings.connectedBackgroundDarkEndData != nil
-        || settings.disconnectedBackgroundLightStartData != nil
-        || settings.disconnectedBackgroundLightEndData != nil
-        || settings.disconnectedBackgroundDarkStartData != nil
-        || settings.disconnectedBackgroundDarkEndData != nil
-    }
+    // MARK: - Reset
     
     private func reset() {
-        settings.connectedBackgroundLightStartData = nil
-        settings.connectedBackgroundLightEndData = nil
-        settings.connectedBackgroundDarkStartData = nil
-        settings.connectedBackgroundDarkEndData = nil
-        settings.disconnectedBackgroundLightStartData = nil
-        settings.disconnectedBackgroundLightEndData = nil
-        settings.disconnectedBackgroundDarkStartData = nil
-        settings.disconnectedBackgroundDarkEndData = nil
+        settings.homeBackgroundLightStartData = nil
+        settings.homeBackgroundLightEndData = nil
+        settings.homeBackgroundDarkStartData = nil
+        settings.homeBackgroundDarkEndData = nil
     }
     
     // MARK: - Helpers

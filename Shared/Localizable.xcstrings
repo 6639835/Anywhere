@@ -3360,210 +3360,106 @@
         }
       }
     },
-    "Background (Connected, Dark)" : {
+    "Background (Dark)" : {
       "localizations" : {
         "ar" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "الخلفية (متصل، داكن)"
+            "value" : "الخلفية (داكن)"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Background (Connected, Dark)"
+            "value" : "Background (Dark)"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Fondo (conectado, oscuro)"
+            "value" : "Fondo (oscuro)"
           }
         },
         "fa" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "پس‌زمینه (متصل، تیره)"
+            "value" : "پس‌زمینه (تیره)"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Фон (подключено, тёмное оформление)"
+            "value" : "Фон (тёмное оформление)"
           }
         },
         "tr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Arka Plan (Bağlı, Koyu)"
+            "value" : "Arka Plan (Koyu)"
           }
         },
         "vi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Nền (đã kết nối, tối)"
+            "value" : "Nền (tối)"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "背景（已连接，深色）"
+            "value" : "背景（深色）"
           }
         }
       }
     },
-    "Background (Connected, Light)" : {
+    "Background (Light)" : {
       "localizations" : {
         "ar" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "الخلفية (متصل، فاتح)"
+            "value" : "الخلفية (فاتح)"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Background (Connected, Light)"
+            "value" : "Background (Light)"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Fondo (conectado, claro)"
+            "value" : "Fondo (claro)"
           }
         },
         "fa" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "پس‌زمینه (متصل، روشن)"
+            "value" : "پس‌زمینه (روشن)"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Фон (подключено, светлое оформление)"
+            "value" : "Фон (светлое оформление)"
           }
         },
         "tr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Arka Plan (Bağlı, Açık)"
+            "value" : "Arka Plan (Açık)"
           }
         },
         "vi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Nền (đã kết nối, sáng)"
+            "value" : "Nền (sáng)"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "背景（已连接，浅色）"
-          }
-        }
-      }
-    },
-    "Background (Disconnected, Dark)" : {
-      "localizations" : {
-        "ar" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "الخلفية (غير متصل، داكن)"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Background (Disconnected, Dark)"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Fondo (desconectado, oscuro)"
-          }
-        },
-        "fa" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "پس‌زمینه (قطع شده، تیره)"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Фон (отключено, тёмное оформление)"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Arka Plan (Bağlantı Kesildi, Koyu)"
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Nền (đã ngắt kết nối, tối)"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "背景（未连接，深色）"
-          }
-        }
-      }
-    },
-    "Background (Disconnected, Light)" : {
-      "localizations" : {
-        "ar" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "الخلفية (غير متصل، فاتح)"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Background (Disconnected, Light)"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Fondo (desconectado, claro)"
-          }
-        },
-        "fa" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "پس‌زمینه (قطع شده، روشن)"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Фон (отключено, светлое оформление)"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Arka Plan (Bağlantı Kesildi, Açık)"
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Nền (đã ngắt kết nối, sáng)"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "背景（未连接，浅色）"
+            "value" : "背景（浅色）"
           }
         }
       }
@@ -12862,106 +12758,54 @@
         }
       }
     },
-    "Preview (Connected)" : {
+    "Preview" : {
       "localizations" : {
         "ar" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "معاينة (متصل)"
+            "value" : "معاينة"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Preview (Connected)"
+            "value" : "Preview"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Vista previa (conectado)"
+            "value" : "Vista previa"
           }
         },
         "fa" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "پیش‌نمایش (متصل)"
+            "value" : "پیش‌نمایش"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Предпросмотр (подключено)"
+            "value" : "Предпросмотр"
           }
         },
         "tr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Önizleme (Bağlı)"
+            "value" : "Önizleme"
           }
         },
         "vi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Xem trước (đã kết nối)"
+            "value" : "Xem trước"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "预览（已连接）"
-          }
-        }
-      }
-    },
-    "Preview (Disconnected)" : {
-      "localizations" : {
-        "ar" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "معاينة (غير متصل)"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Preview (Disconnected)"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Vista previa (desconectado)"
-          }
-        },
-        "fa" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "پیش‌نمایش (قطع شده)"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Предпросмотр (отключено)"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Önizleme (Bağlantı Kesildi)"
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Xem trước (đã ngắt kết nối)"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "预览（未连接）"
+            "value" : "预览"
           }
         }
       }

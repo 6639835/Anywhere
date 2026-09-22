@@ -34,7 +34,7 @@ struct OnboardingView: View {
                 .padding(.bottom, 16)
         }
         .background(
-            BackgroundGradient(isConnected: false)
+            BackgroundGradient()
                 .ignoresSafeArea()
         )
         .onAppear {

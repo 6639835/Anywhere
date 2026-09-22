@@ -30,36 +30,20 @@ final class AppSettings {
         didSet { AWCore.setShowVoyagerCard(showVoyagerCard) }
     }
 
-    var connectedBackgroundLightStartData: Data? {
-        didSet { AWCore.setThemeColorData(.connectedBackgroundLightStart, connectedBackgroundLightStartData) }
+    var homeBackgroundLightStartData: Data? {
+        didSet { AWCore.setThemeColorData(.homeBackgroundLightStart, homeBackgroundLightStartData) }
     }
 
-    var connectedBackgroundLightEndData: Data? {
-        didSet { AWCore.setThemeColorData(.connectedBackgroundLightEnd, connectedBackgroundLightEndData) }
+    var homeBackgroundLightEndData: Data? {
+        didSet { AWCore.setThemeColorData(.homeBackgroundLightEnd, homeBackgroundLightEndData) }
     }
 
-    var connectedBackgroundDarkStartData: Data? {
-        didSet { AWCore.setThemeColorData(.connectedBackgroundDarkStart, connectedBackgroundDarkStartData) }
+    var homeBackgroundDarkStartData: Data? {
+        didSet { AWCore.setThemeColorData(.homeBackgroundDarkStart, homeBackgroundDarkStartData) }
     }
 
-    var connectedBackgroundDarkEndData: Data? {
-        didSet { AWCore.setThemeColorData(.connectedBackgroundDarkEnd, connectedBackgroundDarkEndData) }
-    }
-
-    var disconnectedBackgroundLightStartData: Data? {
-        didSet { AWCore.setThemeColorData(.disconnectedBackgroundLightStart, disconnectedBackgroundLightStartData) }
-    }
-
-    var disconnectedBackgroundLightEndData: Data? {
-        didSet { AWCore.setThemeColorData(.disconnectedBackgroundLightEnd, disconnectedBackgroundLightEndData) }
-    }
-
-    var disconnectedBackgroundDarkStartData: Data? {
-        didSet { AWCore.setThemeColorData(.disconnectedBackgroundDarkStart, disconnectedBackgroundDarkStartData) }
-    }
-
-    var disconnectedBackgroundDarkEndData: Data? {
-        didSet { AWCore.setThemeColorData(.disconnectedBackgroundDarkEnd, disconnectedBackgroundDarkEndData) }
+    var homeBackgroundDarkEndData: Data? {
+        didSet { AWCore.setThemeColorData(.homeBackgroundDarkEnd, homeBackgroundDarkEndData) }
     }
     
     var subscriptionDNSMode: DNSMode {
@@ -336,14 +320,10 @@ final class AppSettings {
         experimentalEnabled = AWCore.getExperimentalEnabled()
         iCloudSyncEnabled = AWCore.getICloudSyncEnabled()
         AWCore.migrateLegacyThemeColorsIfNeeded()
-        connectedBackgroundLightStartData = AWCore.getThemeColorData(.connectedBackgroundLightStart)
-        connectedBackgroundLightEndData = AWCore.getThemeColorData(.connectedBackgroundLightEnd)
-        connectedBackgroundDarkStartData = AWCore.getThemeColorData(.connectedBackgroundDarkStart)
-        connectedBackgroundDarkEndData = AWCore.getThemeColorData(.connectedBackgroundDarkEnd)
-        disconnectedBackgroundLightStartData = AWCore.getThemeColorData(.disconnectedBackgroundLightStart)
-        disconnectedBackgroundLightEndData = AWCore.getThemeColorData(.disconnectedBackgroundLightEnd)
-        disconnectedBackgroundDarkStartData = AWCore.getThemeColorData(.disconnectedBackgroundDarkStart)
-        disconnectedBackgroundDarkEndData = AWCore.getThemeColorData(.disconnectedBackgroundDarkEnd)
+        homeBackgroundLightStartData = AWCore.getThemeColorData(.homeBackgroundLightStart)
+        homeBackgroundLightEndData = AWCore.getThemeColorData(.homeBackgroundLightEnd)
+        homeBackgroundDarkStartData = AWCore.getThemeColorData(.homeBackgroundDarkStart)
+        homeBackgroundDarkEndData = AWCore.getThemeColorData(.homeBackgroundDarkEnd)
         remnawaveHWIDEnabled = AWCore.getRemnawaveHWIDEnabled()
         showVoyagerCard = AWCore.getShowVoyagerCard()
         subscriptionDNSMode = AWCore.getSubscriptionDNSMode()

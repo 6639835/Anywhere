@@ -18,10 +18,10 @@ struct VoyagerNotice: View {
                 HStack(spacing: 8) {
                     if #available(iOS 26.0, *) {
                         Image(systemName: "sparkles.2")
-                            .foregroundStyle(Color(hex: 0x5060F0))
+                            .foregroundStyle(Color.voyagerAccent)
                     } else {
                         Image(systemName: "sparkles")
-                            .foregroundStyle(Color(hex: 0x5060F0))
+                            .foregroundStyle(Color.voyagerAccent)
                     }
                     Text("Voyager Only")
                         .font(.headline)

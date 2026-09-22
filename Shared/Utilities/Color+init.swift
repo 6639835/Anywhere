@@ -11,16 +11,6 @@ import UIKit
 #endif
 
 nonisolated extension Color {
-    init(hex: UInt, alpha: Double = 1) {
-        self.init(
-            .sRGB,
-            red:   Double((hex >> 16) & 0xFF) / 255,
-            green: Double((hex >> 8) & 0xFF) / 255,
-            blue:  Double(hex & 0xFF) / 255,
-            opacity: alpha
-        )
-    }
-
     #if canImport(UIKit)
     var archivedData: Data? {
         try? NSKeyedArchiver.archivedData(withRootObject: UIColor(self), requiringSecureCoding: true)
