@@ -10,6 +10,12 @@
     "/" : {
       "shouldTranslate" : false
     },
+    "7-bit Random" : {
+      "shouldTranslate" : false
+    },
+    "8-bit Random" : {
+      "shouldTranslate" : false
+    },
     "%@ %@" : {
       "localizations" : {
         "ar" : {
@@ -12748,6 +12754,9 @@
           }
         }
       }
+    },
+    "Prelude" : {
+      "shouldTranslate" : false
     },
     "Pressure" : {
       "localizations" : {
