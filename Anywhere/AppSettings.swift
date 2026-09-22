@@ -45,6 +45,14 @@ final class AppSettings {
     var homeBackgroundDarkEndData: Data? {
         didSet { AWCore.setThemeColorData(.homeBackgroundDarkEnd, homeBackgroundDarkEndData) }
     }
+
+    var statCardBackgroundLightData: Data? {
+        didSet { AWCore.setThemeColorData(.statCardBackgroundLight, statCardBackgroundLightData) }
+    }
+
+    var statCardBackgroundDarkData: Data? {
+        didSet { AWCore.setThemeColorData(.statCardBackgroundDark, statCardBackgroundDarkData) }
+    }
     
     var subscriptionDNSMode: DNSMode {
         didSet {
@@ -319,13 +327,14 @@ final class AppSettings {
     init() {
         experimentalEnabled = AWCore.getExperimentalEnabled()
         iCloudSyncEnabled = AWCore.getICloudSyncEnabled()
-        AWCore.migrateLegacyThemeColorsIfNeeded()
         homeBackgroundLightStartData = AWCore.getThemeColorData(.homeBackgroundLightStart)
         homeBackgroundLightEndData = AWCore.getThemeColorData(.homeBackgroundLightEnd)
         homeBackgroundDarkStartData = AWCore.getThemeColorData(.homeBackgroundDarkStart)
         homeBackgroundDarkEndData = AWCore.getThemeColorData(.homeBackgroundDarkEnd)
         remnawaveHWIDEnabled = AWCore.getRemnawaveHWIDEnabled()
         showVoyagerCard = AWCore.getShowVoyagerCard()
+        statCardBackgroundLightData = AWCore.getThemeColorData(.statCardBackgroundLight)
+        statCardBackgroundDarkData = AWCore.getThemeColorData(.statCardBackgroundDark)
         subscriptionDNSMode = AWCore.getSubscriptionDNSMode()
         subscriptionDNSPlainServer = AWCore.getSubscriptionDNSPlainServer()
         subscriptionDNSDoHURL = AWCore.getSubscriptionDNSDoHURL()

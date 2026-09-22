@@ -32,7 +32,23 @@ struct CustomizeThemeView: View {
                 end: $settings.homeBackgroundDarkEndData, endDefault: darkDefaults.end
             )
             
-            previewSection("Preview", light: lightColors, dark: darkColors)
+            statCardSection(
+                "Stat Card (Light)",
+                background: $settings.statCardBackgroundLightData,
+                backgroundDefault: lightDefaults.card
+            )
+            
+            statCardSection(
+                "Stat Card (Dark)",
+                background: $settings.statCardBackgroundDarkData,
+                backgroundDefault: darkDefaults.card
+            )
+            
+            previewSection(
+                "Preview",
+                light: lightColors, lightCard: lightCardColor,
+                dark: darkColors, darkCard: darkCardColor
+            )
         }
         .onGeometryChange(for: CGFloat.self) { proxy in
             let width = proxy.size.width + proxy.safeAreaInsets.leading + proxy.safeAreaInsets.trailing
@@ -77,13 +93,33 @@ struct CustomizeThemeView: View {
         .disabled(!voyagerStore.isMember)
     }
     
-    private func previewSection(_ header: LocalizedStringKey, light: [Color], dark: [Color]) -> some View {
+    private func statCardSection(
+        _ header: LocalizedStringKey,
+        background: Binding<Data?>, backgroundDefault: Color
+    ) -> some View {
+        Section {
+            ColorPicker(
+                "Background",
+                selection: colorBinding(background, default: backgroundDefault),
+                supportsOpacity: true
+            )
+        } header: {
+            Text(header)
+        }
+        .disabled(!voyagerStore.isMember)
+    }
+    
+    private func previewSection(
+        _ header: LocalizedStringKey,
+        light: [Color], lightCard: Color,
+        dark: [Color], darkCard: Color
+    ) -> some View {
         Section {
             HStack {
                 Spacer()
-                swatch(title: "Light", colors: light, colorScheme: .light)
+                swatch(title: "Light", colors: light, cardColor: lightCard, colorScheme: .light)
                 Spacer()
-                swatch(title: "Dark", colors: dark, colorScheme: .dark)
+                swatch(title: "Dark", colors: dark, cardColor: darkCard, colorScheme: .dark)
                 Spacer()
             }
             .frame(maxWidth: .infinity)
@@ -109,15 +145,24 @@ struct CustomizeThemeView: View {
         ]
     }
     
-    private var lightDefaults: (start: Color, end: Color) { defaults(for: .light) }
+    private var lightCardColor: Color {
+        resolved(settings.statCardBackgroundLightData, default: lightDefaults.card)
+    }
     
-    private var darkDefaults: (start: Color, end: Color) { defaults(for: .dark) }
+    private var darkCardColor: Color {
+        resolved(settings.statCardBackgroundDarkData, default: darkDefaults.card)
+    }
     
-    private func defaults(for style: UIUserInterfaceStyle) -> (start: Color, end: Color) {
+    private var lightDefaults: (start: Color, end: Color, card: Color) { defaults(for: .light) }
+    
+    private var darkDefaults: (start: Color, end: Color, card: Color) { defaults(for: .dark) }
+    
+    private func defaults(for style: UIUserInterfaceStyle) -> (start: Color, end: Color, card: Color) {
         let traits = UITraitCollection(userInterfaceStyle: style)
         return (
             Color(uiColor: UIColor(resource: .homeBackgroundStart).resolvedColor(with: traits)),
-            Color(uiColor: UIColor(resource: .homeBackgroundEnd).resolvedColor(with: traits))
+            Color(uiColor: UIColor(resource: .homeBackgroundEnd).resolvedColor(with: traits)),
+            Color(uiColor: UIColor(resource: .statCardBackground).resolvedColor(with: traits))
         )
     }
     
@@ -128,6 +173,8 @@ struct CustomizeThemeView: View {
         settings.homeBackgroundLightEndData = nil
         settings.homeBackgroundDarkStartData = nil
         settings.homeBackgroundDarkEndData = nil
+        settings.statCardBackgroundLightData = nil
+        settings.statCardBackgroundDarkData = nil
     }
     
     // MARK: - Helpers
@@ -143,7 +190,12 @@ struct CustomizeThemeView: View {
         data.flatMap(Color.init(archivedData:)) ?? fallback
     }
     
-    private func swatch(title: LocalizedStringKey, colors: [Color], colorScheme: ColorScheme) -> some View {
+    private func swatch(
+        title: LocalizedStringKey,
+        colors: [Color],
+        cardColor: Color,
+        colorScheme: ColorScheme
+    ) -> some View {
         let maxDimension: CGFloat = 170
         let size = screenAspectRatio < 1
             ? CGSize(width: maxDimension * screenAspectRatio, height: maxDimension)
@@ -159,8 +211,12 @@ struct CustomizeThemeView: View {
                         .strokeBorder(.quaternary, lineWidth: 0.5)
                 }
                 .overlay {
-                    Image(systemName: "power")
-                        .font(.system(size: 28, weight: .light))
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(cardColor)
+                        .frame(width: size.width * 0.5, height: size.width * 0.5)
+                        .overlay {
+                            Image(systemName: "textformat")
+                        }
                 }
                 .colorScheme(colorScheme)
             Text(title)

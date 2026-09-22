@@ -341,13 +341,23 @@ private struct PressureGauge: View {
 }
 
 private struct StatCardChrome: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(AppSettings.self) private var settings
+
     func body(content: Content) -> some View {
         content
             .contentShape(RoundedRectangle(cornerRadius: 24))
             .background(
                 RoundedRectangle(cornerRadius: 24)
-                    .fill(.statCardBackground)
+                    .fill(background)
             )
+    }
+
+    private var background: Color {
+        let data = colorScheme == .light
+            ? settings.statCardBackgroundLightData
+            : settings.statCardBackgroundDarkData
+        return data.flatMap(Color.init(archivedData:)) ?? .statCardBackground
     }
 }
 
@@ -604,6 +614,7 @@ struct AnywhereRingGaugeStyle: GaugeStyle {
                 .environment(ConnectionStats.previewSeeded())
                 .environment(ConfigurationStore(syncStore: .shared))
                 .environment(ChainStore(syncStore: .shared))
+                .environment(AppSettings())
                 .padding(24)
         }
     }
@@ -644,6 +655,7 @@ struct AnywhereRingGaugeStyle: GaugeStyle {
                 }
             }
         )
+        .environment(AppSettings())
         .padding(24)
     }
 }
@@ -657,6 +669,7 @@ struct AnywhereRingGaugeStyle: GaugeStyle {
         )
         .ignoresSafeArea()
         SleepWakeCard(wakeSeconds: 3 * 3600 + 24 * 60, sleepSeconds: 47 * 60)
+            .environment(AppSettings())
             .padding(24)
     }
 }
