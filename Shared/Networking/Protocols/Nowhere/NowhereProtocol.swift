@@ -405,7 +405,8 @@ nonisolated enum NowhereProtocol {
         guard offset >= 0, offset + 2 <= data.count else { return nil }
         let length = Int(data.uint16(at: offset))
         guard offset + 2 + length <= data.count else { return nil }
-        return (Data(data[(offset + 2)..<(offset + 2 + length)]), 2 + length)
+        let start = data.startIndex + offset + 2
+        return (Data(data[start..<(start + length)]), 2 + length)
     }
 }
 

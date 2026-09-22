@@ -27,9 +27,6 @@ nonisolated private enum SOCKS5 {
 
 // MARK: - SOCKS5AsyncBuffer
 
-/// Reads framed handshake responses off an ``ByteTransport``, buffering any
-/// bytes that arrive past the requested length so the tunneled stream keeps them.
-/// Confined to the single dialing task, so it needs no locking.
 nonisolated final class SOCKS5AsyncBuffer {
     private var data = Data()
     private let transport: any ByteTransport
@@ -37,8 +34,7 @@ nonisolated final class SOCKS5AsyncBuffer {
     init(transport: any ByteTransport) {
         self.transport = transport
     }
-
-    /// Reads exactly `count` bytes; returns `nil` if the peer closes first.
+    
     func readExact(count: Int) async throws -> Data? {
         while data.count < count {
             switch try await transport.receive() {
@@ -53,8 +49,7 @@ nonisolated final class SOCKS5AsyncBuffer {
         if data.isEmpty { data = Data() } else { data = Data(data) }
         return result
     }
-
-    /// Data remaining in the buffer after the handshake; belongs to the tunneled stream and must not be discarded.
+    
     var remaining: Data? {
         data.isEmpty ? nil : data
     }
@@ -62,8 +57,6 @@ nonisolated final class SOCKS5AsyncBuffer {
 
 // MARK: - SOCKS5ReplayTransport
 
-/// Replays handshake-leftover bytes (e.g. the start of a TLS ServerHello) on the
-/// first `receive` before falling through to the underlying transport.
 nonisolated final class SOCKS5ReplayTransport: ByteTransport, Sendable {
     private let inner: any ByteTransport
     private let pending: Mutex<Data?>
@@ -97,7 +90,6 @@ nonisolated final class SOCKS5ReplayTransport: ByteTransport, Sendable {
 // MARK: - SOCKS5Handshake
 
 nonisolated enum SOCKS5Handshake {
-
     struct UDPRelayInfo {
         let host: String
         let port: UInt16
@@ -120,8 +112,7 @@ nonisolated enum SOCKS5Handshake {
             port: destinationPort
         )
     }
-
-    /// UDP ASSOCIATE: per RFC 1928 the client sends 0.0.0.0:0 and the server replies with the relay endpoint.
+    
     static func performUDPAssociate(
         buffer: SOCKS5AsyncBuffer,
         transport: any ByteTransport,
@@ -137,8 +128,6 @@ nonisolated enum SOCKS5Handshake {
             host: "0.0.0.0",
             port: 0
         )
-        // Servers often return an unreachable private IP for the relay host; use
-        // the server's public address (the port is still valid).
         return UDPRelayInfo(host: serverAddress, port: info.port)
     }
 
@@ -173,8 +162,6 @@ nonisolated enum SOCKS5Handshake {
         }
     }
 
-    // MARK: - Authentication (RFC 1929)
-
     private static func sendAuth(
         buffer: SOCKS5AsyncBuffer,
         transport: any ByteTransport,
@@ -199,7 +186,7 @@ nonisolated enum SOCKS5Handshake {
         }
     }
 
-    // MARK: - Command (CONNECT / UDP ASSOCIATE)
+    // MARK: - Command
 
     @discardableResult
     private static func sendCommand(
@@ -217,8 +204,7 @@ nonisolated enum SOCKS5Handshake {
         try await transport.send(request)
         return try await readCommandResponse(buffer: buffer)
     }
-
-    /// Reads the command response: [VER, REP, RSV, ATYP, BND.ADDR, BND.PORT]
+    
     private static func readCommandResponse(
         buffer: SOCKS5AsyncBuffer
     ) async throws -> UDPRelayInfo {
@@ -268,8 +254,7 @@ nonisolated enum SOCKS5Handshake {
     }
 
     // MARK: - Address Encoding
-
-    /// Encodes a host as a SOCKS5 address: [ATYP, ADDR...]
+    
     static func encodeAddress(host: String) -> Data {
         if let ipv4 = parseIPv4(host) {
             var data = Data([SOCKS5.addrIPv4])
@@ -316,8 +301,6 @@ nonisolated enum SOCKS5Handshake {
 
 // MARK: - SOCKS5UDPProxyConnection
 
-/// SOCKS5 UDP ASSOCIATE relay: prepends/strips the SOCKS5 UDP header per datagram.
-/// The TCP control connection is retained because closing it ends the UDP session.
 nonisolated final class SOCKS5UDPProxyConnection: ProxyConnection, Sendable {
     private enum Phase: PhaseTransitionable {
         case open, cancelled
@@ -379,7 +362,6 @@ nonisolated final class SOCKS5UDPProxyConnection: ProxyConnection, Sendable {
             if let payload = stripUDPHeader(data) {
                 return payload
             }
-            // Header-only / malformed datagram: loop to read the next one.
         }
     }
 
@@ -391,19 +373,20 @@ nonisolated final class SOCKS5UDPProxyConnection: ProxyConnection, Sendable {
 
     private func stripUDPHeader(_ data: Data) -> Data? {
         guard data.count >= 4 else { return nil }
-        guard data[2] == 0x00 else { return nil } // reject fragments
+        let base = data.startIndex
+        guard data[base + 2] == 0x00 else { return nil } // reject fragments
 
         let headerEnd: Int
-        switch data[3] {
+        switch data[base + 3] {
         case SOCKS5.addrIPv4:   headerEnd = 4 + 4 + 2
         case SOCKS5.addrIPv6:   headerEnd = 4 + 16 + 2
         case SOCKS5.addrDomain:
             guard data.count >= 5 else { return nil }
-            headerEnd = 4 + 1 + Int(data[4]) + 2
+            headerEnd = 4 + 1 + Int(data[base + 4]) + 2
         default: return nil
         }
 
         guard data.count > headerEnd else { return nil }
-        return Data(data[headerEnd...])
+        return Data(data[(base + headerEnd)...])
     }
 }

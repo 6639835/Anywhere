@@ -446,9 +446,9 @@ nonisolated final class TLSRecordConnection: Sendable {
 
         let chunkCount = (data.count + Self.maxRecordPlaintext - 1) / Self.maxRecordPlaintext
         var records = Data(capacity: data.count + chunkCount * 64)
-        var offset = 0
-        while offset < data.count {
-            let end = min(offset + Self.maxRecordPlaintext, data.count)
+        var offset = data.startIndex
+        while offset < data.endIndex {
+            let end = min(offset + Self.maxRecordPlaintext, data.endIndex)
             records.append(try encryptSingleRecord(plaintext: Data(data[offset..<end]), contentType: TLSContentType.applicationData))
             offset = end
         }
