@@ -171,6 +171,12 @@ private struct PowerButton: View {
     let isDisabled: Bool
     let animatesChanges: Bool
     let action: () -> Void
+    
+    private var indicatorColor: Color {
+        if isConnected { return .green }
+        if isTransitioning { return .orange }
+        return .gray
+    }
 
     var body: some View {
         Button(action: action) {
@@ -191,12 +197,17 @@ private struct PowerButton: View {
                         .frame(width: Self.circleDiameter)
                         .shadow(color: isConnected ? .cyan.opacity(0.4) : .black.opacity(0.08), radius: isConnected ? 24 : 8)
                 }
-                if isTransitioning || isLoading {
-                    ProgressView()
-                        .controlSize(.large)
-                } else {
+                ZStack {
                     Image(systemName: "power")
-                        .font(.system(size: 40, weight: .light))
+                        .resizable()
+                        .scaledToFit()
+                        .frame(height: 40)
+                    Image(systemName: "circle.fill")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(height: 5)
+                        .foregroundStyle(indicatorColor)
+                        .offset(y: 45)
                 }
             }
             .contentShape(Circle())

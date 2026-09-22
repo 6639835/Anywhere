@@ -49,6 +49,7 @@ struct AnywhereApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .dynamicTypeSize(.medium)
                 .environment(operations)
                 .environment(container.appState)
                 .environment(container.tunnel)
