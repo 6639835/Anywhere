@@ -13,6 +13,7 @@ struct MainControlView: View {
     @Environment(TunnelController.self) private var tunnelController
     @Environment(ProxySelection.self) private var proxySelection
     @Environment(LatencyCenter.self) private var latencyCenter
+    @Environment(ConnectionStats.self) private var connectionStats
     @Environment(ConfigurationStore.self) private var configurationStore
     @Environment(ChainStore.self) private var chainStore
     @Environment(GroupStore.self) private var groupStore
@@ -63,15 +64,22 @@ struct MainControlView: View {
                     }
                 }
 
-                Text(tunnelController.status.localizedText)
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
+                let status = tunnelController.status
+                HStack {
+                    if [.connecting, .disconnecting, .reasserting].contains(status) {
+                        ProgressView()
+                            .controlSize(.mini)
+                    }
+                    Text(status.localizedText)
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
+                }
             }
             .layoutPriority(1)
 
             Rectangle()
                 .fill(.clear)
-                .frame(idealHeight: 80, maxHeight: 80)
+                .frame(idealHeight: 100, maxHeight: 100)
 
             ConfigurationCapsule(
                 isConnected: isConnected,
@@ -83,6 +91,29 @@ struct MainControlView: View {
         }
         .padding()
         .animation(connectionEffectsEnabled ? Animation.bouncy : nil, value: isConnected)
+        .toolbar {
+            if #available(iOS 27.0, *) {
+                ToolbarOverflowMenu {
+                    Button {
+                        Task { await connectionStats.resetStats() }
+                    } label: {
+                        Label("Reset Stats", systemImage: "0.circle")
+                    }
+                    .disabled(!isConnected)
+                }
+            } else {
+                ToolbarItem {
+                    Menu("More", systemImage: "ellipsis") {
+                        Button {
+                            Task { await connectionStats.resetStats() }
+                        } label: {
+                            Label("Reset Stats", systemImage: "0.circle")
+                        }
+                        .disabled(!isConnected)
+                    }
+                }
+            }
+        }
         .sheet(isPresented: $showingProxiesView) {
             ProxiesView()
                 .environment(operations)
@@ -122,7 +153,7 @@ private struct PowerButton: View {
     private var indicatorColor: Color {
         if isConnected { return .green }
         if isTransitioning { return .orange }
-        return .gray
+        return .gray.opacity(0.8)
     }
 
     var body: some View {

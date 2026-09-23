@@ -20,44 +20,20 @@ struct LaunchpadView: View {
     }
 
     var body: some View {
-        ZStack {
+        PageView(selection: $page) {
+            MainControlView(connectionEffectsEnabled: connectionEffectsEnabled)
+                .pageIndicator(Image("anywhere"), label: "Launchpad")
+            
+            DashboardView()
+                .pageIndicator(Image(systemName: "rectangle.3.group.fill"), label: "Dashboard")
+        }
+        .background(
             BackgroundGradient()
                 .ignoresSafeArea()
-            
-            PageView(selection: $page) {
-                MainControlView(connectionEffectsEnabled: connectionEffectsEnabled)
-                    .pageIndicator(Image("anywhere"), label: "Launchpad")
-                
-                DashboardView()
-                    .pageIndicator(Image(systemName: "rectangle.3.group.fill"), label: "Dashboard")
-            }
-            .sensoryFeedback(trigger: isConnected) { _, _ in
-                guard connectionEffectsEnabled else { return nil }
-                return .impact
-            }
-        }
-        .toolbar {
-            if #available(iOS 27.0, *) {
-                ToolbarOverflowMenu {
-                    Button {
-                        Task { await connectionStats.resetStats() }
-                    } label: {
-                        Label("Reset Stats", systemImage: "0.circle")
-                    }
-                    .disabled(!isConnected)
-                }
-            } else {
-                ToolbarItem {
-                    Menu("More", systemImage: "ellipsis") {
-                        Button {
-                            Task { await connectionStats.resetStats() }
-                        } label: {
-                            Label("Reset Stats", systemImage: "0.circle")
-                        }
-                        .disabled(!isConnected)
-                    }
-                }
-            }
+        )
+        .sensoryFeedback(trigger: isConnected) { _, _ in
+            guard connectionEffectsEnabled else { return nil }
+            return .impact
         }
         .alert("VPN Error", isPresented: Binding(
             get: { tunnelController.startError != nil },
