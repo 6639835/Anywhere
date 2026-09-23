@@ -118,20 +118,20 @@ struct ConnectionStatsView: View {
         switch unit {
         case .upload:
             StatCard("Upload", systemImage: "arrow.up") {
-                StatValue(Self.formatBytes(connectionStats.bytesOut))
+                StatValue(Formatting.formatBytes(connectionStats.bytesOut))
                 Spacer()
                 StatDetailRow(
                     label: "Rate",
-                    value: Self.formatBytesPerSecond(connectionStats.uploadBytesPerSecond)
+                    value: Formatting.formatBytesPerSecond(connectionStats.uploadBytesPerSecond)
                 )
             }
         case .download:
             StatCard("Download", systemImage: "arrow.down") {
-                StatValue(Self.formatBytes(connectionStats.bytesIn))
+                StatValue(Formatting.formatBytes(connectionStats.bytesIn))
                 Spacer()
                 StatDetailRow(
                     label: "Rate",
-                    value: Self.formatBytesPerSecond(connectionStats.downloadBytesPerSecond)
+                    value: Formatting.formatBytesPerSecond(connectionStats.downloadBytesPerSecond)
                 )
             }
         case .route:
@@ -169,7 +169,7 @@ struct ConnectionStatsView: View {
             .buttonStyle(.plain)
         case .memory:
             StatCard("Memory", systemImage: "memorychip") {
-                StatValue(Self.formatBytes(Int64(connectionStats.memoryBytes)))
+                StatValue(Formatting.formatBytes(Int64(connectionStats.memoryBytes)))
                 Spacer()
                 PressureGauge(
                     value: Double(connectionStats.memoryBytes),
@@ -183,52 +183,23 @@ struct ConnectionStatsView: View {
             )
         case .dial:
             StatCard("Dial", systemImage: "phone") {
-                StatValue(Self.formatMilliseconds(connectionStats.dialMs))
+                StatValue(Formatting.formatMilliseconds(connectionStats.dialMs))
                 Spacer()
                 StatDetailRow(
                     label: "Average",
-                    value: Self.formatMilliseconds(connectionStats.avgDialMs)
+                    value: Formatting.formatMilliseconds(connectionStats.avgDialMs)
                 )
             }
         case .handshake:
             StatCard("Handshake", systemImage: "recordingtape") {
-                StatValue(Self.formatMilliseconds(connectionStats.handshakeMs))
+                StatValue(Formatting.formatMilliseconds(connectionStats.handshakeMs))
                 Spacer()
                 StatDetailRow(
                     label: "Average",
-                    value: Self.formatMilliseconds(connectionStats.avgHandshakeMs)
+                    value: Formatting.formatMilliseconds(connectionStats.avgHandshakeMs)
                 )
             }
         }
-    }
-
-    // MARK: - Formatting
-
-    private static let byteFormatter: ByteCountFormatter = {
-        let formatter = ByteCountFormatter()
-        formatter.countStyle = .binary
-        formatter.allowsNonnumericFormatting = false
-        return formatter
-    }()
-
-    fileprivate static func formatBytes(_ bytes: Int64) -> String {
-        byteFormatter.string(fromByteCount: bytes)
-    }
-
-    private static func formatBytesPerSecond(_ bytesPerSecond: Int64?) -> String {
-        guard let bytesPerSecond else { return "—" }
-        return String(localized: "\(byteFormatter.string(fromByteCount: bytesPerSecond))/s")
-    }
-
-    private static func formatMilliseconds(_ ms: Int?) -> String {
-        guard let ms else { return "—" }
-        return "\(ms) ms"
-    }
-
-    fileprivate static func formatDuration(_ seconds: TimeInterval) -> String {
-        Duration.seconds(seconds).formatted(
-            .units(allowed: [.hours, .minutes, .seconds], width: .narrow, maximumUnitCount: 2)
-        )
     }
 }
 
@@ -342,7 +313,7 @@ private struct StatDetailRow: View {
                 .contentTransition(.numericText())
                 .animation(.default, value: value)
         }
-        .foregroundStyle(.primary.opacity(0.6))
+        .foregroundStyle(.secondary)
         .font(.system(size: 14))
     }
 }
@@ -355,7 +326,7 @@ private struct PressureGauge: View {
         Gauge(value: value, in: 0...ceiling) {
             Text("Pressure")
                 .font(.system(size: 14))
-                .foregroundStyle(.primary.opacity(0.6))
+                .foregroundStyle(.secondary)
         }
         .gaugeStyle(AnywhereLinearGaugeStyle())
     }
@@ -420,13 +391,13 @@ private struct LegendRow: View {
                 .frame(width: 10, height: 10)
             Text(verbatim: label)
                 .font(.caption.weight(.medium))
-                .foregroundStyle(.primary.opacity(0.85))
+                .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer()
             Text(verbatim: value)
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(.primary.opacity(0.6))
+                .foregroundStyle(.secondary)
                 .monospacedDigit()
         }
     }
@@ -459,12 +430,12 @@ private struct SleepWakeCard: View {
                 LegendRow(
                     color: Self.wakeColor,
                     label: String(localized: "Wake"),
-                    value: ConnectionStatsView.formatDuration(wakeSeconds)
+                    value: Formatting.formatDuration(wakeSeconds)
                 )
                 LegendRow(
                     color: Self.sleepColor,
                     label: String(localized: "Sleep"),
-                    value: ConnectionStatsView.formatDuration(sleepSeconds)
+                    value: Formatting.formatDuration(sleepSeconds)
                 )
             }
         }
@@ -607,7 +578,7 @@ struct AnywhereRingGaugeStyle: GaugeStyle {
     func makeBody(configuration: Configuration) -> some View {
         ZStack {
             Circle()
-                .stroke(Color.primary.opacity(0.2), lineWidth: 15)
+                .stroke(Color.primary.opacity(0.1), lineWidth: 15)
 
             Circle()
                 .trim(from: 0, to: configuration.value)

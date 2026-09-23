@@ -148,13 +148,6 @@ private enum SubscriptionIconCache {
 private struct SubscriptionUsageView: View {
     let subscription: Subscription
 
-    private static let byteFormatter: ByteCountFormatter = {
-        let formatter = ByteCountFormatter()
-        formatter.countStyle = .binary
-        formatter.allowsNonnumericFormatting = false
-        return formatter
-    }()
-
     private var totalBytes: Int64? {
         guard let total = subscription.total, total > 0 else { return nil }
         return total
@@ -220,11 +213,11 @@ private struct SubscriptionUsageView: View {
     private var usageDescription: String? {
         switch (usedBytes, totalBytes) {
         case let (used?, total?):
-            String(localized: "\(Self.byteFormatter.string(fromByteCount: used)) of \(Self.byteFormatter.string(fromByteCount: total)) used")
+            String(localized: "\(Formatting.formatBytes(used)) of \(Formatting.formatBytes(total)) used")
         case let (used?, nil):
-            String(localized: "\(Self.byteFormatter.string(fromByteCount: used)) used")
+            String(localized: "\(Formatting.formatBytes(used)) used")
         case let (nil, total?):
-            String(localized: "\(Self.byteFormatter.string(fromByteCount: total)) total")
+            String(localized: "\(Formatting.formatBytes(total)) total")
         case (nil, nil):
             nil
         }

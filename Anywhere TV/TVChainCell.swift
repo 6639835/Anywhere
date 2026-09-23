@@ -151,7 +151,7 @@ class TVChainCell: UITableViewCell {
         case .success(let ms):
             let label = UILabel()
             label.font = .monospacedDigitSystemFont(ofSize: 22, weight: .regular)
-            label.text = String(localized: "\(ms) ms")
+            label.text = Formatting.formatMilliseconds(ms)
             label.textColor = ms < 300 ? .systemGreen : ms < 500 ? .systemYellow : .systemRed
             label.sizeToFit()
             accessoryView = label

@@ -17,7 +17,7 @@ struct LatencyLabel: View {
                 .controlSize(.small)
                 .frame(width: 50, alignment: .trailing)
         case .success(let ms):
-            Text("\(ms) ms")
+            Text(Formatting.formatMilliseconds(ms))
                 .font(.caption)
                 .monospacedDigit()
                 .foregroundStyle(Self.color(ms))

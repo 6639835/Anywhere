@@ -161,7 +161,7 @@ class TVLaunchpadViewController: UIViewController {
 
         uploadLabel.font = .monospacedDigitSystemFont(ofSize: 34, weight: .regular)
         uploadLabel.textColor = .white
-        uploadLabel.text = Self.formatBytes(0)
+        uploadLabel.text = Formatting.formatBytes(0)
 
         let downloadArrow = UIImageView(image: UIImage(systemName: "arrow.down", withConfiguration: arrowConfig))
         downloadArrow.tintColor = UIColor.white.withAlphaComponent(0.7)
@@ -170,7 +170,7 @@ class TVLaunchpadViewController: UIViewController {
 
         downloadLabel.font = .monospacedDigitSystemFont(ofSize: 34, weight: .regular)
         downloadLabel.textColor = .white
-        downloadLabel.text = Self.formatBytes(0)
+        downloadLabel.text = Formatting.formatBytes(0)
 
         let uploadStack = UIStackView(arrangedSubviews: [uploadArrow, uploadLabel])
         uploadStack.spacing = 12
@@ -407,8 +407,8 @@ class TVLaunchpadViewController: UIViewController {
                 self.statsButton.alpha = shouldShow ? 1 : 0
             }
         }
-        uploadLabel.text = Self.formatBytes(container.stats.bytesOut)
-        downloadLabel.text = Self.formatBytes(container.stats.bytesIn)
+        uploadLabel.text = Formatting.formatBytes(container.stats.bytesOut)
+        downloadLabel.text = Formatting.formatBytes(container.stats.bytesIn)
     }
 
     private func updateConfigCard() {
@@ -475,17 +475,5 @@ class TVLaunchpadViewController: UIViewController {
                 }
             }
         }
-    }
-
-    // MARK: - Helpers
-
-    private static let byteFormatter: ByteCountFormatter = {
-        let formatter = ByteCountFormatter()
-        formatter.countStyle = .binary
-        return formatter
-    }()
-
-    private static func formatBytes(_ bytes: Int64) -> String {
-        byteFormatter.string(fromByteCount: bytes)
     }
 }

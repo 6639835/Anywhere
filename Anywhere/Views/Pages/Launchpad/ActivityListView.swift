@@ -84,8 +84,6 @@ private struct ActivityRow: View {
     let entry: ActivityModel.Entry
     let detail: String?
 
-    private static let byteCountStyle = ByteCountFormatStyle(style: .binary, spellsOutZero: false)
-
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             stateIndicator
@@ -146,7 +144,7 @@ private struct ActivityRow: View {
                 .font(.system(size: 10))
                 .fontWeight(.semibold)
                 .foregroundStyle(imageColor)
-            Text(bytes.formatted(Self.byteCountStyle))
+            Text(Formatting.formatBytes(bytes))
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .contentTransition(.numericText())
