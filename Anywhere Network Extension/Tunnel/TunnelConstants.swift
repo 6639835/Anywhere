@@ -48,6 +48,11 @@ nonisolated enum TunnelConstants {
     static let requestLogRetentionInterval: CFAbsoluteTime = 300
     static let requestLogMaxEntries = 50
 
+    // MARK: - Activity Pool
+
+    static let tcpActivityPoolCapacity = TunnelLimits.tcpMaxConnections + 64
+    static let udpActivityPoolCapacity = TunnelLimits.udpMaxFlows + 64
+
     // MARK: - Timer Intervals
 
     static let udpCleanupIntervalSec = 1

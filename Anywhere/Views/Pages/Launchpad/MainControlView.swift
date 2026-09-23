@@ -13,7 +13,6 @@ struct MainControlView: View {
     @Environment(TunnelController.self) private var tunnelController
     @Environment(ProxySelection.self) private var proxySelection
     @Environment(LatencyCenter.self) private var latencyCenter
-    @Environment(ConnectionStats.self) private var connectionStats
     @Environment(ConfigurationStore.self) private var configurationStore
     @Environment(ChainStore.self) private var chainStore
     @Environment(GroupStore.self) private var groupStore
@@ -91,29 +90,6 @@ struct MainControlView: View {
         }
         .padding()
         .animation(connectionEffectsEnabled ? Animation.bouncy : nil, value: isConnected)
-        .toolbar {
-            if #available(iOS 27.0, *) {
-                ToolbarOverflowMenu {
-                    Button {
-                        Task { await connectionStats.resetStats() }
-                    } label: {
-                        Label("Reset Stats", systemImage: "0.circle")
-                    }
-                    .disabled(!isConnected)
-                }
-            } else {
-                ToolbarItem {
-                    Menu("More", systemImage: "ellipsis") {
-                        Button {
-                            Task { await connectionStats.resetStats() }
-                        } label: {
-                            Label("Reset Stats", systemImage: "0.circle")
-                        }
-                        .disabled(!isConnected)
-                    }
-                }
-            }
-        }
         .sheet(isPresented: $showingProxiesView) {
             ProxiesView()
                 .environment(operations)

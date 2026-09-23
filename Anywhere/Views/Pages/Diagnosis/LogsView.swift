@@ -69,7 +69,6 @@ struct LogsView: View {
                 try? await Task.sleep(for: .seconds(1))
             }
         }
-        .onDisappear { logsModel.clear() }
     }
 
     private func copySelected() {

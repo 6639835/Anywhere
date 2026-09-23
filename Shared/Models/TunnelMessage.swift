@@ -16,6 +16,7 @@ nonisolated enum TunnelMessage: Codable, Sendable {
     case resetStats
     case fetchLogs
     case fetchRequests
+    case fetchActivity(TunnelActivityProtocol)
 }
 
 // MARK: - Responses
@@ -96,6 +97,10 @@ nonisolated struct RequestsResponse: Codable, Sendable {
     var requests: [TunnelRequestEntry]
 }
 
+nonisolated struct ActivityResponse: Codable, Sendable {
+    var entries: [TunnelActivityEntry]
+}
+
 nonisolated struct LatencyTestResponse: Codable, Sendable {
     enum Kind: String, Codable, Sendable {
         case success
@@ -154,4 +159,29 @@ nonisolated enum TunnelRequestProtocol: String, Codable, Sendable, Hashable {
     case tcp
     case udp
     case unknown
+}
+
+nonisolated struct TunnelActivityEntry: Codable, Sendable, Hashable {
+    var id: UUID
+    var host: String
+    var port: UInt16
+    var routeTarget: RouteTarget
+    var defaultRouteTarget: RouteTarget
+    var ruleSetName: String?
+    var state: TunnelActivityState
+    var startedAt: TimeInterval
+    var endedAt: TimeInterval?
+    var bytesIn: Int64
+    var bytesOut: Int64
+}
+
+nonisolated enum TunnelActivityState: String, Codable, Sendable, Hashable {
+    case connecting
+    case established
+    case closed
+}
+
+nonisolated enum TunnelActivityProtocol: String, Codable, Sendable, Hashable {
+    case tcp
+    case udp
 }

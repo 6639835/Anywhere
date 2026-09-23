@@ -373,6 +373,13 @@ nonisolated class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Senda
 
         case .fetchRequests:
             return encodeReply(RequestsResponse(requests: tunnelStack.requestLog.snapshot()))
+
+        case .fetchActivity(let proto):
+            let pool = switch proto {
+            case .tcp: tunnelStack.tcpActivity
+            case .udp: tunnelStack.udpActivity
+            }
+            return encodeReply(ActivityResponse(entries: pool.snapshot()))
         }
     }
 

@@ -9,7 +9,6 @@ import Foundation
 import Synchronization
 
 nonisolated final class RequestLog: Sendable {
-
     typealias Entry = TunnelRequestEntry
 
     private let entries = Mutex<[Entry]>([])

@@ -40,6 +40,8 @@ actor TCPConnection: MITMSessionHost {
 
     private var ruleMatched: Bool
 
+    private nonisolated let activityRecord: ActivityPool.Record
+
     private var bypass: Bool {
         let resolved = routeTarget.resolved(against: stack?.udpConfig().defaultRouteTarget ?? .direct)
         if case .direct = resolved { return true }
@@ -80,6 +82,8 @@ actor TCPConnection: MITMSessionHost {
             return false
         }
         pressurePhase.store(new == .closed ? 2 : (new == .relaying ? 1 : 0), ordering: .relaxed)
+        if new == .relaying { activityRecord.establish() }
+        if new == .closed { activityRecord.close() }
         return true
     }
 
@@ -166,6 +170,13 @@ actor TCPConnection: MITMSessionHost {
         self.ruleMatched = ruleSetName != nil
         self.ruleSetName = ruleSetName
         self.hostIsResolvedDomain = hostIsResolvedDomain
+        self.activityRecord = stack.tcpActivity.open(
+            host: dstHost,
+            port: dstPort,
+            routeTarget: routeTarget,
+            defaultRouteTarget: stack.udpConfig().defaultRouteTarget,
+            ruleSetName: ruleSetName
+        )
         (self.nurseryJobs, self.nurseryJobContinuation) = AsyncStream.makeStream(of: NurseryJob.self)
 
         if sniffSNI {
@@ -275,6 +286,7 @@ actor TCPConnection: MITMSessionHost {
             ruleSetName = match.ruleSetName
             routeTarget = .reject
             stack.requestLog.record(protocol: .tcp, host: dstHost, port: dstPort, routeTarget: .reject, ruleSetName: match.ruleSetName)
+            publishRoute()
             logger.debug("[TCP] Rejected by IP rule: \(dstHost) → \(ip):\(dstPort)")
             stack.fakeIPPool.markRejected(domain: dstHost)
             rejectSilently()
@@ -423,6 +435,7 @@ actor TCPConnection: MITMSessionHost {
             ruleSetName = match.ruleSetName
             routeTarget = .reject
             stack.requestLog.record(protocol: .tcp, host: sni, port: dstPort, routeTarget: .reject, ruleSetName: match.ruleSetName)
+            publishRoute()
             logger.debug("[TCP] SNI rejected by routing rule: \(sni) (\(dstHost):\(dstPort))")
             rejectSilently()
         case .proxy(let id):
@@ -450,6 +463,7 @@ actor TCPConnection: MITMSessionHost {
 
     private func beginConnecting() async -> Establishment {
         guard phase != .closed else { return .done }
+        publishRoute()
         if mitmEnabled {
             return startMITMSession()
         }
@@ -626,6 +640,7 @@ actor TCPConnection: MITMSessionHost {
             }
             markActivity()
             context.stack?.addBytesOut(Int64(chunk.count), target: context.routeTarget)
+            activityRecord.addBytesOut(chunk.count)
             stream.didConsume(chunk.count)
         }
     }
@@ -652,6 +667,7 @@ actor TCPConnection: MITMSessionHost {
             }
             markActivity()
             context.stack?.addBytesIn(Int64(data.count), target: context.routeTarget)
+            activityRecord.addBytesIn(data.count)
         }
         try? await stream.waitUntilAcknowledged()
     }
@@ -676,6 +692,7 @@ actor TCPConnection: MITMSessionHost {
     private func acknowledgeReceivedBytes(_ byteCount: Int) {
         guard byteCount > 0 else { return }
         stack?.addBytesOut(Int64(byteCount), target: routeTarget)
+        activityRecord.addBytesOut(byteCount)
         connection.didConsume(byteCount)
     }
 
@@ -782,6 +799,14 @@ actor TCPConnection: MITMSessionHost {
 
     private var endpointDescription: String {
         "\(dstHost):\(dstPort)"
+    }
+
+    private func publishRoute() {
+        activityRecord.route(
+            host: mitmSNI ?? sniffedSNI ?? dstHost,
+            routeTarget: routeTarget,
+            ruleSetName: ruleSetName
+        )
     }
 
     private func reportFailure(_ operation: String, error: Error) {
@@ -1034,6 +1059,7 @@ actor TCPConnection: MITMSessionHost {
 
     nonisolated func mitmSessionSendToClient(_ data: Data) {
         markActivity()
+        activityRecord.addBytesIn(data.count)
         if !connection.enqueue(data) {
             Task { await self.relayFailed("MITM downlink", error: AnywhereIP.ConnectionError.bufferLimit) }
         }
@@ -1042,6 +1068,7 @@ actor TCPConnection: MITMSessionHost {
     nonisolated func mitmSessionWriteToClient(_ data: Data) async throws {
         try await connection.send(data)
         markActivity()
+        activityRecord.addBytesIn(data.count)
     }
 
     nonisolated func mitmSessionDidTearDown(error: Error?) {
@@ -1068,6 +1095,7 @@ actor TCPConnection: MITMSessionHost {
                 self.configuration = configuration
             }
             ruleSetName = resolved.ruleSetName
+            publishRoute()
         }
         return resolved.route
     }

@@ -270,6 +270,9 @@ actor TunnelStack {
 
     nonisolated let requestLog = RequestLog()
     
+    nonisolated let tcpActivity = ActivityPool(capacity: TunnelConstants.tcpActivityPoolCapacity)
+    nonisolated let udpActivity = ActivityPool(capacity: TunnelConstants.udpActivityPoolCapacity)
+
     nonisolated let tcpBufferLedger = TCPBufferLedger(budget: TunnelConstants.tcpGlobalBufferBudget)
 
     nonisolated let tcpPressureLog = Mutex(PressureEventThrottle(label: "TCP", cap: TunnelLimits.tcpMaxConnections))

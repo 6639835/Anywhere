@@ -140,23 +140,33 @@ struct ConnectionStatsView: View {
                 name: routeName
             )
         case .tcp:
-            StatCard("TCP", systemImage: "arrow.left.arrow.right") {
-                StatValue("\(connectionStats.tcpConnectionCount)")
-                Spacer()
-                PressureGauge(
-                    value: Double(connectionStats.tcpConnectionCount),
-                    ceiling: Self.tcpConnectionCeiling
-                )
+            NavigationLink {
+                TCPConnectionListView()
+            } label: {
+                StatCard("TCP", systemImage: "arrow.left.arrow.right", hasChevron: true) {
+                    StatValue("\(connectionStats.tcpConnectionCount)")
+                    Spacer()
+                    PressureGauge(
+                        value: Double(connectionStats.tcpConnectionCount),
+                        ceiling: Self.tcpConnectionCeiling
+                    )
+                }
             }
+            .buttonStyle(.plain)
         case .udp:
-            StatCard("UDP", systemImage: "arrow.left.and.right") {
-                StatValue("\(connectionStats.udpConnectionCount)")
-                Spacer()
-                PressureGauge(
-                    value: Double(connectionStats.udpConnectionCount),
-                    ceiling: Self.udpConnectionCeiling
-                )
+            NavigationLink {
+                UDPFlowListView()
+            } label: {
+                StatCard("UDP", systemImage: "arrow.left.and.right", hasChevron: true) {
+                    StatValue("\(connectionStats.udpConnectionCount)")
+                    Spacer()
+                    PressureGauge(
+                        value: Double(connectionStats.udpConnectionCount),
+                        ceiling: Self.udpConnectionCeiling
+                    )
+                }
             }
+            .buttonStyle(.plain)
         case .memory:
             StatCard("Memory", systemImage: "memorychip") {
                 StatValue(Self.formatBytes(Int64(connectionStats.memoryBytes)))
@@ -265,25 +275,36 @@ struct StatCard<Content: View>: View {
     private let titleKey: LocalizedStringKey
     private let systemImage: String
     private let size: StatCardSize
+    private let hasChevron: Bool
     private let content: Content
 
     init(
         _ titleKey: LocalizedStringKey,
         systemImage: String,
         size: StatCardSize = .small,
+        hasChevron: Bool = false,
         @ViewBuilder content: () -> Content
     ) {
         self.titleKey = titleKey
         self.systemImage = systemImage
         self.size = size
+        self.hasChevron = hasChevron
         self.content = content()
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label(titleKey, systemImage: systemImage)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+            HStack {
+                Label(titleKey, systemImage: systemImage)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                if hasChevron {
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
             content
         }
         .padding()

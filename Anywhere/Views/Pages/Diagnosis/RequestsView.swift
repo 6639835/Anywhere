@@ -38,7 +38,7 @@ struct RequestsView: View {
                         if let protocolLabel = label(for: entry.protocol) {
                             TagBadge(text: protocolLabel, color: .green)
                         }
-                        TagBadge(text: label(for: entry), color: labelColor(for: entry))
+                        TagBadge(text: entry.routeTarget.tagText, color: entry.routeTarget.tagColor)
                     }
                     if let detail = detailLine(for: entry) {
                         Text(detail)
@@ -50,7 +50,7 @@ struct RequestsView: View {
                 }
             }
             .contextMenu {
-                Button("Copy", systemImage: "doc.on.doc") {
+                Button("Copy Host", systemImage: "doc.on.doc") {
                     UIPasteboard.general.string = entry.host
                 }
             }
@@ -90,7 +90,6 @@ struct RequestsView: View {
                 try? await Task.sleep(for: .seconds(1))
             }
         }
-        .onDisappear { requestsModel.clear() }
     }
 
     private func copySelected() {
@@ -121,39 +120,14 @@ struct RequestsView: View {
         }
     }
 
-    private func label(for entry: RequestsModel.Entry) -> String {
-        switch entry.routeTarget {
-        case .default: String(localized: "Default")
-        case .direct: String(localized: "Direct")
-        case .reject: String(localized: "Reject")
-        case .defaultProxy, .proxy: String(localized: "Proxy")
-        }
-    }
-    
-    private func routeName(for entry: RequestsModel.Entry) -> String? {
-        switch entry.routeTarget {
-        case .default:
-            entry.defaultRouteTarget?.displayName(configStore: configStore, chainStore: chainStore, selection: proxySelection)
-        case .defaultProxy:
-            (entry.defaultRouteTarget ?? .defaultProxy).displayName(configStore: configStore, chainStore: chainStore, selection: proxySelection)
-        case .proxy:
-            entry.routeTarget.displayName(configStore: configStore, chainStore: chainStore, selection: proxySelection)
-        case .direct, .reject:
-            nil
-        }
-    }
-
-    private func labelColor(for entry: RequestsModel.Entry) -> Color {
-        switch entry.routeTarget {
-        case .default: .blue
-        case .direct: .green
-        case .reject: .red
-        case .defaultProxy, .proxy: .purple
-        }
-    }
-    
     private func detailLine(for entry: RequestsModel.Entry) -> String? {
-        let parts = [routeName(for: entry), entry.ruleSetName].compactMap(\.self)
+        let outboundName = entry.routeTarget.outboundName(
+            defaultRouteTarget: entry.defaultRouteTarget,
+            configStore: configStore,
+            chainStore: chainStore,
+            selection: proxySelection
+        )
+        let parts = [outboundName, entry.ruleSetName].compactMap(\.self)
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }

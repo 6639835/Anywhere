@@ -36,9 +36,11 @@ actor UDPFlow {
 
     nonisolated var idleDeadline: TimeInterval {
         activity.withLock { a in
-            a.lastActivity + (a.replyCount >= TunnelConstants.udpStreamMinReplies
-                              ? TunnelConstants.udpIdleTimeoutStream
-                              : TunnelConstants.udpIdleTimeoutUnreplied)
+            a.lastActivity + (
+                a.replyCount >= TunnelConstants.udpStreamMinReplies
+                ? TunnelConstants.udpIdleTimeoutStream
+                : TunnelConstants.udpIdleTimeoutUnreplied
+            )
         }
     }
 
@@ -79,7 +81,11 @@ actor UDPFlow {
     @discardableResult
     private func transition(to new: Phase) -> Bool {
         guard Phase.transition(&phase, to: new) else { return false }
-        if new == .closed { _closed.store(true, ordering: .relaxed) }
+        if new == .established { activityRecord.establish() }
+        if new == .closed {
+            _closed.store(true, ordering: .relaxed)
+            activityRecord.close()
+        }
         return true
     }
 
@@ -100,6 +106,8 @@ actor UDPFlow {
 
     nonisolated let routeTarget: RouteTarget
 
+    private nonisolated let activityRecord: ActivityPool.Record
+
     private var bypass: Bool {
         let resolved = routeTarget.resolved(against: stack?.udpConfig().defaultRouteTarget ?? .direct)
         if case .direct = resolved { return true }
@@ -119,16 +127,19 @@ actor UDPFlow {
 
     private let failureReporter = ConnectionFailureReporter(prefix: "[UDP]", logger: logger)
 
-    init(stack: TunnelStack,
-         plane: UDPPlane,
-         ledger: UDPBufferLedger,
-         flowKey: TunnelStack.UDPFlowKey,
-         srcHost: String, srcPort: UInt16,
-         dstHost: String, dstPort: UInt16,
-         srcIPData: Data, dstIPData: Data,
-         isIPv6: Bool,
-         configuration: ProxyConfiguration,
-         routeTarget: RouteTarget) {
+    init(
+        stack: TunnelStack,
+        plane: UDPPlane,
+        ledger: UDPBufferLedger,
+        flowKey: TunnelStack.UDPFlowKey,
+        srcHost: String, srcPort: UInt16,
+        dstHost: String, dstPort: UInt16,
+        srcIPData: Data, dstIPData: Data,
+        isIPv6: Bool,
+        configuration: ProxyConfiguration,
+        routeTarget: RouteTarget,
+        ruleSetName: String?
+    ) {
         self.stack = stack
         self.plane = plane
         self.ledger = ledger
@@ -142,6 +153,13 @@ actor UDPFlow {
         self.isIPv6 = isIPv6
         self.configuration = configuration
         self.routeTarget = routeTarget
+        self.activityRecord = stack.udpActivity.open(
+            host: dstHost,
+            port: dstPort,
+            routeTarget: routeTarget,
+            defaultRouteTarget: stack.udpConfig().defaultRouteTarget,
+            ruleSetName: ruleSetName
+        )
         (self.jobs, self.jobContinuation) = AsyncStream.makeStream(of: Job.self)
     }
 
@@ -212,6 +230,7 @@ actor UDPFlow {
         guard phase != .closed else { return }
         activity.withLock { $0.lastActivity = MonotonicClock.now }
         stack?.addBytesOut(Int64(payloadLength), target: routeTarget)
+        activityRecord.addBytesOut(payloadLength)
 
         switch phase {
         case .idle:
@@ -237,10 +256,7 @@ actor UDPFlow {
         guard admit(bytes: payloadLength) else { return }
         pendingData.append(data.prefix(payloadLength))
     }
-
-    /// Reserves bytes against the global uplink budget. Closes the victim
-    /// flows the ledger picked; when this flow is itself the largest holder,
-    /// closes it and returns false so the datagram is dropped.
+    
     private func admit(bytes: Int) -> Bool {
         switch ledger.reserve(flow: flowID, handle: flowKey, bytes: bytes) {
         case .admitted(let victims):
@@ -546,6 +562,7 @@ actor UDPFlow {
         }
 
         stack?.addBytesIn(Int64(data.count), target: routeTarget)
+        activityRecord.addBytesIn(data.count)
 
         stack?.writeOutboundUDP(
             srcIP: dstIPBytes, srcPort: dstPort,

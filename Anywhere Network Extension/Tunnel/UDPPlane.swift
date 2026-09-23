@@ -222,7 +222,8 @@ actor UDPPlane {
             dstIPData: dstIPData,
             isIPv6: isIPv6,
             configuration: flowConfiguration,
-            routeTarget: routeTarget
+            routeTarget: routeTarget,
+            ruleSetName: ruleSetName
         )
         flows[flowKey] = flow
         await flow.handleReceivedData(payload, payloadLength: payload.count)
@@ -468,7 +469,8 @@ actor UDPPlane {
             dstIPData: datagram.dstIPData,
             isIPv6: datagram.isIPv6,
             configuration: flowConfiguration,
-            routeTarget: routeTarget
+            routeTarget: routeTarget,
+            ruleSetName: ruleSetName
         )
         flows[flowKey] = flow
         logger.debug("[DNS] Forwarding qtype \(qtype) for \(domain) → \(upstream):\(datagram.dstPort) via \(flowConfiguration.name)")

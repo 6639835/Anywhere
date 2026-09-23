@@ -28,25 +28,50 @@ struct DashboardView: View {
     }
     
     var body: some View {
-        Group {
-            if isConnected {
-                ScrollView {
-                    ConnectionStatsView()
-                        .frame(maxWidth: maxGridWidth)
-                        .padding(.vertical, 16)
-                        .padding(.horizontal, Self.horizontalPadding)
-                        .frame(maxWidth: .infinity, minHeight: viewportHeight)
+        NavigationStack {
+            Group {
+                if isConnected {
+                    ScrollView {
+                        ConnectionStatsView()
+                            .frame(maxWidth: maxGridWidth)
+                            .padding(.vertical, 16)
+                            .padding(.horizontal, Self.horizontalPadding)
+                            .frame(maxWidth: .infinity, minHeight: viewportHeight)
+                    }
+                    .scrollBounceBehavior(.basedOnSize, axes: .vertical)
+                    .transition(.blurReplace)
+                    .onGeometryChange(for: CGFloat.self) { proxy in
+                        proxy.size.height
+                    } action: { height in
+                        viewportHeight = height
+                    }
+                } else {
+                    ContentUnavailableView("Not Connected", systemImage: "power")
                 }
-                .scrollBounceBehavior(.basedOnSize, axes: .vertical)
-                .transition(.blurReplace)
-            } else {
-                ContentUnavailableView("Not Connected", systemImage: "power")
             }
-        }
-        .onGeometryChange(for: CGFloat.self) { proxy in
-            proxy.size.height
-        } action: { height in
-            viewportHeight = height
+            .toolbar {
+                if #available(iOS 27.0, *) {
+                    ToolbarOverflowMenu {
+                        Button {
+                            Task { await connectionStats.resetStats() }
+                        } label: {
+                            Label("Reset Stats", systemImage: "0.circle")
+                        }
+                        .disabled(!isConnected)
+                    }
+                } else {
+                    ToolbarItem {
+                        Menu("More", systemImage: "ellipsis") {
+                            Button {
+                                Task { await connectionStats.resetStats() }
+                            } label: {
+                                Label("Reset Stats", systemImage: "0.circle")
+                            }
+                            .disabled(!isConnected)
+                        }
+                    }
+                }
+            }
         }
     }
 }
