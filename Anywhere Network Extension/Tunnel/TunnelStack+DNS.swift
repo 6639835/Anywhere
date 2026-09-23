@@ -18,7 +18,6 @@ extension TunnelStack {
     
     static let interceptedDNSServers: [String: DNSDestination] = [
         TunnelConstants.tunnelAddressIPv4: .anywhereResolver,
-        TunnelConstants.tunnelAddressIPv6: .anywhereResolver,
         "8.8.8.8": .publicResolver,
         "8.8.4.4": .publicResolver,
         "2001:4860:4860::8888": .publicResolver,

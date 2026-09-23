@@ -87,7 +87,7 @@ nonisolated final class FakeIPPool: Sendable {
     // MARK: - Static Helpers
     
     static func isFakeIP(_ ip: String) -> Bool {
-        ip.hasPrefix("198.18.") || ip.hasPrefix("198.19.") || ip.hasPrefix("2001:db8::")
+        ip.hasPrefix("198.18.") || ip.hasPrefix("198.19.")
     }
 
     static func ipv4Bytes(offset: Int) -> (UInt8, UInt8, UInt8, UInt8) {
@@ -98,21 +98,6 @@ nonisolated final class FakeIPPool: Sendable {
             UInt8((ip32 >> 8) & 0xFF),
             UInt8(ip32 & 0xFF)
         )
-    }
-
-    static func ipv6Bytes(offset: Int) -> [UInt8] {
-        return [
-            0x20, 0x01,
-            0x0D, 0xB8,
-            0x00, 0x00,
-            0x00, 0x00,
-            0x00, 0x00,
-            0x00, 0x00,
-            UInt8((offset >> 24) & 0xFF),
-            UInt8((offset >> 16) & 0xFF),
-            UInt8((offset >> 8) & 0xFF),
-            UInt8(offset & 0xFF),
-        ]
     }
 
     // MARK: - Pool Operations
@@ -152,7 +137,7 @@ nonisolated final class FakeIPPool: Sendable {
 
     func lookup(ip: String) -> Entry? {
         state.withLock { state in
-            guard let offset = ipToOffset(ip) else { return nil }
+            guard let offset = ipv4ToOffset(ip) else { return nil }
             guard let entry = state.offsetToEntry[offset] else { return nil }
             state.touchLRU(offset)
             return entry
@@ -195,51 +180,18 @@ nonisolated final class FakeIPPool: Sendable {
         }
     }
     
-    func isRejectMarked(rawIP: UnsafeRawPointer, isIPv6: Bool) -> Bool {
-        guard let offset = Self.offset(isIPv6: isIPv6, byteAt: {
-            rawIP.load(fromByteOffset: $0, as: UInt8.self)
-        }) else { return false }
-        return isRejectMarked(offset: offset)
-    }
-    
-    func isRejectMarked(ipBytes: SIMD16<UInt8>, isIPv6: Bool) -> Bool {
-        guard let offset = Self.offset(isIPv6: isIPv6, byteAt: { ipBytes[$0] }) else {
-            return false
-        }
-        return isRejectMarked(offset: offset)
-    }
-
-    private func isRejectMarked(offset: Int) -> Bool {
-        state.withLock { $0.offsetToEntry[offset]?.shouldReject ?? false }
-    }
-    
-    private static func offset(isIPv6: Bool, byteAt: (Int) -> UInt8) -> Int? {
-        if isIPv6 {
-            guard byteAt(0) == 0x20, byteAt(1) == 0x01,
-                  byteAt(2) == 0x0D, byteAt(3) == 0xB8 else { return nil }
-            for i in 4...11 {
-                guard byteAt(i) == 0 else { return nil }
-            }
-            let offset = (Int(byteAt(12)) << 24) | (Int(byteAt(13)) << 16)
-                       | (Int(byteAt(14)) << 8) | Int(byteAt(15))
-            guard offset >= 1, offset <= TunnelConstants.fakeIPPoolSize else { return nil }
-            return offset
-        }
-        let ip32 = (UInt32(byteAt(0)) << 24) | (UInt32(byteAt(1)) << 16)
-                 | (UInt32(byteAt(2)) << 8) | UInt32(byteAt(3))
-        guard ip32 > TunnelConstants.fakeIPPoolBaseIPv4 else { return nil }
-        let offset = Int(ip32 - TunnelConstants.fakeIPPoolBaseIPv4)
-        guard offset <= TunnelConstants.fakeIPPoolSize else { return nil }
-        return offset
+    func isRejectMarked(ipv4 ip32: UInt32) -> Bool {
+        guard let offset = Self.offset(ipv4: ip32) else { return false }
+        return state.withLock { $0.offsetToEntry[offset]?.shouldReject ?? false }
     }
 
     // MARK: - IP ↔ Offset Conversion
 
-    private func ipToOffset(_ ip: String) -> Int? {
-        if ip.contains(":") {
-            return ipv6ToOffset(ip)
-        }
-        return ipv4ToOffset(ip)
+    private static func offset(ipv4 ip32: UInt32) -> Int? {
+        guard ip32 > TunnelConstants.fakeIPPoolBaseIPv4 else { return nil }
+        let offset = Int(ip32 - TunnelConstants.fakeIPPoolBaseIPv4)
+        guard offset <= TunnelConstants.fakeIPPoolSize else { return nil }
+        return offset
     }
 
     private func ipv4ToOffset(_ ip: String) -> Int? {
@@ -268,29 +220,6 @@ nonisolated final class FakeIPPool: Sendable {
         octets.3 = current
         guard octets.3 <= 255 else { return nil }
         let ip32 = (octets.0 << 24) | (octets.1 << 16) | (octets.2 << 8) | octets.3
-        let offset = Int(ip32 - TunnelConstants.fakeIPPoolBaseIPv4)
-        guard offset >= 1, offset <= TunnelConstants.fakeIPPoolSize else { return nil }
-        return offset
-    }
-
-    private func ipv6ToOffset(_ ip: String) -> Int? {
-        var address = in6_addr()
-        guard inet_pton(AF_INET6, ip, &address) == 1 else { return nil }
-
-        return withUnsafeBytes(of: &address) { raw -> Int? in
-            let bytes = raw.bindMemory(to: UInt8.self)
-            guard bytes.count == 16 else { return nil }
-
-            guard bytes[0] == 0x20, bytes[1] == 0x01,
-                  bytes[2] == 0x0D, bytes[3] == 0xB8 else { return nil }
-            for i in 4...11 {
-                guard bytes[i] == 0 else { return nil }
-            }
-
-            let offset = (Int(bytes[12]) << 24) | (Int(bytes[13]) << 16)
-                       | (Int(bytes[14]) << 8) | Int(bytes[15])
-            guard offset >= 1, offset <= TunnelConstants.fakeIPPoolSize else { return nil }
-            return offset
-        }
+        return Self.offset(ipv4: ip32)
     }
 }

@@ -23,7 +23,6 @@ nonisolated struct TunnelSettings: Equatable {
     var tunnelExcludedRoutes: [String] = []
     var ipRuleDNSUpstream: DNSUpstream = .system
     var interceptExemptDNSServers: Set<String> = []
-    var advertiseIPv6ToApps = false
 
     static func load() -> TunnelSettings {
         TunnelSettings(
@@ -41,8 +40,7 @@ nonisolated struct TunnelSettings: Equatable {
             tunnelIncludedRoutes: AWCore.getTunnelIncludedRoutes(),
             tunnelExcludedRoutes: AWCore.getTunnelExcludedRoutes(),
             ipRuleDNSUpstream: AWCore.getIPRuleDNSUpstream(),
-            interceptExemptDNSServers: TunnelStack.interceptExemptDNSServers(),
-            advertiseIPv6ToApps: AWCore.getAdvertiseIPv6ToApps()
+            interceptExemptDNSServers: TunnelStack.interceptExemptDNSServers()
         )
     }
 }

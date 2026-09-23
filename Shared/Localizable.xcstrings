@@ -2346,58 +2346,6 @@
         }
       }
     },
-    "Advertise IPv6 to Apps" : {
-      "localizations" : {
-        "ar" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "الإعلان عن IPv6 للتطبيقات"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Advertise IPv6 to Apps"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Anunciar IPv6 a las apps"
-          }
-        },
-        "fa" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "اعلام IPv6 به برنامه‌ها"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Анонсировать IPv6 для приложений"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Uygulamalara IPv6'yı Duyur"
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Quảng bá IPv6 đến ứng dụng"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "向应用通告 IPv6"
-          }
-        }
-      }
-    },
     "AEAD" : {
       "comment" : "AEAD for Sudoku protocol",
       "shouldTranslate" : false
@@ -6981,54 +6929,54 @@
         }
       }
     },
-    "Enabling Hide VPN Icon may cause connection instability and will disable IPv6." : {
+    "Enabling Hide VPN Icon may cause connection instability, and IPv6 traffic will bypass the VPN." : {
       "localizations" : {
         "ar" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "قد يؤدي تفعيل \"إخفاء أيقونة VPN\" إلى عدم استقرار الاتصال وسيُعطِّل IPv6."
+            "value" : "قد يؤدي تفعيل \"إخفاء أيقونة VPN\" إلى عدم استقرار الاتصال، وستتجاوز حركة IPv6 شبكة VPN."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Enabling Hide VPN Icon may cause connection instability and will disable IPv6."
+            "value" : "Enabling Hide VPN Icon may cause connection instability, and IPv6 traffic will bypass the VPN."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Activar Ocultar icono de VPN puede causar inestabilidad en la conexión y deshabilitará IPv6."
+            "value" : "Activar Ocultar icono de VPN puede causar inestabilidad en la conexión, y el tráfico IPv6 no pasará por la VPN."
           }
         },
         "fa" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "فعال‌سازی «مخفی کردن آیکون VPN» ممکن است باعث ناپایداری اتصال شود و IPv6 را غیرفعال خواهد کرد."
+            "value" : "فعال‌سازی «مخفی کردن آیکون VPN» ممکن است باعث ناپایداری اتصال شود و ترافیک IPv6 از VPN عبور نخواهد کرد."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Включение «Скрыть значок VPN» может вызвать нестабильность соединения и отключит IPv6."
+            "value" : "Включение «Скрыть значок VPN» может вызвать нестабильность соединения, а трафик IPv6 будет идти в обход VPN."
           }
         },
         "tr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "\"VPN Simgesini Gizle\"yi etkinleştirmek bağlantı kararsızlığına neden olabilir ve IPv6'yı devre dışı bırakır."
+            "value" : "\"VPN Simgesini Gizle\"yi etkinleştirmek bağlantı kararsızlığına neden olabilir ve IPv6 trafiği VPN'i atlayacaktır."
           }
         },
         "vi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Bật Ẩn biểu tượng VPN có thể gây mất ổn định kết nối và sẽ tắt IPv6."
+            "value" : "Bật Ẩn biểu tượng VPN có thể gây mất ổn định kết nối và lưu lượng IPv6 sẽ không đi qua VPN."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "启用隐藏 VPN 图标可能导致连接不稳定，并将禁用 IPv6。"
+            "value" : "启用隐藏 VPN 图标可能导致连接不稳定，且 IPv6 流量将绕过 VPN。"
           }
         }
       }
@@ -9699,9 +9647,6 @@
           }
         }
       }
-    },
-    "IPv6" : {
-      "shouldTranslate" : false
     },
     "IPv6 CIDR" : {
       "localizations" : {

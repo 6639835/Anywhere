@@ -373,7 +373,11 @@ actor UDPPlane {
             )
         }
 
-        guard qtype == 1 || qtype == 28 else {
+        if qtype == 28 {
+            return sendNODATA(answering: datagram, qtype: qtype)
+        }
+
+        guard qtype == 1 else {
             if destination == .anywhereResolver {
                 if await forwardToUpstreamResolver(datagram, domain: domain, qtype: qtype) {
                     return true
@@ -384,22 +388,10 @@ actor UDPPlane {
         }
 
         let offset = stack.fakeIPPool.allocate(domain: domain, verdict: ruleMatch, verdictVersion: rulesVersion)
-
-        if qtype == 1 {
-            let ipv4 = FakeIPPool.ipv4Bytes(offset: offset)
-            return sendAddressAnswer(
-                answering: datagram,
-                ip: [ipv4.0, ipv4.1, ipv4.2, ipv4.3],
-                qtype: qtype,
-                ttl: TunnelConstants.dnsFakeIPAnswerTTL
-            )
-        }
-        guard stack.udpConfig().advertiseIPv6ToApps else {
-            return sendNODATA(answering: datagram, qtype: qtype)
-        }
+        let ipv4 = FakeIPPool.ipv4Bytes(offset: offset)
         return sendAddressAnswer(
             answering: datagram,
-            ip: FakeIPPool.ipv6Bytes(offset: offset),
+            ip: [ipv4.0, ipv4.1, ipv4.2, ipv4.3],
             qtype: qtype,
             ttl: TunnelConstants.dnsFakeIPAnswerTTL
         )

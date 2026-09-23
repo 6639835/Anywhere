@@ -198,7 +198,6 @@ actor TunnelStack {
         let blockWebRTC: Bool
         let mitmEnabled: Bool
         let interceptExemptDNSServers: Set<String>
-        let advertiseIPv6ToApps: Bool
     }
     private let _udpConfig = Mutex(UDPConfig(
         configuration: nil,
@@ -208,8 +207,7 @@ actor TunnelStack {
         quicPolicy: .blocked,
         blockWebRTC: true,
         mitmEnabled: false,
-        interceptExemptDNSServers: [],
-        advertiseIPv6ToApps: false
+        interceptExemptDNSServers: []
     ))
 
     nonisolated func udpConfig() -> UDPConfig { _udpConfig.withLock { $0 } }
@@ -227,8 +225,7 @@ actor TunnelStack {
             quicPolicy: settings.quicPolicy,
             blockWebRTC: settings.blockWebRTC,
             mitmEnabled: mitmEnabled,
-            interceptExemptDNSServers: settings.interceptExemptDNSServers,
-            advertiseIPv6ToApps: settings.advertiseIPv6ToApps
+            interceptExemptDNSServers: settings.interceptExemptDNSServers
         )
         _udpConfig.withLock { $0 = snapshot }
     }

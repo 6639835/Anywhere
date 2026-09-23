@@ -382,15 +382,14 @@ extension TunnelStack {
 
         let proxyModeChanged = computeEffectiveProxyMode() != proxyMode
         let hideVPNIconChanged = new.hideVPNIcon != old.hideVPNIcon
-        let advertiseIPv6ToAppsChanged = new.advertiseIPv6ToApps != old.advertiseIPv6ToApps
 
-        guard proxyModeChanged || hideVPNIconChanged || advertiseIPv6ToAppsChanged else {
+        guard proxyModeChanged || hideVPNIconChanged else {
             return
         }
 
         logger.info("[VPN] Settings changed")
 
-        if advertiseIPv6ToAppsChanged || hideVPNIconChanged {
+        if hideVPNIconChanged {
             requestReapplyTunnelSettings()
         }
 

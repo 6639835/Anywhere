@@ -165,11 +165,7 @@ final class AppSettings {
     var hideVPNIcon: Bool {
         didSet {
             AWCore.setHideVPNIcon(hideVPNIcon)
-            if hideVPNIcon, advertiseIPv6ToApps {
-                advertiseIPv6ToApps = false
-            } else {
-                AWNotificationCenter.notifyTunnelSettingsChanged()
-            }
+            AWNotificationCenter.notifyTunnelSettingsChanged()
         }
     }
     
@@ -264,13 +260,6 @@ final class AppSettings {
         }
     }
     
-    var advertiseIPv6ToApps: Bool {
-        didSet {
-            AWCore.setAdvertiseIPv6ToApps(advertiseIPv6ToApps)
-            AWNotificationCenter.notifyTunnelSettingsChanged()
-        }
-    }
-
     // MARK: - Persist + certificate policy
 
     var allowInsecure: Bool {
@@ -339,7 +328,6 @@ final class AppSettings {
         subscriptionDNSPlainServer = AWCore.getSubscriptionDNSPlainServer()
         subscriptionDNSDoHURL = AWCore.getSubscriptionDNSDoHURL()
 
-        advertiseIPv6ToApps = AWCore.getAdvertiseIPv6ToApps()
         alwaysTrustCellular = AWCore.getAlwaysTrustCellular()
         alwaysUntrustCellular = AWCore.getAlwaysUntrustCellular()
         blockUDP = AWCore.getBlockUDP()

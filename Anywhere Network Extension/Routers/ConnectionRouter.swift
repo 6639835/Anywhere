@@ -190,7 +190,6 @@ nonisolated final class ConnectionRouter: Sendable {
     // MARK: - Reject-mark intake checks
 
     func isRejectMarkedDestination(rawIP: UnsafeRawPointer, isIPv6: Bool) -> Bool {
-        if fakeIPPool.isRejectMarked(rawIP: rawIP, isIPv6: isIPv6) { return true }
         if isIPv6 {
             let key = rawIP.loadUnaligned(as: SIMD16<UInt8>.self)
             return rejectedIPs.withLock { $0.v6.contains(key) }
@@ -199,17 +198,20 @@ nonisolated final class ConnectionRouter: Sendable {
                 | (UInt32(rawIP.load(fromByteOffset: 1, as: UInt8.self)) << 16)
                 | (UInt32(rawIP.load(fromByteOffset: 2, as: UInt8.self)) << 8)
                 |  UInt32(rawIP.load(fromByteOffset: 3, as: UInt8.self))
-        return rejectedIPs.withLock { $0.v4.contains(key) }
+        return isRejectMarkedIPv4(key)
     }
 
     func isRejectMarkedDestination(ipBytes: SIMD16<UInt8>, isIPv6: Bool) -> Bool {
-        if fakeIPPool.isRejectMarked(ipBytes: ipBytes, isIPv6: isIPv6) { return true }
         if isIPv6 {
             return rejectedIPs.withLock { $0.v6.contains(ipBytes) }
         }
         let key = (UInt32(ipBytes[0]) << 24) | (UInt32(ipBytes[1]) << 16)
                 | (UInt32(ipBytes[2]) << 8) | UInt32(ipBytes[3])
-        return rejectedIPs.withLock { $0.v4.contains(key) }
+        return isRejectMarkedIPv4(key)
+    }
+
+    private func isRejectMarkedIPv4(_ key: UInt32) -> Bool {
+        fakeIPPool.isRejectMarked(ipv4: key) || rejectedIPs.withLock { $0.v4.contains(key) }
     }
 
     func clearRejectMarks() {

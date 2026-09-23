@@ -52,7 +52,6 @@ nonisolated final class AWCore {
     // MARK: - UserDefaults Keys
 
     private enum UserDefaultsKey {
-        static let advertiseIPv6ToApps = "advertiseIPv6ToApps"
         static let allowInsecure = "allowInsecure"
         static let alwaysOnEnabled = "alwaysOnEnabled"
         static let alwaysTrustCellular = "alwaysTrustCellular"
@@ -591,14 +590,6 @@ nonisolated final class AWCore {
             plainServer: getECHDNSPlainServer(),
             dohURL: getECHDNSDoHURL()
         )
-    }
-
-    static func getAdvertiseIPv6ToApps() -> Bool {
-        userDefaults.bool(forKey: UserDefaultsKey.advertiseIPv6ToApps)
-    }
-
-    static func setAdvertiseIPv6ToApps(_ value: Bool) {
-        userDefaults.set(value, forKey: UserDefaultsKey.advertiseIPv6ToApps)
     }
 
     static func getRemnawaveHWIDEnabled() -> Bool {

@@ -219,22 +219,14 @@ nonisolated class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Senda
         ipv4Settings.excludedRoutes = excludedIPv4Routes
         settings.ipv4Settings = ipv4Settings
 
-        let advertiseIPv6ToApps = AWCore.getAdvertiseIPv6ToApps() && !hideVPNIcon
-        if advertiseIPv6ToApps {
+        if !hideVPNIcon {
             let ipv6Settings = NEIPv6Settings(addresses: [TunnelConstants.tunnelAddressIPv6], networkPrefixLengths: [64])
             ipv6Settings.includedRoutes = [NEIPv6Route.default()] + includedRoutes.ipv6
             ipv6Settings.excludedRoutes = excludedRoutes.ipv6
             settings.ipv6Settings = ipv6Settings
         }
 
-        let plainDNSServers: [String]
-        if advertiseIPv6ToApps {
-            plainDNSServers = [tunnelAddressIPv4, TunnelConstants.tunnelAddressIPv6]
-        } else {
-            plainDNSServers = [tunnelAddressIPv4]
-        }
-
-        settings.dnsSettings = NEDNSSettings(servers: plainDNSServers)
+        settings.dnsSettings = NEDNSSettings(servers: [tunnelAddressIPv4])
         settings.mtu = 1500
 
         return settings

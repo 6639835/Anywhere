@@ -45,9 +45,6 @@ struct AdvancedSettingsView: View {
                 NavigationLink("DNS") {
                     DNSSettingsView()
                 }
-                NavigationLink("IPv6") {
-                    IPv6SettingsView()
-                }
             }
 
             Section {
@@ -62,7 +59,7 @@ struct AdvancedSettingsView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Enabling Hide VPN Icon may cause connection instability and will disable IPv6.")
+            Text("Enabling Hide VPN Icon may cause connection instability, and IPv6 traffic will bypass the VPN.")
         }
     }
 }
