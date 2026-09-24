@@ -81,7 +81,7 @@ private struct PageIndicator: View {
     @Binding var selection: Int
 
     var body: some View {
-        if #available(iOS 27.0, *) {
+        if #available(iOS 26.0, *) {
             indicators
                 .glassEffect(.regular.interactive(), in: .capsule)
         } else {
