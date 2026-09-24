@@ -235,7 +235,7 @@ nonisolated final class DNSResolver: Sendable {
             }
             current = info.pointee.ai_next
         }
-        return ipv4 + ipv6
+        return ipv4.isEmpty ? ipv6 : ipv4
     }
 
     // MARK: - ECH resolution

@@ -85,7 +85,8 @@ nonisolated enum DNSUpstreamClient {
             do { addresses += try await ipv4 } catch { failure = error }
             do { addresses += try await ipv6 } catch { failure = failure ?? error }
             if addresses.isEmpty, let failure { throw failure }
-            return addresses
+            let ipv4Addresses = addresses.filter { !$0.contains(":") }
+            return ipv4Addresses.isEmpty ? addresses : ipv4Addresses
         }
     }
 
