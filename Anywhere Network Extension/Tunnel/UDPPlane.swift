@@ -106,6 +106,7 @@ actor UDPPlane {
             logger.info("[UDP] pending-resolution table drained; waiting on IP-rule lookups again")
         }
         for datagram in pending.datagrams {
+            guard stack.publishedPhase.load(ordering: .relaxed) == .running else { return }
             await handleInboundUDP(datagram, awaitedResolution: true)
         }
     }

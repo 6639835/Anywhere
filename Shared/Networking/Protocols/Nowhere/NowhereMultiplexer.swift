@@ -793,7 +793,7 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
                             .protocolViolation(detail: "Truncated Multiplexer frame")
                         )
                     }
-                    terminate(error: nil)
+                    terminate(error: AnywhereError.proxy(.nowhere, .connectionClosed(detail: "Multiplexer carrier closed")))
                     return
                 }
                 if chunk.isEmpty { continue }

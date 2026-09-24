@@ -7,8 +7,6 @@
 
 import Foundation
 
-/// Address format: ATYP(1) + Address(var) + Port(2, big-endian).
-/// ATYP 0x01: IPv4 (4B), 0x03: Domain (1B length + string), 0x04: IPv6 (16B).
 nonisolated enum ShadowsocksProtocol {
 
     static func buildAddressHeader(host: String, port: UInt16) -> Data {
@@ -21,7 +19,7 @@ nonisolated enum ShadowsocksProtocol {
             data.append(0x04)
             data.append(contentsOf: ipv6)
         } else {
-            let domainBytes = Array(host.utf8)
+            let domainBytes = Array(host.utf8.prefix(255))
             data.append(0x03)
             data.append(UInt8(domainBytes.count))
             data.append(contentsOf: domainBytes)

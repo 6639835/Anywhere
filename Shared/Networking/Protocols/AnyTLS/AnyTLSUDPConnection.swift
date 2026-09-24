@@ -25,7 +25,8 @@ nonisolated final class AnyTLSUDPConnection: ProxyConnection, UDPFramingCapable 
     // MARK: - Send
 
     func sendRaw(_ data: Data) async throws {
-        try await inner.sendRaw(frameUDPPacket(data))
+        guard let frame = frameUDPPacket(data) else { throw AnywhereError.proxy(.anyTLS, .packetTooLarge) }
+        try await inner.sendRaw(frame)
     }
 
     // MARK: - Receive

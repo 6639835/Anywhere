@@ -19,7 +19,7 @@ nonisolated enum NowhereMultiplexerConstants {
     static let maximumActiveFlowsPerMultiplexer = 4096
     static let maximumMultiplexers = 8
     static let outboundFrameLimit = 512
-    static let inboundFrameLimit = 4096
+    static let inboundFrameLimit = streamWindowBytes / 1024 + 1
     static let windowUpdateThreshold = 2 * 1024 * 1024
     static let minimumFairCreditBytes = 256 * 1024
     static let idleTimeout: TimeInterval = 30

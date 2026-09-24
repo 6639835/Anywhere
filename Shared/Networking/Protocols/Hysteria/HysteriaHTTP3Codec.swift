@@ -9,9 +9,8 @@ import Foundation
 
 nonisolated enum HysteriaHTTP3Codec {
 
-    // MARK: - Static table (RFC 9204 Appendix A — subset we care about)
-
-    /// "Indexed Field Line" entries — only rows that can plausibly appear on a /auth response.
+    // MARK: - Static table
+    
     private static let entryByIndex: [Int: (name: String, value: String)] = [
         4:  ("content-length", "0"),
         24: (":status", "103"),
@@ -29,9 +28,7 @@ nonisolated enum HysteriaHTTP3Codec {
         70: (":status", "425"),
         71: (":status", "500"),
     ]
-
-    /// Names for "Literal Field Line with Name Reference"; the server may
-    /// pick any index whose canonical name matches, then override the value.
+    
     private static let nameByIndex: [Int: String] = {
         var mapping: [Int: String] = [
             0: ":authority",
@@ -46,10 +43,7 @@ nonisolated enum HysteriaHTTP3Codec {
     }()
 
     // MARK: - Request encoding
-
-    /// Builds an HTTP/3 HEADERS frame (varint type 0x01 | varint len | QPACK
-    /// block) carrying a POST /auth request. Static indexes: 20 = :method
-    /// POST, 23 = :scheme https, 0 = :authority, 1 = :path.
+    
     static func encodeAuthRequestFrame(
         authority: String,
         path: String,
@@ -76,20 +70,16 @@ nonisolated enum HysteriaHTTP3Codec {
     }
 
     // MARK: - Response decoding
-
-    /// Decodes a QPACK header block into `(name, value)` pairs, or nil if
-    /// malformed. Slice-safe.
+    
     static func decodeHeaderBlock(_ data: Data) -> [(name: String, value: String)]? {
         guard data.count >= 2 else { return nil }
         let base = data.startIndex
         var offset = 0
-
-        // Required Insert Count must be 0 — we advertise dynamic table 0.
+        
         guard let (ric, ricLen) = decodePrefixedInt(data, offset: offset, prefixBits: 8) else { return nil }
         guard ric == 0 else { return nil }
         offset += ricLen
-
-        // Delta Base: sign bit + 7-bit prefix.
+        
         guard offset < data.count else { return nil }
         guard let (_, dbLen) = decodePrefixedInt(data, offset: offset, prefixBits: 7) else { return nil }
         offset += dbLen
@@ -100,7 +90,6 @@ nonisolated enum HysteriaHTTP3Codec {
             let byte = data[base + offset]
 
             if byte & 0x80 != 0 {
-                // 1 T=? index  — Indexed field line (dynamic references rejected).
                 let isStatic = (byte & 0x40) != 0
                 guard isStatic else { return nil }
                 guard let (index, len) = decodePrefixedInt(data, offset: offset, prefixBits: 6) else { return nil }
@@ -108,10 +97,7 @@ nonisolated enum HysteriaHTTP3Codec {
                 if let entry = entryByIndex[Int(index)] {
                     headers.append(entry)
                 }
-                // Any other pre-indexed field is irrelevant for /auth; drop silently.
-
             } else if byte & 0x40 != 0 {
-                // 01 N T=? index  — Literal with name reference.
                 let isStatic = (byte & 0x10) != 0
                 guard isStatic else { return nil }
                 guard let (nameIdx, nameLen) = decodePrefixedInt(data, offset: offset, prefixBits: 4) else { return nil }
@@ -121,10 +107,7 @@ nonisolated enum HysteriaHTTP3Codec {
                 if let name = nameByIndex[Int(nameIdx)] {
                     headers.append((name: name, value: value))
                 }
-
             } else if byte & 0x20 != 0 {
-                // 001 N H — Literal field line with literal name. Hysteria
-                // Huffman-encodes by default, so handle both forms.
                 let isHuffmanName = (byte & 0x08) != 0
                 guard let (nameLen, nameLenBytes) = decodePrefixedInt(data, offset: offset, prefixBits: 3) else { return nil }
                 offset += nameLenBytes
@@ -144,9 +127,7 @@ nonisolated enum HysteriaHTTP3Codec {
                 guard let (value, valueLen) = decodeString(data, offset: offset) else { return nil }
                 offset += valueLen
                 headers.append((name: decodedName.lowercased(), value: value))
-
             } else {
-                // Post-base patterns reference the dynamic table — peer protocol error.
                 return nil
             }
         }
@@ -155,23 +136,20 @@ nonisolated enum HysteriaHTTP3Codec {
     }
 
     // MARK: - Encoding helpers
-
-    /// Indexed field line into the static table: `1 T=1 Index(6+)`.
+    
     private static func indexedField(staticIndex: Int) -> Data {
         var out = Data()
         appendPrefixedInt(&out, value: UInt64(staticIndex), prefixBits: 6, prefix: 0b1100_0000)
         return out
     }
-
-    /// Literal field line with static name reference: `01 N=0 T=1 NameIndex(4+)`, then value string.
+    
     private static func literalWithNameRef(staticIndex: Int, value: String) -> Data {
         var out = Data()
         appendPrefixedInt(&out, value: UInt64(staticIndex), prefixBits: 4, prefix: 0b0101_0000)
         appendString(&out, value)
         return out
     }
-
-    /// Literal field line with literal name: `001 N=0 H=0 NameLen(3+)` name, then value.
+    
     private static func literalFieldLine(name: String, value: String) -> Data {
         var out = Data()
         let nameBytes = Data(name.utf8)
@@ -180,8 +158,7 @@ nonisolated enum HysteriaHTTP3Codec {
         appendString(&out, value)
         return out
     }
-
-    /// Appends an integer encoded with the QPACK N-bit prefix form (RFC 7541 §5.1).
+    
     private static func appendPrefixedInt(
         _ out: inout Data,
         value: UInt64,
@@ -201,17 +178,15 @@ nonisolated enum HysteriaHTTP3Codec {
         }
         out.append(UInt8(remaining))
     }
-
-    /// Appends a raw (non-Huffman) length-prefixed string: `H=0 Len(7+)` then UTF-8 bytes.
+    
     private static func appendString(_ out: inout Data, _ value: String) {
         let bytes = Data(value.utf8)
         appendPrefixedInt(&out, value: UInt64(bytes.count), prefixBits: 7, prefix: 0x00)
         out.append(bytes)
     }
 
-    // MARK: - Decoding helpers (slice-safe)
-
-    /// Decodes an N-bit prefixed integer; `offset` is relative to `data.startIndex` so slices don't trap.
+    // MARK: - Decoding helpers
+    
     private static func decodePrefixedInt(
         _ data: Data,
         offset: Int,
@@ -231,19 +206,22 @@ nonisolated enum HysteriaHTTP3Codec {
         var position = offset + 1
         while position < data.count {
             let byte = data[base + position]
-            value += UInt64(byte & 0x7F) << shift
+            let add = UInt64(byte & 0x7F)
+            if shift > 62 || (qpackIntMax >> shift) < add { return nil }
+            let shifted = add << shift
+            if qpackIntMax - shifted < value { return nil }
+            value += shifted
             position += 1
             if byte & 0x80 == 0 {
                 return (value, position - offset)
             }
             shift += 7
-            if shift > 63 { return nil } // overflow guard
         }
         return nil
     }
 
-    /// Decodes a length-prefixed string, raw or Huffman (RFC 7541 Appendix B)
-    /// — the Hysteria server Huffman-encodes by default.
+    private static let qpackIntMax: UInt64 = (1 << 62) - 1
+    
     private static func decodeString(_ data: Data, offset: Int) -> (value: String, bytesConsumed: Int)? {
         let base = data.startIndex
         guard offset < data.count else { return nil }
@@ -266,8 +244,7 @@ nonisolated enum HysteriaHTTP3Codec {
     }
 
     // MARK: - QUIC varint
-
-    /// Encodes a varint per RFC 9000 §16; callers keep values within the 62-bit cap.
+    
     private static func encodeQUICVarInt(_ value: UInt64) -> Data {
         if value < (1 << 6) {
             return Data([UInt8(value)])
@@ -284,11 +261,13 @@ nonisolated enum HysteriaHTTP3Codec {
             ])
         }
         let v = value | (UInt64(0b11) << 62)
-        return Data([
-            UInt8((v >> 56) & 0xFF), UInt8((v >> 48) & 0xFF),
-            UInt8((v >> 40) & 0xFF), UInt8((v >> 32) & 0xFF),
-            UInt8((v >> 24) & 0xFF), UInt8((v >> 16) & 0xFF),
-            UInt8((v >> 8) & 0xFF), UInt8(v & 0xFF),
-        ])
+        return Data(
+            [
+                UInt8((v >> 56) & 0xFF), UInt8((v >> 48) & 0xFF),
+                UInt8((v >> 40) & 0xFF), UInt8((v >> 32) & 0xFF),
+                UInt8((v >> 24) & 0xFF), UInt8((v >> 16) & 0xFF),
+                UInt8((v >> 8) & 0xFF), UInt8(v & 0xFF),
+            ]
+        )
     }
 }

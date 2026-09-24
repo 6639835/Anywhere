@@ -148,13 +148,14 @@ nonisolated final class SudokuMultiplexerPool: TransportPool {
             }
 
             if isLeader {
-                defer { inFlightDial.withLock { $0 = nil } }
+                defer { inFlightDial.withLock { if $0 == dial { $0 = nil } } }
                 return try await dial.value
             }
 
             do {
                 return try await dial.value
             } catch {
+                inFlightDial.withLock { if $0 == dial { $0 = nil } }
                 continue
             }
         }

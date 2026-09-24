@@ -6,10 +6,10 @@
 //
 
 import Foundation
+import Synchronization
 import CryptoKit
 import CommonCrypto
 import Security
-import Synchronization
 
 nonisolated private let logger = AnywhereLogger(category: "ShadowsocksUDPSession")
 
@@ -200,9 +200,16 @@ actor ShadowsocksUDPSession {
             tokensByResponse[ResponseKey(host: host, port: dstPort), default: []].append(token)
         }
         tokensByPort[dstPort, default: []].append(token)
-
-        if case .idle = phase {
+        
+        switch phase {
+        case .idle:
             startConnectIfNeeded()
+        case .failed(let error):
+            continuation.finish(throwing: error)
+        case .cancelled:
+            continuation.finish(throwing: AnywhereError.transport(.terminated))
+        case .connecting, .ready:
+            break
         }
         return (token, stream)
     }
@@ -579,7 +586,7 @@ actor ShadowsocksUDPSession {
         _ = withUnsafeMutableBytes(of: &epochBE) { pointer in
             body[offset..<offset+8].copyBytes(to: pointer)
         }
-        let epoch = Int64(UInt64(bigEndian: epochBE))
+        let epoch = Int64(clamping: UInt64(bigEndian: epochBE))
         let now = Int64(Date().timeIntervalSince1970)
         if abs(now - epoch) > 30 {
             throw AnywhereError.proxy(.shadowsocks, .cipher(.staleTimestamp))
@@ -599,6 +606,7 @@ actor ShadowsocksUDPSession {
         guard body.endIndex - offset >= 2 else { throw AnywhereError.proxy(.shadowsocks, .cipher(.decryptionFailed)) }
         let paddingLen = Int(UInt16(body[offset]) << 8 | UInt16(body[offset + 1]))
         offset += 2
+        guard body.endIndex - offset >= paddingLen else { throw AnywhereError.proxy(.shadowsocks, .cipher(.decryptionFailed)) }
         offset += paddingLen
 
         guard let parsed = ShadowsocksProtocol.decodeUDPPacket(data: Data(body[offset...])) else {

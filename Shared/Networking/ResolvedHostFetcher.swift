@@ -33,13 +33,26 @@ nonisolated enum ResolvedHostFetcher {
                 throw AnywhereError.dns(.noAddresses(host: host))
             }
 
-            let port = UInt16(url.port ?? (scheme == "https" ? 443 : 80))
-            let result = try await perform(request, url: url, host: host, address: address, port: port,
-                                           secure: scheme == "https", allowInsecure: allowInsecure)
+            guard let port = UInt16(exactly: url.port ?? (scheme == "https" ? 443 : 80)) else {
+                throw AnywhereError.subscription(.invalidURL)
+            }
+            let result = try await perform(
+                request,
+                url: url,
+                host: host,
+                address: address,
+                port: port,
+                secure: scheme == "https",
+                allowInsecure: allowInsecure
+            )
 
             guard let location = redirectTarget(result), redirects < maxRedirects else {
-                guard let response = HTTPURLResponse(url: url, statusCode: result.status,
-                                                     httpVersion: "HTTP/1.1", headerFields: result.headers) else {
+                guard let response = HTTPURLResponse(
+                    url: url,
+                    statusCode: result.status,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: result.headers
+                ) else {
                     throw AnywhereError.dns(.malformedResponse)
                 }
                 return (result.body, response)
@@ -61,12 +74,24 @@ nonisolated enum ResolvedHostFetcher {
         let body: Data
     }
 
-    private static func perform(_ request: URLRequest, url: URL, host: String, address: String,
-                                port: UInt16, secure: Bool, allowInsecure: Bool) async throws -> Exchange {
+    private static func perform(
+        _ request: URLRequest,
+        url: URL,
+        host: String,
+        address: String,
+        port: UInt16,
+        secure: Bool,
+        allowInsecure: Bool
+    ) async throws -> Exchange {
         let transport: any ByteTransport
         if secure {
-            let tls = TLSClient(configuration: TLSConfiguration(serverName: host, alpn: ["http/1.1"],
-                                                                insecureSkipVerify: allowInsecure))
+            let tls = TLSClient(
+                configuration: TLSConfiguration(
+                    serverName: host,
+                    alpn: ["http/1.1"],
+                    insecureSkipVerify: allowInsecure
+                )
+            )
             transport = TLSByteTransport(try await tls.connect(host: address, port: port))
         } else {
             let tcp = TCPTransport(host: address, port: port)
@@ -86,8 +111,13 @@ nonisolated enum ResolvedHostFetcher {
         }
     }
 
-    private static func requestHead(_ request: URLRequest, url: URL, host: String,
-                                    port: UInt16, secure: Bool) -> Data {
+    private static func requestHead(
+        _ request: URLRequest,
+        url: URL,
+        host: String,
+        port: UInt16,
+        secure: Bool
+    ) -> Data {
         var target = url.path.isEmpty ? "/" : url.path
         if let query = url.query, !query.isEmpty { target += "?\(query)" }
 
@@ -130,8 +160,13 @@ nonisolated enum ResolvedHostFetcher {
                 head = try parseHead(buffer[buffer.startIndex..<separator.lowerBound])
                 cursor = separator.upperBound
             }
-            if let head, let exchange = try body(head, buffer: buffer, cursor: &cursor,
-                                                 chunked: &chunked, atEOF: false) {
+            if let head, let exchange = try body(
+                head,
+                buffer: buffer,
+                cursor: &cursor,
+                chunked: &chunked,
+                atEOF: false
+            ) {
                 return exchange
             }
 
@@ -142,8 +177,13 @@ nonisolated enum ResolvedHostFetcher {
                     throw AnywhereError.subscription(.fetchFailed(underlying: AnywhereError.dns(.malformedResponse)))
                 }
             case .end:
-                guard let head, let exchange = try body(head, buffer: buffer, cursor: &cursor,
-                                                        chunked: &chunked, atEOF: true) else {
+                guard let head, let exchange = try body(
+                    head,
+                    buffer: buffer,
+                    cursor: &cursor,
+                    chunked: &chunked,
+                    atEOF: true
+                ) else {
                     throw AnywhereError.transport(.terminated)
                 }
                 return exchange
@@ -187,8 +227,13 @@ nonisolated enum ResolvedHostFetcher {
         return Head(status: status, headers: headers, framing: framing)
     }
     
-    private static func body(_ head: Head, buffer: Data, cursor: inout Data.Index,
-                             chunked: inout ChunkedDecoder, atEOF: Bool) throws -> Exchange? {
+    private static func body(
+        _ head: Head,
+        buffer: Data,
+        cursor: inout Data.Index,
+        chunked: inout ChunkedDecoder,
+        atEOF: Bool
+    ) throws -> Exchange? {
         func exchange(_ body: Data) -> Exchange {
             Exchange(status: head.status, headers: head.headers, body: body)
         }
@@ -236,14 +281,14 @@ nonisolated enum ResolvedHostFetcher {
                 guard let lineEnd = buffer.range(of: Data("\r\n".utf8), in: cursor..<buffer.endIndex)
                 else { return }
                 let sizeText = String(decoding: buffer[cursor..<lineEnd.lowerBound], as: UTF8.self)
-                // Chunk extensions follow a semicolon and are ignored.
                 let sizeField = sizeText.split(separator: ";", maxSplits: 1).first.map(String.init) ?? sizeText
-                guard let size = Int(sizeField.trimmingCharacters(in: .whitespaces), radix: 16), size >= 0 else {
+                guard let size = Int(sizeField.trimmingCharacters(in: .whitespaces), radix: 16),
+                      size >= 0, size <= ResolvedHostFetcher.maxResponseBytes else {
                     throw AnywhereError.dns(.malformedResponse)
                 }
 
                 cursor = lineEnd.upperBound
-                if size == 0 {                                  // trailers, if any, are of no use here
+                if size == 0 {
                     finished = true
                     return
                 }

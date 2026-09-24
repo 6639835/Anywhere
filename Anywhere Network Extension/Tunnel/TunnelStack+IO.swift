@@ -35,7 +35,8 @@ extension TunnelStack {
 
             if packets.isEmpty { return }
             packetFlow.writePackets(packets, withProtocols: protocols)
-
+            
+            if Task.isCancelled { return }
             await Task.yield()
         }
     }

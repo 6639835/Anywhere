@@ -59,6 +59,7 @@ nonisolated final class HTTP3Multiplexer: Multiplexer, Sendable {
         var serverControlStreamID: Int64?
         var serverControlBuffer = Data()
         var pendingServerStreams: [Int64: Data] = [:]
+        var ignoredServerStreams: Set<Int64> = []
         var serverSettingsReceived = false
 
         var peerMaxFieldSectionSize: UInt64 = UInt64.max
@@ -75,6 +76,8 @@ nonisolated final class HTTP3Multiplexer: Multiplexer, Sendable {
     var peerSupportsH3Datagram: Bool { state.withLock { $0.peerSupportsH3Datagram } }
 
     private let maxConcurrentStreams = 512
+
+    private static let maxServerControlBufferBytes = 64 * 1024
 
     var isClosed: Bool {
         state.withLock { $0.phase == .closed }
@@ -249,6 +252,9 @@ nonisolated final class HTTP3Multiplexer: Multiplexer, Sendable {
             handlers.streamData = { [weak self] streamID, data, fin in
                 self?.handleStreamData(streamID: streamID, data: data, fin: fin)
             }
+            handlers.streamTermination = { [weak self] streamID, error, cause in
+                self?.handleStreamTermination(streamID: streamID, error: error, cause: cause)
+            }
         }
 
         Task { [self] in
@@ -320,16 +326,18 @@ nonisolated final class HTTP3Multiplexer: Multiplexer, Sendable {
             return
         }
 
-        let isServerUni = (streamID & 0x03) == 0x03
-        guard isServerUni, !data.isEmpty else { return }
-
+        guard !data.isEmpty else { return }
         quic.extendStreamOffset(streamID, count: data.count)
+
+        let isServerUni = (streamID & 0x03) == 0x03
+        guard isServerUni else { return }
 
         let effects: [DemultiplexEffect] = state.withLock { session in
             if streamID == session.serverControlStreamID {
                 session.serverControlBuffer.append(data)
                 return Self.processServerControlFrames(&session)
             }
+            if session.ignoredServerStreams.contains(streamID) { return [] }
 
             var buffer = session.pendingServerStreams.removeValue(forKey: streamID) ?? Data()
             buffer.append(data)
@@ -346,8 +354,10 @@ nonisolated final class HTTP3Multiplexer: Multiplexer, Sendable {
             case 0x01:
                 return [.fail(AnywhereError.proxy(.http3, .connectionClosed(detail: "Server opened push stream without MAX_PUSH_ID")))]
             case 0x02, 0x03:
+                session.ignoredServerStreams.insert(streamID)
                 return []
             default:
+                session.ignoredServerStreams.insert(streamID)
                 if !Self.isReservedStreamType(streamType) {
                     return [.abortStream(streamID, .streamCreationError)]
                 }
@@ -356,6 +366,20 @@ nonisolated final class HTTP3Multiplexer: Multiplexer, Sendable {
         }
 
         perform(effects)
+    }
+
+    private func handleStreamTermination(
+        streamID: Int64,
+        error: Error?,
+        cause: QUICConnection.StreamTerminationCause
+    ) {
+        guard let sink = state.withLock({ $0.streams[streamID] }) else { return }
+        switch cause {
+        case .reset:
+            sink.error(error ?? AnywhereError.quic(.streamReset(applicationCode: HTTP3ErrorCode.noError.rawValue)))
+        case .closed:
+            if let error { sink.error(error) }
+        }
     }
 
     private func perform(_ effects: [DemultiplexEffect]) {
@@ -417,6 +441,9 @@ nonisolated final class HTTP3Multiplexer: Multiplexer, Sendable {
             default:
                 break
             }
+        }
+        if session.serverControlBuffer.count > maxServerControlBufferBytes {
+            effects.append(.fail(AnywhereError.proxy(.http3, .connectionClosed(detail: "Control-stream frame too large"))))
         }
         return effects
     }

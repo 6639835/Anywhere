@@ -255,6 +255,10 @@ actor TunneledHTTP1Exchange {
     }
 
     private func determineBodyMode() throws {
+        if responseHasNoBody {
+            bodyMode = .undetermined
+            return
+        }
         if let te = header("Transfer-Encoding"), te.lowercased().contains("chunked") {
             bodyMode = .chunked
             return
@@ -360,6 +364,8 @@ nonisolated private struct ChunkedDecoder {
     }
 
     private var state: State = .size
+    
+    private static let maxLineBytes = 8 * 1024
 
     mutating func feed(_ inbound: inout Data, into out: inout Data) -> FeedResult {
         var idx = inbound.startIndex
@@ -373,6 +379,7 @@ nonisolated private struct ChunkedDecoder {
 
             case .size:
                 guard let crlf = Self.indexOfCRLF(inbound, from: idx, end: end) else {
+                    if end - idx > Self.maxLineBytes { return .error("chunk-size line exceeds \(Self.maxLineBytes) bytes") }
                     inbound = inbound.subdata(in: idx..<end)
                     return .needMore
                 }
@@ -409,6 +416,7 @@ nonisolated private struct ChunkedDecoder {
 
             case .trailer:
                 guard let crlf = Self.indexOfCRLF(inbound, from: idx, end: end) else {
+                    if end - idx > Self.maxLineBytes { return .error("trailer line exceeds \(Self.maxLineBytes) bytes") }
                     inbound = inbound.subdata(in: idx..<end)
                     return .needMore
                 }

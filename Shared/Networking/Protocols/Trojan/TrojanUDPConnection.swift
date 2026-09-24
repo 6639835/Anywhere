@@ -36,6 +36,9 @@ nonisolated final class TrojanUDPConnection: ProxyConnection {
     var deliversDatagrams: Bool { true }
 
     func sendRaw(_ data: Data) async throws {
+        guard data.count <= TrojanProtocol.maxUDPPayloadLength else {
+            throw AnywhereError.proxy(.trojan, .packetTooLarge)
+        }
         let header = consumeHeader()
         let packet = TrojanProtocol.encodeUDPPacket(host: destinationHost, port: destinationPort, payload: data)
         try await inner.sendRaw(header.map { $0 + packet } ?? packet)
@@ -62,7 +65,7 @@ nonisolated final class TrojanUDPConnection: ProxyConnection {
         while true {
             let parsed: Data? = try receiveBuffer.withLock { buffer in
                 guard let parsed = try TrojanProtocol.tryDecodeUDPPacket(buffer: buffer) else { return nil }
-                buffer.removeFirst(parsed.consumed)
+                buffer = parsed.consumed == buffer.count ? Data() : Data(buffer.dropFirst(parsed.consumed))
                 return parsed.payload
             }
             if let parsed {

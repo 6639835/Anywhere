@@ -210,7 +210,6 @@ nonisolated final class MITMHTTP2Rewriter: Sendable {
                       let resolved = rule.resolvedRewriteAction(verdicts: verdicts, at: index),
                       case .transparent(let replacement) = resolved else { continue }
                 rewroteRequest = true
-                rewriteState.withLock { $0.effectiveAuthority = replacement.authority }
                 resolvedUpstream = (host: replacement.host, port: replacement.port)
                 var sawAuthority = false
                 current = current.compactMap { entry -> (name: String, value: String)? in

@@ -15,7 +15,6 @@ nonisolated extension TLSRecordConnection {
     // MARK: - TLS 1.2 Record Crypto
 
     func encryptTLS12Record(plaintext: Data, contentType: UInt8 = TLSContentType.applicationData) throws -> Data {
-        // One atomic fetch pairs this record's sequence number with its key generation.
         let egress = nextEgressState()
 
         let version = tlsVersion
@@ -248,12 +247,10 @@ nonisolated extension TLSRecordConnection {
                 paddingGood |= decrypted[i] ^ UInt8(paddingByte)
             }
         }
-
-        guard paddingGood == 0 else {
-            throw AnywhereError.tls(.record(.invalidPadding))
+        
+        if paddingGood == 0 {
+            decrypted = decrypted.prefix(decrypted.count - paddingLen)
         }
-
-        decrypted = decrypted.prefix(decrypted.count - paddingLen)
 
         let macSize = TLSCipherSuite.macLength(cipherSuite)
         guard decrypted.count >= macSize else {
@@ -281,8 +278,7 @@ nonisolated extension TLSRecordConnection {
             payload: payload, useSHA384: useSHA384, useSHA256: useSHA256
         )
 
-        guard receivedMAC.count == expectedMAC.count,
-              constantTimeEqual(receivedMAC, expectedMAC) else {
+        guard constantTimeEqual(receivedMAC, expectedMAC), paddingGood == 0 else {
             throw AnywhereError.tls(.record(.macVerificationFailed))
         }
 

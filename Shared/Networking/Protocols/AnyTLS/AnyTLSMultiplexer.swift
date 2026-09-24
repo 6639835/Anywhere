@@ -336,6 +336,7 @@ nonisolated final class AnyTLSMultiplexer: Multiplexer, Sendable {
         let task = Task {
             do {
                 while true {
+                    try Task.checkCancellation()
                     guard let data = try await inner.receive() else {
                         handleTransportEOF()
                         return
@@ -357,7 +358,7 @@ nonisolated final class AnyTLSMultiplexer: Multiplexer, Sendable {
     }
 
     private func handleTransportEOF() {
-        close(error: nil)
+        close(error: AnywhereError.proxy(.anyTLS, .connectionClosed(detail: "AnyTLS session closed by peer")))
     }
 
     private func handleTransportFailure(_ error: Error) {

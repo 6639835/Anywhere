@@ -86,6 +86,9 @@ nonisolated extension ProxyClient {
     ) async throws -> ProxyConnection {
         let vlessUUID = configuration.vless?.uuid ?? configuration.id
         let command = VLESSCommand(request.network, isMultiplexerCarrier: request.isMultiplexerCarrier)
+        guard command == .mux || request.host.utf8.count <= 255 else {
+            throw AnywhereError.proxy(.vless, .protocolViolation(detail: "destination host exceeds 255 bytes"))
+        }
         let isVision = supportsVision && isVisionFlow && command != .udp
 
         let requestHeader = VLESSProtocol.encodeRequestHeader(

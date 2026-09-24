@@ -57,10 +57,14 @@ nonisolated final class VLESSVisionUDPMultiplexer: Multiplexer, Sendable {
 
     // MARK: - Init
 
-    init(configuration: ProxyConfiguration,
-         onClose: (@Sendable (VLESSVisionUDPMultiplexer) -> Void)? = nil) {
+    init(
+        configuration: ProxyConfiguration,
+        reservedForXUDP: Bool = false,
+        onClose: (@Sendable (VLESSVisionUDPMultiplexer) -> Void)? = nil
+    ) {
         self.configuration = configuration
         self.onClose = onClose
+        if reservedForXUDP { state.withLock { $0.isXUDP = true } }
     }
 
     // MARK: - Capacity

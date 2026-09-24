@@ -12,6 +12,7 @@ import Synchronization
 nonisolated protocol UDPTransportEngine: AnyObject, Sendable {
     func send(_ datagram: Data) async throws
     func receive() async throws -> Data
+    func cancel()
 }
 
 nonisolated final class UDPTransport: DatagramTransport, Sendable {
@@ -123,8 +124,7 @@ nonisolated final class UDPTransport: DatagramTransport, Sendable {
     }
 
     func cancel() {
-        // Engines tear down on release; in-flight operations end via task cancellation.
-        let (_, slot): ((any UDPTransportEngine)?, FlowSlot?) = state.withLock { state in
+        let (engine, slot): ((any UDPTransportEngine)?, FlowSlot?) = state.withLock { state in
             if state.failure == nil { state.failure = .transport(.terminated) }
             state.transition(to: .cancelled)
             let pair = (state.engine, state.flowSlot)
@@ -132,6 +132,7 @@ nonisolated final class UDPTransport: DatagramTransport, Sendable {
             state.flowSlot = nil
             return pair
         }
+        engine?.cancel()
         slot?.release()
     }
 
@@ -155,7 +156,6 @@ nonisolated final class UDPTransport: DatagramTransport, Sendable {
 
 @available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *)
 nonisolated final class ModernUDPEngine: UDPTransportEngine, Sendable {
-
     private let connection: NetworkConnection<UDP>
 
     init(endpoint: NWEndpoint) {
@@ -170,4 +170,6 @@ nonisolated final class ModernUDPEngine: UDPTransportEngine, Sendable {
         let message = try await connection.receive()
         return message.content
     }
+    
+    func cancel() {}
 }

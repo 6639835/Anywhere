@@ -12,6 +12,7 @@ nonisolated private let logger = AnywhereLogger(category: "MITMHTTP2UpstreamLeg"
 
 nonisolated protocol MITMUpstreamLegDelegate: AnyObject {
     func upstreamLegWriteToOrigin(_ data: Data)
+    func upstreamLegWriteReplyToOrigin(_ data: Data)
     func upstreamLegFatalError(_ message: String)
     func upstreamLegDraining()
     func upstreamLegRequestDrained(clientID: UInt32, count: Int)
@@ -165,7 +166,7 @@ actor MITMHTTP2UpstreamLeg {
     }
 
     private func drainQueue() {
-        guard !draining else { return }
+        guard !draining, phase == .idle || phase == .prefaceSent else { return }
         draining = true
         defer { draining = false }
         while ourStreamID.count < maxConcurrentStreams, let clientID = queueOrder.first {
@@ -539,7 +540,7 @@ actor MITMHTTP2UpstreamLeg {
         case Codec.FrameType.settings:     handleSettings(frame)
         case Codec.FrameType.windowUpdate: handleWindowUpdate(frame)
         case Codec.FrameType.ping:
-            if frame.flags & 0x1 == 0 { delegate?.upstreamLegWriteToOrigin(Codec.pingAck(opaque: frame.payload)) }
+            if frame.flags & 0x1 == 0 { delegate?.upstreamLegWriteReplyToOrigin(Codec.pingAck(opaque: frame.payload)) }
         case Codec.FrameType.rstStream:    handleUpstreamRST(frame)
         case Codec.FrameType.goaway:       handleGoAway(frame)
         case Codec.FrameType.pushPromise:
@@ -563,7 +564,7 @@ actor MITMHTTP2UpstreamLeg {
             i += 6
         }
         firstSettingsSeen = true
-        delegate?.upstreamLegWriteToOrigin(Codec.settingsAck())
+        delegate?.upstreamLegWriteReplyToOrigin(Codec.settingsAck())
         drainQueue()
     }
 
@@ -605,14 +606,13 @@ actor MITMHTTP2UpstreamLeg {
         let p = frame.payload
         let s = p.startIndex
         let lastStreamID = (UInt32(p[s]) & 0x7F) << 24 | UInt32(p[s + 1]) << 16 | UInt32(p[s + 2]) << 8 | UInt32(p[s + 3])
+        let enteredGoingAway = transition(to: .goingAway)
+        if enteredGoingAway { refuseAllQueued() }
         for (clientID, upstreamID) in Array(ourStreamID) where upstreamID > lastStreamID {
             releaseStream(clientID: clientID)
             sink?.deliverResponseReset(streamID: clientID, errorCode: Codec.ErrorCode.refusedStream)
         }
-        if transition(to: .goingAway) {
-            refuseAllQueued()
-            delegate?.upstreamLegDraining()
-        }
+        if enteredGoingAway { delegate?.upstreamLegDraining() }
     }
 
     // MARK: Response HEADERS
@@ -659,7 +659,7 @@ actor MITMHTTP2UpstreamLeg {
             if streamID >= nextUpstreamStreamID {
                 fail("response HEADERS on idle upstream stream \(streamID)")
             } else {
-                delegate?.upstreamLegWriteToOrigin(Codec.rstStream(streamID: streamID, errorCode: Codec.ErrorCode.cancel))
+                delegate?.upstreamLegWriteReplyToOrigin(Codec.rstStream(streamID: streamID, errorCode: Codec.ErrorCode.cancel))
             }
             return false
         }
@@ -837,6 +837,7 @@ actor MITMHTTP2UpstreamLeg {
             ackUpstream(upstreamStreamID: sid, length: onWireLength)
             buffer.data.append(body)
             if !endStream, buffer.data.count > MITMBodyCodec.maxBufferedBodyBytes {
+                responseStreams[clientID] = .passthrough
                 sink?.deliverResponseHead(
                     streamID: clientID, status: buffer.status,
                     headers: buffer.headers.filter { !$0.name.hasPrefix(":") },
@@ -844,7 +845,6 @@ actor MITMHTTP2UpstreamLeg {
                     neverIndexed: buffer.neverIndexed
                 )
                 sink?.deliverResponseData(streamID: clientID, buffer.data, endStream: false)
-                responseStreams[clientID] = .passthrough
                 return false
             }
             responseStreams[clientID] = .buffering(buffer)

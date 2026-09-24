@@ -136,6 +136,7 @@ nonisolated enum RFCProtocol {
     static let http2Preface = Data("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".utf8)
     static let http2StreamWindowSize: UInt32 = 4 * 1024 * 1024
     static let http2ConnectionWindowSize: UInt32 = 1024 * 1024 * 1024
+    static let http2MaxFrameSize = 16_384
     static let http2DefaultMaxConcurrentStreams = 128
     static let http2MaxConcurrentStreamsCap = 256
 

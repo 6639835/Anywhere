@@ -30,10 +30,9 @@ nonisolated final class NGTCP2ConcurrencyBridge: @unchecked Sendable {
     
     private struct QueueHopBody<Body>: @unchecked Sendable { let body: Body }
     
-    func run<T>(_ body: @escaping () -> T) async -> T {
-        let hop = QueueHopBody(body: body)
-        return await withCheckedContinuation { (continuation: CheckedContinuation<T, Never>) in
-            queue.async { continuation.resume(returning: hop.body()) }
+    func run<T>(_ body: @escaping @Sendable () -> T) async -> T {
+        await withCheckedContinuation { (continuation: CheckedContinuation<T, Never>) in
+            queue.async { continuation.resume(returning: body()) }
         }
     }
     

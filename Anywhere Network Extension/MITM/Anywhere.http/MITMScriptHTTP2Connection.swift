@@ -42,8 +42,8 @@ nonisolated final class MITMScriptHTTP2Connection: Multiplexer, Sendable {
 
     private static let streamReceiveWindow = 4 * 1024 * 1024
     private static let connectionReceiveWindow = 16 * 1024 * 1024
-    private static let maxFrameSize: UInt32 = 16_384
-    private static let headerTableSize: UInt32 = 65_536
+    static let maxFrameSize: UInt32 = 16_384
+    private static let headerTableSize: UInt32 = 4_096
     private static let maxHeaderListSize = 262_144
     private static let ownMaxConcurrentStreams: UInt32 = 32
 
@@ -51,6 +51,7 @@ nonisolated final class MITMScriptHTTP2Connection: Multiplexer, Sendable {
     private static let priorityFlag: UInt8 = 0x20
     private static let connectionPreface = Data("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".utf8)
     private static let maxReceiveBufferSize = 2 * 1024 * 1024
+    private static let maxPendingControlSends = 256
 
     // MARK: Origin
 
@@ -85,6 +86,8 @@ nonisolated final class MITMScriptHTTP2Connection: Multiplexer, Sendable {
 
         var negotiatedHTTP1 = false
 
+        var pendingControlSends = 0
+
         var rootTask: Task<Void, Never>?
 
         var hpackDecoder = HPACKDecoder()
@@ -100,9 +103,13 @@ nonisolated final class MITMScriptHTTP2Connection: Multiplexer, Sendable {
 
     // MARK: Init
 
-    init(host: String, port: UInt16, insecure: Bool,
-         onClose: (@Sendable (MITMScriptHTTP2Connection) -> Void)? = nil,
-         onNegotiatedHTTP1: (@Sendable () -> Void)? = nil) {
+    init(
+        host: String,
+        port: UInt16,
+        insecure: Bool,
+        onClose: (@Sendable (MITMScriptHTTP2Connection) -> Void)? = nil,
+        onNegotiatedHTTP1: (@Sendable () -> Void)? = nil
+    ) {
         self.host = host
         self.port = port
         self.insecure = insecure
@@ -202,9 +209,12 @@ nonisolated final class MITMScriptHTTP2Connection: Multiplexer, Sendable {
         enum Start { case rejected(Error); case go(MITMScriptHTTP2Stream) }
         let outcome: Start = state.withLock { state in
             if state.reserved > 0 { state.reserved -= 1 }
-            guard state.phase != .closed else {
-                return .rejected(state.negotiatedHTTP1 ? AnywhereError.mitm(.needsHTTP1Fallback)
-                                                       : AnywhereError.proxy(.http2, .connectionClosed(detail: "connection closed")))
+            guard state.phase != .closed, state.phase != .goingAway else {
+                if state.negotiatedHTTP1 {
+                    return .rejected(AnywhereError.mitm(.needsHTTP1Fallback))
+                } else {
+                    return .rejected(AnywhereError.proxy(.http2, .connectionClosed(detail: "connection closed")))
+                }
             }
             let sid = state.nextStreamID
             state.nextStreamID &+= 2
@@ -226,6 +236,9 @@ nonisolated final class MITMScriptHTTP2Connection: Multiplexer, Sendable {
         case .rejected(let error):
             responseSignal.finish(throwing: error)
         case .go(let stream):
+            responseSignal.onTermination = { [weak stream] termination in
+                if case .cancelled = termination { stream?.cancelByConsumer() }
+            }
             startStreamJobs(for: stream)
         }
         for try await response in responseStream { return response }
@@ -665,6 +678,7 @@ nonisolated final class MITMScriptHTTP2Connection: Multiplexer, Sendable {
                 return
             case .park:
                 await parkForFlow(stream: stream)
+                try Task.checkCancellation()
             case .send(let frame, let nextOffset, let isLast, let transport):
                 try await transport.send(frame)
                 if isLast { return }
@@ -719,10 +733,19 @@ nonisolated final class MITMScriptHTTP2Connection: Multiplexer, Sendable {
     }
 
     private func sendFrame(_ frame: HTTP2Frame, on transport: ProxyConnection) {
+        let flooded: Bool = state.withLock { state in
+            state.pendingControlSends += 1
+            return state.pendingControlSends > Self.maxPendingControlSends
+        }
+        guard !flooded else {
+            connectionError("more than \(Self.maxPendingControlSends) control frames awaiting send (PING/SETTINGS flood)")
+            return
+        }
         spawn(.controlSend(frame.serialized, transport: transport))
     }
 
     private func runControlSend(_ data: Data, on transport: ProxyConnection) async {
+        defer { state.withLock { $0.pendingControlSends -= 1 } }
         do { try await transport.send(data) }
         catch { logger.debug("[MITMScriptHTTP2] control frame send failed: \(AnywhereError.describe(error))") }
     }

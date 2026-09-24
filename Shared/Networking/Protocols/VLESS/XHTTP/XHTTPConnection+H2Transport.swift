@@ -137,9 +137,7 @@ extension XHTTPConnection {
             case Self.h2FrameWindowUpdate:
                 state.withLock { state in
                     if frame.payload.count >= 4 {
-                        let windowIncrementRaw = frame.payload.prefix(4).withUnsafeBytes {
-                            $0.load(as: UInt32.self).bigEndian
-                        }
+                        let windowIncrementRaw = H2Framing.readUInt32(frame.payload)
                         let increment = Int(windowIncrementRaw & 0x7FFFFFFF)
                         if frame.streamId == 0 {
                             state.h2PeerConnectionWindow += increment
@@ -223,6 +221,7 @@ extension XHTTPConnection {
                 throw AnywhereError.proxy(.xhttp, .connectionClosed(detail: nil))
             case .park:
                 await parkForH2Flow { state in min(state.h2PeerConnectionWindow, state.h2PeerStreamSendWindow) > 0 }
+                try Task.checkCancellation()
             case .built(let frames, let nextOffset):
                 do {
                     try await download.send(frames)
@@ -280,6 +279,7 @@ extension XHTTPConnection {
             let totalSent = window - windowRemaining
             state.h2PeerConnectionWindow -= totalSent
             let perStreamRemaining = streamWindow - totalSent
+            if currentOffset < data.count { state.h2PacketStreamWindows[streamId] = perStreamRemaining }
             return .withBody(outbound: outbound, streamId: streamId, nextOffset: currentOffset, maxSize: maxSize, streamWindow: perStreamRemaining)
         }
 
@@ -319,10 +319,11 @@ extension XHTTPConnection {
         }
         var currentOffset = offset
         var currentStreamWindow = streamWindow
+        defer { state.withLock { _ = $0.h2PacketStreamWindows.removeValue(forKey: streamId) } }
         while currentOffset < data.count {
             let step: BuildStep = state.withLock { state in
                 if state.phase != .live { return .closed }
-                let effectiveStreamWindow = state.h2PacketStreamWindows.removeValue(forKey: streamId) ?? currentStreamWindow
+                let effectiveStreamWindow = state.h2PacketStreamWindows[streamId] ?? currentStreamWindow
                 let window = min(state.h2PeerConnectionWindow, effectiveStreamWindow)
                 guard window > 0 else {
                     state.h2PacketStreamWindows[streamId] = effectiveStreamWindow
@@ -345,6 +346,7 @@ extension XHTTPConnection {
                 let totalSent = window - windowRemaining
                 state.h2PeerConnectionWindow -= totalSent
                 let newStreamWindow = effectiveStreamWindow - totalSent
+                state.h2PacketStreamWindows[streamId] = newStreamWindow
                 return .built(frames: frames, nextOffset: current, streamWindow: newStreamWindow)
             }
 
@@ -353,6 +355,7 @@ extension XHTTPConnection {
                 throw AnywhereError.proxy(.xhttp, .connectionClosed(detail: nil))
             case .park:
                 await parkForH2Flow { state in min(state.h2PeerConnectionWindow, state.h2PacketStreamWindows[streamId] ?? currentStreamWindow) > 0 }
+                try Task.checkCancellation()
             case .built(let frames, let nextOffset, let newStreamWindow):
                 do {
                     try await download.send(frames)
@@ -465,9 +468,7 @@ extension XHTTPConnection {
             case Self.h2FrameWindowUpdate:
                 state.withLock { state in
                     if frame.payload.count >= 4 {
-                        let raw = frame.payload.prefix(4).withUnsafeBytes {
-                            $0.load(as: UInt32.self).bigEndian
-                        }
+                        let raw = H2Framing.readUInt32(frame.payload)
                         let increment = Int(raw & 0x7FFFFFFF)
                         if frame.streamId == 0 {
                             state.h2PeerConnectionWindow += increment
@@ -516,35 +517,35 @@ extension XHTTPConnection {
         case .combined:
             switch mode {
             case .streamOne:
-                let stream = shared.openStream()
+                let headers = encodeH2RequestHeaders(method: "POST", includeMeta: false)
+                let (stream, headersSent) = shared.openStream(headerBlock: headers, endStream: false)
                 state.withLock { $0.sharedH2Download = stream }
                 xmuxLease?.noteRequest()
-                let headers = encodeH2RequestHeaders(method: "POST", includeMeta: false)
-                try await stream.sendHeaders(headers, endStream: false)
+                try await headersSent.value()
             case .streamUp:
                 try await setupSharedH2Download(shared)
                 guard let shared = sharedH2 else { throw AnywhereError.proxy(.xhttp, .connectionClosed(detail: nil)) }
                 try await openSharedH2Upload(shared)
-            default: // packet-up (and .auto already resolved)
+            default:
                 try await setupSharedH2Download(shared)
             }
         }
     }
 
     private func setupSharedH2Download(_ shared: XHTTPH2Multiplexer) async throws {
-        let stream = shared.openStream()
+        let headers = encodeH2RequestHeaders(method: "GET", includeMeta: true)
+        let (stream, headersSent) = shared.openStream(headerBlock: headers, endStream: true)
         state.withLock { $0.sharedH2Download = stream }
         xmuxLease?.noteRequest()
-        let headers = encodeH2RequestHeaders(method: "GET", includeMeta: true)
-        try await stream.sendHeaders(headers, endStream: true)
+        try await headersSent.value()
     }
 
     private func openSharedH2Upload(_ shared: XHTTPH2Multiplexer) async throws {
-        let stream = shared.openStream()
+        let headers = encodeH2UploadHeaders(seq: nil)
+        let (stream, headersSent) = shared.openStream(headerBlock: headers, endStream: false)
         state.withLock { $0.sharedH2Upload = stream }
         xmuxLease?.noteRequest()
-        let headers = encodeH2UploadHeaders(seq: nil)
-        try await stream.sendHeaders(headers, endStream: false)
+        try await headersSent.value()
         stream.drainResponse()
     }
 
@@ -557,25 +558,18 @@ extension XHTTPConnection {
         let bodyInHeaders = !dataFields.isEmpty
         let bodyLength = bodyInHeaders ? 0 : data.count
         let headers = encodeH2UploadHeaders(seq: seq, contentLength: bodyLength, uplinkData: dataFields)
-        let stream = shared.openStream()
+        let headersOnly = bodyInHeaders || data.isEmpty
+        let (stream, headersSent) = shared.openStream(headerBlock: headers, endStream: headersOnly)
 
-        if bodyInHeaders || data.isEmpty {
-            do {
-                try await stream.sendHeaders(headers, endStream: true)
-            } catch {
-                stream.close()
-                throw error
-            }
-            stream.drainResponse()
-        } else {
-            do {
-                try await stream.sendHeaders(headers, endStream: false)
+        do {
+            try await headersSent.value()
+            if !headersOnly {
                 try await stream.sendData(data, endStream: true)
-            } catch {
-                stream.close()
-                throw error
             }
-            stream.drainResponse()
+        } catch {
+            stream.close()
+            throw error
         }
+        stream.drainResponse()
     }
 }

@@ -37,18 +37,15 @@ nonisolated enum XHTTPPaddingMethod: String, Codable, Equatable, Hashable {
     case tokenish
 }
 
-/// A `from`/`to` integer range; a single value when `from == to`.
 nonisolated struct XHTTPXMUXMultiplexerRange: Codable, Equatable, Hashable {
     var from: Int
     var to: Int
 
     static let zero = XHTTPXMUXMultiplexerRange(from: 0, to: 0)
     var isZero: Bool { from == 0 && to == 0 }
-
-    /// Random value in `[from, to)` (upper bound exclusive); `to <= from` collapses to `from`.
+    
     func random() -> Int { to <= from ? from : Int.random(in: from..<to) }
-
-    /// Parses an int, `{"from":a,"to":b}` object, `"a-b"`/`"a"` string, or nil → `.zero`.
+    
     static func parse(_ value: Any?) -> XHTTPXMUXMultiplexerRange {
         switch value {
         case let i as Int:
@@ -70,24 +67,16 @@ nonisolated struct XHTTPXMUXMultiplexerRange: Codable, Equatable, Hashable {
             return .zero
         }
     }
-
-    /// JSON form for export: a bare int when `from == to`, else `"from-to"`.
+    
     var jsonValue: Any { from == to ? from : "\(from)-\(to)" }
 }
 
-/// Connection-pool sizing and rotation for XHTTP. Ranges are `.zero` when unset (0 = no limit).
 nonisolated struct XHTTPXMUXMultiplexerConfiguration: Codable, Equatable, Hashable {
-    /// Max concurrent XHTTP sessions multiplexed over one connection (0 = unlimited).
     var maxConcurrency: XHTTPXMUXMultiplexerRange
-    /// Underlying connections opened per destination before existing ones are reused (0 = unlimited).
     var maxConnections: XHTTPXMUXMultiplexerRange
-    /// Max times a connection is handed to a new session before retirement (0 = unlimited).
     var cMaxReuseTimes: XHTTPXMUXMultiplexerRange
-    /// Max HTTP requests over a connection before retirement (0 = unlimited).
     var hMaxRequestTimes: XHTTPXMUXMultiplexerRange
-    /// Max wall-clock lifetime of a connection, seconds (0 = unlimited).
     var hMaxReusableSecs: XHTTPXMUXMultiplexerRange
-    /// HTTP/2 & HTTP/3 keep-alive period, seconds (0 = default, <0 = disabled).
     var hKeepAlivePeriod: Int
 
     static let disabled = XHTTPXMUXMultiplexerConfiguration(
@@ -103,14 +92,12 @@ nonisolated struct XHTTPXMUXMultiplexerConfiguration: Codable, Equatable, Hashab
         hMaxReusableSecs: XHTTPXMUXMultiplexerRange(from: 1800, to: 3000),
         hKeepAlivePeriod: 0
     )
-
-    /// True when any field departs from its unset default, so pooling should engage.
+    
     var isEnabled: Bool {
         !(maxConcurrency.isZero && maxConnections.isZero && cMaxReuseTimes.isZero
           && hMaxRequestTimes.isZero && hMaxReusableSecs.isZero && hKeepAlivePeriod == 0)
     }
-
-    /// Parses an `xmux` JSON object (each range as int / `{from,to}` / `"a-b"`).
+    
     static func parse(from json: [String: Any]) -> XHTTPXMUXMultiplexerConfiguration {
         XHTTPXMUXMultiplexerConfiguration(
             maxConcurrency: XHTTPXMUXMultiplexerRange.parse(json["maxConcurrency"]),
@@ -121,8 +108,7 @@ nonisolated struct XHTTPXMUXMultiplexerConfiguration: Codable, Equatable, Hashab
             hKeepAlivePeriod: (json["hKeepAlivePeriod"] as? Int) ?? 0
         )
     }
-
-    /// JSON object for the `extra`/`xhttpSettings` blob, emitting only non-zero fields.
+    
     var jsonObject: [String: Any] {
         var json: [String: Any] = [:]
         if !maxConcurrency.isZero { json["maxConcurrency"] = maxConcurrency.jsonValue }
@@ -135,57 +121,42 @@ nonisolated struct XHTTPXMUXMultiplexerConfiguration: Codable, Equatable, Hashab
     }
 }
 
-/// XHTTP transport settings; advanced fields come from the `extra` JSON blob in VLESS share links.
 nonisolated struct XHTTPConfiguration: Codable, Equatable, Hashable {
     let host: String
     let path: String
     let mode: XHTTPMode
     let headers: [String: String]
-    /// When false, adds `Content-Type: application/grpc` header.
     let noGRPCHeader: Bool
     let scMaxEachPostBytes: Int
     let scMinPostsIntervalMs: Int
-
-    // X-Padding settings (from extra)
+    
     let xPaddingBytesFrom: Int
     let xPaddingBytesTo: Int
-    /// When false, uses Referer-based padding instead.
     let xPaddingObfsMode: Bool
     let xPaddingKey: String
     let xPaddingHeader: String
     let xPaddingPlacement: XHTTPPlacement
     let xPaddingMethod: XHTTPPaddingMethod
-
-    // Uplink settings (from extra)
+    
     let uplinkHTTPMethod: String
-
-    // Session/seq placement (from extra)
+    
     let sessionIDPlacement: XHTTPPlacement
-    /// Auto-determined by placement if empty.
     let sessionIDKey: String
     let seqPlacement: XHTTPPlacement
-    /// Auto-determined by placement if empty.
     let seqKey: String
-
-    // Session ID generation (from extra)
+    
     let sessionIDTable: String
-    /// Length range (half-open from/to); 0 → random UUID.
     let sessionIDLengthFrom: Int
     let sessionIDLengthTo: Int
-
-    // Uplink data placement (from extra)
+    
     let uplinkDataPlacement: XHTTPPlacement
     let uplinkDataKey: String
-    /// 0 = no chunking.
     let uplinkChunkSize: Int
-
-    /// Boxed to break the value-type recursion through `XHTTPDownloadSettings.xhttp`.
+    
     private let _downloadSettings: XHTTPDownloadSettingsBox?
-
-    /// `nil` when up/download are not detached.
+    
     var downloadSettings: XHTTPDownloadSettings? { _downloadSettings?.value }
-
-    /// Connection-pool/rotation settings (`xmux`); `nil` → default per-stream behavior.
+    
     let xmux: XHTTPXMUXMultiplexerConfiguration?
 
     init(
@@ -304,8 +275,7 @@ nonisolated struct XHTTPConfiguration: Codable, Equatable, Hashable {
         }
         return p
     }
-
-    /// Query string extracted from path (the part after "?").
+    
     var normalizedQuery: String {
         let parts = path.split(separator: "?", maxSplits: 1)
         if parts.count > 1 {
@@ -313,8 +283,7 @@ nonisolated struct XHTTPConfiguration: Codable, Equatable, Hashable {
         }
         return ""
     }
-
-    /// Auto-determined by placement when unset.
+    
     var normalizedSessionIDKey: String {
         if !sessionIDKey.isEmpty { return sessionIDKey }
         switch sessionIDPlacement {
@@ -323,8 +292,7 @@ nonisolated struct XHTTPConfiguration: Codable, Equatable, Hashable {
         default: return ""
         }
     }
-
-    /// Auto-determined by placement when unset (distinct default from the session key).
+    
     var normalizedSeqKey: String {
         if !seqKey.isEmpty { return seqKey }
         switch seqPlacement {
@@ -370,7 +338,8 @@ nonisolated struct XHTTPConfiguration: Codable, Equatable, Hashable {
     }
 
     func generatePadding() -> String {
-        let length = Int.random(in: xPaddingBytesFrom...max(xPaddingBytesFrom, xPaddingBytesTo))
+        let lower = max(0, xPaddingBytesFrom)
+        let length = Int.random(in: lower...max(lower, xPaddingBytesTo))
         switch xPaddingMethod {
         case .repeatX:
             return String(repeating: "X", count: length)
@@ -378,8 +347,7 @@ nonisolated struct XHTTPConfiguration: Codable, Equatable, Hashable {
             return generateTokenishPadding(targetBytes: length)
         }
     }
-
-    /// Generates base62 "tokenish" padding whose *Huffman-encoded* length is within ±2 bytes of `targetBytes`.
+    
     private func generateTokenishPadding(targetBytes: Int) -> String {
         let charset = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
         let n = max(1, Int(ceil(Double(targetBytes) / 0.8)))
@@ -399,9 +367,7 @@ nonisolated struct XHTTPConfiguration: Codable, Equatable, Hashable {
         }
         return String(characters)
     }
-
-    /// Parses XHTTP parameters from VLESS URL query parameters. Host fallback order:
-    /// `host` param → TLS SNI → Reality serverName → server address.
+    
     static func parse(from params: [String: String], serverAddress: String, tlsServerName: String? = nil, realityServerName: String? = nil) -> XHTTPConfiguration? {
         let host = params["host"] ?? tlsServerName ?? realityServerName ?? serverAddress
         let path = (params["path"] ?? "/").removingPercentEncoding ?? "/"
@@ -419,9 +385,7 @@ nonisolated struct XHTTPConfiguration: Codable, Equatable, Hashable {
         let downloadSettings = parseDownloadSettings(from: extra["downloadSettings"] as? [String: Any], parentExtra: extra)
         return build(host: host, path: path, mode: mode, extra: extra, downloadSettings: downloadSettings)
     }
-
-    /// Builds from an `xhttpSettings`/`splithttpSettings` JSON object (advanced
-    /// fields are top-level, not under `extra`); never produces its own nested detach.
+    
     static func parse(fromJSON json: [String: Any], serverAddress: String, tlsServerName: String? = nil, realityServerName: String? = nil) -> XHTTPConfiguration {
         let host = (json["host"] as? String) ?? tlsServerName ?? realityServerName ?? serverAddress
         let path = (json["path"] as? String) ?? "/"
@@ -514,8 +478,7 @@ nonisolated struct XHTTPConfiguration: Codable, Equatable, Hashable {
         let fp = (json["fingerprint"] as? String).flatMap { TLSFingerprint(rawValue: $0) } ?? .default
         return RealityConfiguration(serverName: serverName, publicKey: publicKey, shortId: shortId, fingerprint: fp)
     }
-
-    /// Core builder shared by URL-param and JSON parsing; reads advanced fields from `extra`.
+    
     private static func build(host: String, path: String, mode: XHTTPMode, extra: [String: Any], downloadSettings: XHTTPDownloadSettings?) -> XHTTPConfiguration {
         var headers: [String: String] = [:]
         if let extraHeaders = extra["headers"] as? [String: String] {
@@ -523,27 +486,21 @@ nonisolated struct XHTTPConfiguration: Codable, Equatable, Hashable {
         }
 
         let noGRPCHeader = extra["noGRPCHeader"] as? Bool ?? false
-
-        // scMaxEachPostBytes can be an int or {"from":N,"to":N}; use "to" as the max.
+        
         var scMaxEachPostBytes = 1_000_000
         if let range = extra["scMaxEachPostBytes"] as? [String: Any] {
             scMaxEachPostBytes = range["to"] as? Int ?? 1_000_000
         } else if let value = extra["scMaxEachPostBytes"] as? Int {
             scMaxEachPostBytes = value
         }
-
-        // scMinPostsIntervalMs likewise.
+        
         var scMinPostsIntervalMs = 30
         if let range = extra["scMinPostsIntervalMs"] as? [String: Any] {
             scMinPostsIntervalMs = range["to"] as? Int ?? 30
         } else if let value = extra["scMinPostsIntervalMs"] as? Int {
             scMinPostsIntervalMs = value
         }
-
-        // xPaddingBytes may be an int, {"from":a,"to":b}, or an "a-b" string (the form used in
-        // subscription URLs). The server validates each request's padding length against this
-        // range, so an unparsed "a-b" silently falling back to the default makes a fraction of
-        // packet-up POSTs land out of range and get a 400 (intermittent connection failures).
+        
         var xPaddingFrom = 100
         var xPaddingTo = 1000
         let xPaddingRange = XHTTPXMUXMultiplexerRange.parse(extra["xPaddingBytes"])
@@ -559,8 +516,7 @@ nonisolated struct XHTTPConfiguration: Codable, Equatable, Hashable {
         let xPaddingMethod = XHTTPPaddingMethod(rawValue: extra["xPaddingMethod"] as? String ?? "repeat-x") ?? .repeatX
 
         let uplinkHTTPMethod = extra["uplinkHTTPMethod"] as? String ?? "POST"
-
-        // Xray-core renamed session* → sessionID*; accept both spellings, prefer the new one.
+        
         let sessionIDPlacementRaw = (extra["sessionIDPlacement"] ?? extra["sessionPlacement"]) as? String ?? "path"
         let sessionIDPlacement = XHTTPPlacement(rawValue: sessionIDPlacementRaw) ?? .path
         let sessionIDKey = (extra["sessionIDKey"] ?? extra["sessionKey"]) as? String ?? ""
@@ -685,16 +641,12 @@ nonisolated extension XHTTPConfiguration {
 
 // MARK: - XHTTP Download Settings (up/download detach)
 
-/// Separate download source: the GET leg dials this server while the POST leg
-/// stays on the main node, correlated by a shared session ID.
 nonisolated struct XHTTPDownloadSettings: Codable, Equatable, Hashable {
     let serverAddress: String
     let serverPort: UInt16
-    /// `"none"`, `"tls"`, or `"reality"`.
     let security: String
     let tls: TLSConfiguration?
     let reality: RealityConfiguration?
-    /// Never carries its own nested `downloadSettings`.
     let xhttp: XHTTPConfiguration
 
     init(serverAddress: String, serverPort: UInt16, security: String,
@@ -707,8 +659,7 @@ nonisolated struct XHTTPDownloadSettings: Codable, Equatable, Hashable {
         self.reality = reality
         self.xhttp = xhttp
     }
-
-    /// The download leg's security layer reconstructed from the flattened fields.
+    
     var xraySecurityLayer: XraySecurityLayer {
         switch security {
         case "tls":     return tls.map(XraySecurityLayer.tls) ?? .none
@@ -721,7 +672,6 @@ nonisolated struct XHTTPDownloadSettings: Codable, Equatable, Hashable {
 // MARK: - URL Export
 
 nonisolated extension XHTTPConfiguration {
-    /// XHTTP `xhttpSettings` object for a `vless://` URL's `extra` blob; emits only non-default fields.
     var urlSettingsJSON: [String: Any] {
         var j: [String: Any] = ["host": host]
         if path != "/" { j["path"] = path }
@@ -730,16 +680,13 @@ nonisolated extension XHTTPConfiguration {
         if noGRPCHeader { j["noGRPCHeader"] = true }
         return j
     }
-
-    /// The URL-encoded `extra` query value for a `vless://` link: every non-default advanced
-    /// field plus the up/download detach blob, in the JSON shape `parse(from:)` reads back.
+    
     var urlExtraParam: String? {
         var extra = advancedExtraJSON
         if let downloadSettings { extra["downloadSettings"] = downloadSettings.urlDownloadJSON }
         guard !extra.isEmpty,
               let data = try? JSONSerialization.data(withJSONObject: extra, options: [.sortedKeys]),
               let json = String(data: data, encoding: .utf8) else { return nil }
-        // Escape only the characters that would break query-param splitting (& = + #).
         var allowed = CharacterSet.urlQueryAllowed
         allowed.remove(charactersIn: "&=+#")
         return json.addingPercentEncoding(withAllowedCharacters: allowed) ?? json
@@ -747,9 +694,6 @@ nonisolated extension XHTTPConfiguration {
 }
 
 nonisolated extension XHTTPDownloadSettings {
-    /// The `downloadSettings` object embedded in a `vless://` URL's `extra` blob. The download
-    /// leg carries only its server identity; its advanced fields are inherited from the parent
-    /// `extra` on import (the legs must share session/seq/padding placement to correlate).
     var urlDownloadJSON: [String: Any] {
         var dl: [String: Any] = [
             "address": serverAddress,
@@ -777,8 +721,6 @@ nonisolated extension XHTTPDownloadSettings {
     }
 }
 
-/// Immutable reference box breaking the value-type recursion; conformances
-/// delegate to the wrapped value, so the box never appears in JSON or affects equality.
 nonisolated final class XHTTPDownloadSettingsBox: Codable, Equatable, Hashable, Sendable {
     let value: XHTTPDownloadSettings
 

@@ -147,7 +147,9 @@ nonisolated private final class NowhereMultiplexerPool: Sendable {
                 do {
                     multiplexer = try await waitForBuild(pending)
                 } catch {
-                    if !Task.isCancelled {
+                    if Task.isCancelled {
+                        adoptWhenBuilt(pending)
+                    } else {
                         clearPendingBuild(identifier: pending.identifier)
                     }
                     throw error
@@ -159,11 +161,36 @@ nonisolated private final class NowhereMultiplexerPool: Sendable {
                     throw AnywhereError.transport(.terminated)
                 }
                 if adoption.inserted {
-                    multiplexer.installCloseHandler { [weak self, weak multiplexer] in
-                        guard let multiplexer else { return }
-                        self?.pool.removeMultiplexer(multiplexer, key: Self.bucket)
-                    }
+                    installRemoval(on: multiplexer)
                 }
+            }
+        }
+    }
+
+    private func installRemoval(on multiplexer: NowhereMultiplexer) {
+        multiplexer.installCloseHandler { [weak self, weak multiplexer] in
+            guard let multiplexer else { return }
+            self?.pool.removeMultiplexer(multiplexer, key: Self.bucket)
+        }
+    }
+    
+    private func adoptWhenBuilt(_ pending: PendingBuild) {
+        Task { [weak self] in
+            guard let multiplexer = try? await pending.task.value else {
+                self?.clearPendingBuild(identifier: pending.identifier)
+                return
+            }
+            guard let self else {
+                multiplexer.close()
+                return
+            }
+            let adoption = self.adopt(multiplexer, from: pending)
+            guard adoption.accepted else {
+                multiplexer.close()
+                return
+            }
+            if adoption.inserted {
+                self.installRemoval(on: multiplexer)
             }
         }
     }

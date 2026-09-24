@@ -223,9 +223,14 @@ extension XHTTPConnection {
                 throw AnywhereError.proxy(.xhttp, .handshakeFailed(detail: "Empty response from server"))
             }
 
-            let headerData: Data? = state.withLock { state in
+            let headerData: Data? = try state.withLock { state in
                 state.headerBuffer.append(data)
-                guard let range = state.headerBuffer.range(of: headerEnd) else { return nil }
+                guard let range = state.headerBuffer.range(of: headerEnd) else {
+                    if state.headerBuffer.count > Self.maxResponseHeaderSize {
+                        throw AnywhereError.proxy(.xhttp, .protocolViolation(detail: "response headers too large"))
+                    }
+                    return nil
+                }
                 let headerData = Data(state.headerBuffer[state.headerBuffer.startIndex..<range.lowerBound])
                 let leftover = Data(state.headerBuffer[range.upperBound...])
                 state.headerBuffer.removeAll()

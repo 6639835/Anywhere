@@ -11,9 +11,11 @@ import Network
 nonisolated final class LegacyUDPEngine: UDPTransportEngine, Sendable {
     private let connection: NWConnection
     private let queue = DispatchQueue(label: "com.argsment.Anywhere.UDPTransport", qos: .userInitiated)
+    private let stall = NWStallLatch()
 
     init(endpoint: NWEndpoint) {
         connection = NWConnection(to: endpoint, using: .udp)
+        stall.watch(connection)
         connection.start(queue: queue)
     }
 
@@ -21,13 +23,18 @@ nonisolated final class LegacyUDPEngine: UDPTransportEngine, Sendable {
         connection.cancel()
     }
 
+    func cancel() {
+        connection.cancel()
+    }
+
     func send(_ datagram: Data) async throws {
         let connection = connection
+        let stall = stall
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
                 connection.send(content: datagram, completion: .contentProcessed { error in
                     if let error {
-                        continuation.resume(throwing: error.legacyEngineError(operation: .send))
+                        continuation.resume(throwing: stall.failure(for: error, operation: .send))
                     } else {
                         continuation.resume()
                     }
@@ -40,11 +47,12 @@ nonisolated final class LegacyUDPEngine: UDPTransportEngine, Sendable {
 
     func receive() async throws -> Data {
         let connection = connection
+        let stall = stall
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, any Error>) in
                 connection.receiveMessage { content, _, _, error in
                     if let error {
-                        continuation.resume(throwing: error.legacyEngineError(operation: .receive))
+                        continuation.resume(throwing: stall.failure(for: error, operation: .receive))
                     } else {
                         continuation.resume(returning: content ?? Data())
                     }

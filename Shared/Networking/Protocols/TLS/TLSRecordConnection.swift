@@ -52,6 +52,10 @@ nonisolated final class TLSRecordConnection: Sendable {
     func chainedSend(_ body: @escaping @Sendable () async throws -> Void) async throws {
         try await sendChain.run(body)
     }
+    
+    func enqueueChainedSend(_ body: @escaping @Sendable () async throws -> Void) {
+        _ = sendChain.submit(body)
+    }
 
     let tlsVersion: UInt16
     
@@ -111,6 +115,8 @@ nonisolated final class TLSRecordConnection: Sendable {
         var buffer: Data
         var keyUpdateResponsePending = false
         var receivedCloseNotify = false
+        var pendingError: Error?
+        var pendingPostHandshake = Data()
     }
 
     private let receiveState = Mutex<ReceiveState>(ReceiveState(buffer: Data()))
@@ -243,7 +249,7 @@ nonisolated final class TLSRecordConnection: Sendable {
             }
 
             if needsKeyUpdateResponse {
-                await sendKeyUpdateResponseAndRekeyEgress()
+                enqueueKeyUpdateResponseAndRekeyEgress()
             }
 
             if let result = processed {
@@ -301,6 +307,10 @@ nonisolated final class TLSRecordConnection: Sendable {
     }
     
     private func processBuffer(_ state: inout ReceiveState) -> BufferResult? {
+        if let error = state.pendingError {
+            return .error(error)
+        }
+
         if state.receivedCloseNotify {
             return .closed
         }
@@ -397,6 +407,9 @@ nonisolated final class TLSRecordConnection: Sendable {
                 }
                 break
             } else {
+                if tlsVersion < 0x0304, contentType == TLSContentType.handshake {
+                    _ = nextIngressState()
+                }
                 consumed += totalLen
             }
         }
@@ -413,6 +426,8 @@ nonisolated final class TLSRecordConnection: Sendable {
             if !batchedData.isEmpty {
                 if let pending = bytesPendingReplay {
                     state.buffer = pending
+                } else {
+                    state.pendingError = error
                 }
                 return .data(batchedData)
             }

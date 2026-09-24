@@ -117,11 +117,13 @@ nonisolated enum UDPPacket {
         let addrLen = isIPv6 ? 16 : 4
         guard srcIP.count == addrLen, dstIP.count == addrLen else { return nil }
         let udpLen = 8 + payload.count
-        guard udpLen <= 0xFFFF else { return nil }
+        guard udpLen <= 0xFFFF, isIPv6 || 20 + udpLen <= 0xFFFF else { return nil }
 
-        return isIPv6
-            ? buildV6(srcIP: srcIP, srcPort: srcPort, dstIP: dstIP, dstPort: dstPort, payload: payload, udpLen: udpLen)
-            : buildV4(srcIP: srcIP, srcPort: srcPort, dstIP: dstIP, dstPort: dstPort, payload: payload, udpLen: udpLen)
+        if isIPv6 {
+            return buildV6(srcIP: srcIP, srcPort: srcPort, dstIP: dstIP, dstPort: dstPort, payload: payload, udpLen: udpLen)
+        } else {
+            return buildV4(srcIP: srcIP, srcPort: srcPort, dstIP: dstIP, dstPort: dstPort, payload: payload, udpLen: udpLen)
+        }
     }
 
     private static func buildV4(

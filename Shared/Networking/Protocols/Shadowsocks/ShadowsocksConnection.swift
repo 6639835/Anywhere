@@ -12,20 +12,15 @@ nonisolated private let logger = AnywhereLogger(category: "ShadowsocksConnection
 
 // MARK: - ShadowsocksConnection
 
-/// Address header is prepended to the first send, encrypted as part of the AEAD stream.
 nonisolated final class ShadowsocksConnection: ProxyConnection {
     private let inner: ProxyConnection
-
-    /// Send-path state: the one-shot address header plus the AEAD writer (salt, nonce).
-    /// The connection is what crosses concurrency domains; one Mutex makes the header
-    /// hand-off and the writer's nonce advance a single atomic step per send.
+    
     private struct SendState {
         var addressHeader: Data?
         var writer: ShadowsocksAEADWriter
     }
     private let sendState: Mutex<SendState>
-
-    /// Receive-path AEAD + reassembly state, guarded at the sharing boundary.
+    
     private let reader: Mutex<ShadowsocksAEADReader>
 
     private let sendChain = SerialSender()
@@ -98,19 +93,19 @@ nonisolated final class ShadowsocksUDPConnection: ProxyConnection {
     func sendRaw(_ data: Data) async throws {
         let packet = ShadowsocksProtocol.encodeUDPPacket(host: dstHost, port: dstPort, payload: data)
         let encrypted = try ShadowsocksUDPCrypto.encrypt(cipher: cipher, masterKey: masterKey, payload: packet)
-        // `inner.send` so any UoT framing wraps each encrypted datagram.
         try await inner.send(encrypted)
     }
 
     func receiveRaw() async throws -> Data? {
-        guard let data = try await inner.receive(), !data.isEmpty else {
-            return nil
+        while true {
+            guard let data = try await inner.receive() else {
+                return nil
+            }
+            if let decrypted = try? ShadowsocksUDPCrypto.decrypt(cipher: cipher, masterKey: masterKey, data: data),
+               let parsed = ShadowsocksProtocol.decodeUDPPacket(data: decrypted) {
+                return parsed.payload
+            }
         }
-        let decrypted = try ShadowsocksUDPCrypto.decrypt(cipher: cipher, masterKey: masterKey, data: data)
-        guard let parsed = ShadowsocksProtocol.decodeUDPPacket(data: decrypted) else {
-            throw AnywhereError.proxy(.shadowsocks, .protocolViolation(detail: "invalid address header"))
-        }
-        return parsed.payload
     }
 
     func cancel() {

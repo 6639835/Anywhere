@@ -8,13 +8,9 @@
 import Foundation
 
 nonisolated struct HTTPRequestSniffer {
-
     enum State: Equatable {
         case needMore
-        /// Not a well-formed HTTP/1.x request (or the head exceeded the cap).
         case notHTTP
-        /// Parsed head. `authority` is the lowercased host (no port/userinfo) from the
-        /// request-target or `Host` header; nil if neither is present.
         case found(authority: String?)
     }
 
@@ -78,8 +74,7 @@ nonisolated struct HTTPRequestSniffer {
         let method: String
         let target: TargetForm
     }
-
-    /// Validates `METHOD SP request-target SP HTTP/1.(0|1)` and classifies the request-target form.
+    
     private static func parseRequestLine(_ line: String) -> ParsedRequestLine? {
         let version: String
         if line.hasSuffix(" HTTP/1.1") {
@@ -103,7 +98,6 @@ nonisolated struct HTTPRequestSniffer {
         if target == "*" || target.hasPrefix("/") {
             return ParsedRequestLine(method: method, target: .originOrAsterisk)
         }
-        // absolute-form: take the authority between "://" and the first "/".
         if let schemeRange = target.range(of: "://") {
             let afterScheme = target[schemeRange.upperBound...]
             let authority = afterScheme.prefix { $0 != "/" }
@@ -112,30 +106,31 @@ nonisolated struct HTTPRequestSniffer {
         }
         return nil
     }
-
-    /// Reduces an `authority` (`[userinfo@]host[:port]`) to a bare lowercased host suitable for
-    /// policy matching. IPv6 literals keep their bracket-stripped form.
+    
     private static func normalizeAuthorityHost(_ authority: String) -> String? {
         var value = Substring(authority)
         if let at = value.lastIndex(of: "@") {
             value = value[value.index(after: at)...]
         }
         guard !value.isEmpty else { return nil }
-        // IPv6 literal: [::1]:port — host is inside the brackets (handled before the ":port" strip).
         if value.first == "[" {
             guard let close = value.firstIndex(of: "]") else { return nil }
             let host = value[value.index(after: value.startIndex)..<close]
-            return host.isEmpty ? nil : host.lowercased()
+            return boundedHost(host)
         }
         if let colon = value.firstIndex(of: ":") {
             value = value[value.startIndex..<colon]
         }
-        return value.isEmpty ? nil : value.lowercased()
+        return boundedHost(value)
+    }
+    
+    private static func boundedHost(_ host: Substring) -> String? {
+        let lowered = host.lowercased()
+        return lowered.isEmpty || lowered.utf8.count > 253 ? nil : lowered
     }
 
     // MARK: - Headers
-
-    /// Returns the first `Host` header value in the head region `[start, end)`.
+    
     private func hostHeader(from start: Int, to end: Int) -> String? {
         var cursor = start
         while cursor < end {
@@ -154,13 +149,11 @@ nonisolated struct HTTPRequestSniffer {
     }
 
     // MARK: - Byte helpers
-
-    /// RFC 9110 §9.1 method tokens are `tchar`; in practice every method begins with an ASCII letter.
+    
     private static func isMethodStartByte(_ byte: UInt8) -> Bool {
         (0x41...0x5A).contains(byte) || (0x61...0x7A).contains(byte)
     }
-
-    /// Index of the first byte of the next CRLF at or after `from`, or nil.
+    
     private func indexOfCRLF(from: Int) -> Int? {
         guard from >= 0, buffer.count >= 2 else { return nil }
         var i = from
@@ -170,8 +163,7 @@ nonisolated struct HTTPRequestSniffer {
         }
         return nil
     }
-
-    /// Index of the first byte of the CRLF that terminates the head (the empty line).
+    
     private func indexOfDoubleCRLF() -> Int? {
         guard buffer.count >= 4 else { return nil }
         var i = 0

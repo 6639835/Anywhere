@@ -365,6 +365,9 @@ actor MITMHTTP1Stream {
     }
 
     private func flushSynthAfterResponse(into output: inout Data) {
+        if direction == .httpResponse {
+            pendingSynthAfterCurrentResponse.append(requestLog.closeHTTP1Response())
+        }
         if !pendingSynthAfterCurrentResponse.isEmpty {
             output.append(pendingSynthAfterCurrentResponse)
             pendingSynthAfterCurrentResponse.removeAll(keepingCapacity: false)
@@ -453,6 +456,13 @@ actor MITMHTTP1Stream {
         }
         headScanned = 0
         let headEnd = terminator.upperBound
+        guard headEnd <= Self.maxHeadBytes else {
+            logger.warning("HTTP/1 \(host): head exceeded \(Self.maxHeadBytes) B; closing the connection without forwarding")
+            rxBuffer.removeAll(keepingCapacity: false)
+            mode = .draining
+            delegate?.http1StreamFatalClose(self)
+            return false
+        }
         let headData = rxBuffer.subdata(in: 0..<headEnd)
 
         let parsed: ParsedHead
@@ -860,7 +870,12 @@ actor MITMHTTP1Stream {
                 )
         }
         guard expectsContinue else { return headers }
-        pendingClientBytes.append(serializeHead(startLine: "HTTP/1.1 100 Continue", headers: []))
+        let interim = serializeHead(startLine: "HTTP/1.1 100 Continue", headers: [])
+        if requestLog.isHTTP1QueueEmpty {
+            pendingClientBytes.append(interim)
+        } else {
+            requestLog.attachSynthAfterLastHTTP1(interim)
+        }
         return headers.filter { !ASCII.equalsIgnoringCase($0.name, "expect") }
     }
 
@@ -888,7 +903,12 @@ actor MITMHTTP1Stream {
         guard !rxBuffer.isEmpty else { return false }
         let result: ChunkedReader.ForwardResult
         if let sink = responseIRSink {
-            result = reader.consumeForwardIR(&rxBuffer) { sink.http1ResponseBody($0, endStream: false) }
+            var slices: [Data] = []
+            result = reader.consumeForwardIR(&rxBuffer) { slices.append($0) }
+            for slice in slices {
+                sink.http1ResponseBody(slice, endStream: false)
+                if phase == .torn { return false }
+            }
         } else {
             result = reader.consumeForward(&rxBuffer, into: &output)
         }
@@ -1258,8 +1278,8 @@ actor MITMHTTP1Stream {
 
     fileprivate static func parseHexSize(_ data: Data) -> Int? {
         guard let raw = String(data: data, encoding: .isoLatin1) else { return nil }
-        let head = raw.split(separator: ";", maxSplits: 1).first.map(String.init) ?? raw
-        let trimmed = head.trimmingCharacters(in: CharacterSet.whitespaces)
+        let head = raw.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? raw
+        let trimmed = head.trimmingCharacters(in: Self.fieldValueOWS)
         guard !trimmed.isEmpty, trimmed.allSatisfy({ $0.isHexDigit && $0.isASCII }),
               let size = Int(trimmed, radix: 16), size >= 0 else { return nil }
         return size
@@ -1573,9 +1593,7 @@ actor MITMHTTP1Stream {
             guard HTTPHeader.isValidName(name) else { return .smuggling }
             if Self.containsCRorLF(value) { return .smuggling }
             if ASCII.equalsIgnoringCase(name, "content-length") {
-                contentLengthValues.append(
-                    value.trimmingCharacters(in: CharacterSet.whitespaces)
-                )
+                contentLengthValues.append(value)
             } else if ASCII.equalsIgnoringCase(name, "transfer-encoding") {
                 transferEncodingValues.append(value)
             }
@@ -1828,7 +1846,7 @@ actor MITMHTTP1Stream {
             }
         }
         if let rawContentLength = contentLength {
-            let trimmed = rawContentLength.trimmingCharacters(in: CharacterSet.whitespaces)
+            let trimmed = rawContentLength.trimmingCharacters(in: Self.fieldValueOWS)
             if Self.isCleanContentLength(trimmed) {
                 let length = Int(trimmed) ?? Int.max
                 return length == 0 ? .none : .contentLength(length)

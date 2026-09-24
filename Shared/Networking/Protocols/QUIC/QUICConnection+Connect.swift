@@ -106,7 +106,10 @@ extension QUICConnection {
 
         var sealStream: AsyncStream<Data>?
         if obfuscator != nil {
-            let (stream, continuation) = AsyncStream.makeStream(of: Data.self)
+            let (stream, continuation) = AsyncStream.makeStream(
+                of: Data.self,
+                bufferingPolicy: .bufferingOldest(Self.maxQueuedTransportDatagrams)
+            )
             transportSealContinuation = continuation
             sealStream = stream
         }

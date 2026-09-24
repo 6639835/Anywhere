@@ -39,6 +39,7 @@ nonisolated final class XHTTPH3RequestStream: Sendable {
         var responseStatus: Int?
         var frameBuffer = Data()
         var frameBufferOffset = 0
+        var uncreditedBytes = 0
     }
     private let state = Mutex(State())
 
@@ -137,7 +138,12 @@ nonisolated final class XHTTPH3RequestStream: Sendable {
             closeAndShutdown()
             return nil
         }
-        ackQuicBytes(data.count)
+        let credit: Int = state.withLock { state in
+            let credit = min(state.uncreditedBytes, data.count)
+            state.uncreditedBytes -= credit
+            return credit
+        }
+        ackQuicBytes(credit)
         return data
     }
 
@@ -152,13 +158,14 @@ nonisolated final class XHTTPH3RequestStream: Sendable {
     }
 
     func close() {
-        enum Outcome { case alreadyClosed, closed(sid: Int64?, code: HTTP3ErrorCode) }
+        enum Outcome { case alreadyClosed, closed(sid: Int64?, code: HTTP3ErrorCode, owed: Int) }
         let outcome: Outcome = state.withLock { state in
             let code: HTTP3ErrorCode = state.headersReceived ? .noError : .requestCancelled
             guard state.transition(to: .closed) else { return .alreadyClosed }
-            return .closed(sid: state.quicStreamID, code: code)
+            return .closed(sid: state.quicStreamID, code: code, owed: Self.takeOwedCreditLocked(&state))
         }
-        guard case .closed(let sid, let code) = outcome else { return }
+        guard case .closed(let sid, let code, let owed) = outcome else { return }
+        ackQuicBytes(owed)
         detachFromMultiplexer(sid: sid, code: code)
         responseSignal.finish(throwing: AnywhereError.proxy(.http3, .streamClosed))
         inbox.finish()
@@ -203,7 +210,10 @@ nonisolated final class XHTTPH3RequestStream: Sendable {
         var outcome: HeadersOutcome = .none
 
         state.withLock { state in
-            guard state.phase != .closed else { return }
+            guard state.phase != .closed else {
+                controlBytes = data.count
+                return
+            }
             state.frameBuffer.append(data)
             while state.frameBufferOffset < state.frameBuffer.count {
                 guard let (frame, consumed) = HTTP3Framer.parseFrame(
@@ -223,6 +233,7 @@ nonisolated final class XHTTPH3RequestStream: Sendable {
                         controlBytes += consumed
                     } else {
                         controlBytes += consumed - frame.payload.count
+                        state.uncreditedBytes += frame.payload.count
                         deliveries.append(Data(frame.payload))
                     }
                 } else {
@@ -287,27 +298,37 @@ nonisolated final class XHTTPH3RequestStream: Sendable {
     }
 
     private func handleStreamError(_ error: Error) {
-        enum Outcome { case alreadyClosed, closed(sid: Int64?) }
+        enum Outcome { case alreadyClosed, closed(sid: Int64?, owed: Int) }
         let outcome: Outcome = state.withLock { state in
             guard state.transition(to: .closed) else { return .alreadyClosed }
-            return .closed(sid: state.quicStreamID)
+            return .closed(sid: state.quicStreamID, owed: Self.takeOwedCreditLocked(&state))
         }
-        guard case .closed(let sid) = outcome else { return }
+        guard case .closed(let sid, let owed) = outcome else { return }
+        ackQuicBytes(owed)
         detachFromMultiplexer(sid: sid, code: .internalError)
         responseSignal.finish(throwing: error)
         inbox.finish(throwing: error)
     }
 
     private func closeAndShutdown(code: HTTP3ErrorCode = .noError) {
-        enum Outcome { case alreadyClosed, closed(sid: Int64?) }
+        enum Outcome { case alreadyClosed, closed(sid: Int64?, owed: Int) }
         let outcome: Outcome = state.withLock { state in
             guard state.transition(to: .closed) else { return .alreadyClosed }
-            return .closed(sid: state.quicStreamID)
+            return .closed(sid: state.quicStreamID, owed: Self.takeOwedCreditLocked(&state))
         }
-        guard case .closed(let sid) = outcome else { return }
+        guard case .closed(let sid, let owed) = outcome else { return }
+        ackQuicBytes(owed)
         detachFromMultiplexer(sid: sid, code: code)
         responseSignal.finish(throwing: AnywhereError.proxy(.http3, .streamClosed))
         inbox.finish()
+    }
+    
+    private static func takeOwedCreditLocked(_ state: inout State) -> Int {
+        let owed = state.uncreditedBytes + (state.frameBuffer.count - state.frameBufferOffset)
+        state.uncreditedBytes = 0
+        state.frameBuffer = Data()
+        state.frameBufferOffset = 0
+        return owed
     }
 
     private func detachFromMultiplexer(sid: Int64?, code: HTTP3ErrorCode) {

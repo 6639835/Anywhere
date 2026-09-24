@@ -11,7 +11,6 @@ import Synchronization
 nonisolated private let logger = AnywhereLogger(category: "MITMScriptDiskStore")
 
 nonisolated final class MITMScriptDiskStore: Sendable {
-
     static let shared = MITMScriptDiskStore()
 
     static let maxBytesPerScope: Int = 1 * 1024 * 1024
@@ -53,7 +52,7 @@ nonisolated final class MITMScriptDiskStore: Sendable {
     }
 
     func set(scope: UUID, key: String, value: Data) throws(AnywhereError) {
-        ensureLoaded(scope)
+        guard ensureLoaded(scope) else { throw AnywhereError.mitm(.scriptStoreWriteFailed) }
         struct Reservation {
             let serialized: Data
             let committedBucket: [String: Data]
@@ -72,8 +71,11 @@ nonisolated final class MITMScriptDiskStore: Sendable {
             if state.totalBytes - oldSize + serialized.count > Self.maxTotalBytes {
                 throw AnywhereError.mitm(.scriptStoreCapacityExceeded)
             }
-            return Reservation(serialized: serialized, committedBucket: bucket,
-                               generation: state.bumpCommitGeneration(for: scope))
+            return Reservation(
+                serialized: serialized,
+                committedBucket: bucket,
+                generation: state.bumpCommitGeneration(for: scope)
+            )
         }
         guard writeToDisk(scope: scope, data: reservation.serialized) else {
             throw AnywhereError.mitm(.scriptStoreWriteFailed)
@@ -87,7 +89,7 @@ nonisolated final class MITMScriptDiskStore: Sendable {
     }
 
     func delete(scope: UUID, key: String) {
-        ensureLoaded(scope)
+        guard ensureLoaded(scope) else { return }
         enum Pending {
             case nothing
             case removeFile(generation: UInt64)
@@ -176,23 +178,28 @@ nonisolated final class MITMScriptDiskStore: Sendable {
             state.totalBytes = state.fileSizes.values.reduce(0, +)
         }
     }
-
-    private func ensureLoaded(_ scope: UUID) {
+    
+    @discardableResult
+    private func ensureLoaded(_ scope: UUID) -> Bool {
         ensureScanned()
         let needsLoad = state.withLock { !$0.loaded.contains(scope) }
-        guard needsLoad else { return }
+        guard needsLoad else { return true }
 
         var bucket: [String: Data] = [:]
-        if let url = fileURL(scope), let data = coordinatedRead(url) {
-            do {
-                let object = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
-                if let dictionary = object as? [String: Data] {
-                    bucket = dictionary
-                } else {
-                    logger.report(AnywhereError.store(.corrupted(.scripts, detail: "\(scope): unexpected plist shape")))
+        if let url = fileURL(scope) {
+            let read = coordinatedRead(url)
+            if read.failed { return false }
+            if let data = read.data {
+                do {
+                    let object = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
+                    if let dictionary = object as? [String: Data] {
+                        bucket = dictionary
+                    } else {
+                        logger.report(AnywhereError.store(.corrupted(.scripts, detail: "\(scope): unexpected plist shape")))
+                    }
+                } catch {
+                    logger.report(AnywhereError.store(.corrupted(.scripts, detail: "\(scope): \(AnywhereError.describe(error))")))
                 }
-            } catch {
-                logger.report(AnywhereError.store(.corrupted(.scripts, detail: "\(scope): \(AnywhereError.describe(error))")))
             }
         }
 
@@ -201,9 +208,10 @@ nonisolated final class MITMScriptDiskStore: Sendable {
             state.loaded.insert(scope)
             state.cache[scope] = bucket
         }
+        return true
     }
-
-    private func coordinatedRead(_ url: URL) -> Data? {
+    
+    private func coordinatedRead(_ url: URL) -> (data: Data?, failed: Bool) {
         let coordinator = NSFileCoordinator(filePresenter: nil)
         var coordError: NSError?
         var result: Data?
@@ -216,10 +224,13 @@ nonisolated final class MITMScriptDiskStore: Sendable {
             }
         }
         if let error = coordError ?? (readError as NSError?), !Self.isFileNotFound(error) {
-            logger.report("[MITM][JS] Anywhere.store(onDisk): read failed for \(url.lastPathComponent)",
-                          error: AnywhereError.store(.loadFailed(.scripts, underlying: error)))
+            logger.report(
+                "[MITM][JS] Anywhere.store(onDisk): read failed for \(url.lastPathComponent)",
+                error: AnywhereError.store(.loadFailed(.scripts, underlying: error))
+            )
+            return (nil, true)
         }
-        return result
+        return (result, false)
     }
 
     private static func isFileNotFound(_ error: NSError) -> Bool {
@@ -233,9 +244,6 @@ nonisolated final class MITMScriptDiskStore: Sendable {
         if !fileManager.fileExists(atPath: directory.path) {
             try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         }
-        // Coordinate across App Group processes so concurrent writers can't clobber each other's
-        // whole-bucket plist. FirstUserAuthentication file protection lets the background NE
-        // read/write after the first unlock even while the device is later locked.
         let coordinator = NSFileCoordinator(filePresenter: nil)
         var coordError: NSError?
         var writeError: Error?

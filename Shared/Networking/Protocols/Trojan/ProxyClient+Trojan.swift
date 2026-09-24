@@ -40,8 +40,11 @@ extension ProxyClient {
                 destinationHost: request.host,
                 destinationPort: request.port
             )
-            if let initialData = request.initialData, !initialData.isEmpty {
-                try await trojan.send(initialData)
+            do {
+                try await trojan.send(request.initialData ?? Data())
+            } catch {
+                trojan.cancel()
+                throw error
             }
             return trojan
         case .udp:

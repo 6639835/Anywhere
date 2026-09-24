@@ -29,7 +29,8 @@ extension ProxyClient {
         let factory = SudokuConnectionFactory(
             configuration: configuration,
             initialTunnel: tunnel,
-            directDialHost: directDialHost
+            directDialHost: directDialHost,
+            parentChain: parentChain
         )
 
         do {

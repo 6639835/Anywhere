@@ -22,15 +22,19 @@ nonisolated final class VLESSVisionUDPMultiplexerPool: Sendable {
         port: UInt16,
         globalID: Data?
     ) async throws -> VLESSVisionUDPStream {
+        guard host.utf8.count <= 255 else {
+            throw AnywhereError.proxy(.vless, .protocolViolation(detail: "destination host exceeds 255 bytes"))
+        }
         let multiplexer: VLESSVisionUDPMultiplexer = multiplexers.withLock { multiplexers in
             multiplexers.removeAll { $0.isClosed }
-
-            if let reusable = multiplexers.first(where: { !$0.isFull }) {
+            
+            if globalID == nil, let reusable = multiplexers.first(where: { !$0.isFull }) {
                 return reusable
             }
             
             let created = VLESSVisionUDPMultiplexer(
                 configuration: configuration,
+                reservedForXUDP: globalID != nil,
                 onClose: { [weak self] multiplexer in
                     self?.multiplexers.withLock { $0.removeAll { $0 === multiplexer } }
                 }

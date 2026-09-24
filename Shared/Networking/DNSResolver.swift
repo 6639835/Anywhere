@@ -24,19 +24,19 @@ nonisolated final class DNSResolver: Sendable {
 
     private struct CacheEntry: ExpiringEntry {
         let ips: [String]
-        let expiry: CFAbsoluteTime
+        let expiry: TimeInterval
     }
 
     private struct ECHCacheEntry: ExpiringEntry {
         let config: Data?
-        let expiry: CFAbsoluteTime
+        let expiry: TimeInterval
     }
     
     private struct State {
         var cache: [String: CacheEntry] = [:]
-        var inFlight: [String: Task<[String], Never>] = [:]
+        var inFlight: [String: LookupBroadcast<[String]>] = [:]
         var echCache: [String: ECHCacheEntry] = [:]
-        var echInFlight: [String: Task<Data?, Never>] = [:]
+        var echInFlight: [String: LookupBroadcast<Data?>] = [:]
         var generation: UInt64 = 0
         var hostUpstream: DNSUpstream = .system
         var echUpstream: DNSUpstream = .system
@@ -60,7 +60,7 @@ nonisolated final class DNSResolver: Sendable {
 
         enum Role {
             case cacheHit([String])
-            case join(Task<[String], Never>)
+            case join(LookupBroadcast<[String]>)
         }
 
         let (role, cached): (Role, [String]?) = state.withLock { state in
@@ -74,28 +74,31 @@ nonisolated final class DNSResolver: Sendable {
 
             let entry = state.cache[key]
             let cached = entry?.ips
-            let expired = entry.map { $0.expiry <= CFAbsoluteTimeGetCurrent() } ?? false
+            let expired = entry.map { $0.expiry <= MonotonicClock.now } ?? false
 
             if let cached, !expired, !forceFresh { return (.cacheHit(cached), cached) }
             if let existing = state.inFlight[key] { return (.join(existing), cached) }
 
             let scheduledGeneration = state.generation
-            let task = Task<[String], Never> { [self] in
-                await lookup(key: key, host: bare, upstream: upstream, scheduledGeneration: scheduledGeneration)
+            let pending = LookupBroadcast<[String]>()
+            Task { [self] in
+                let ips = await lookup(key: key, host: bare, upstream: upstream,
+                                       scheduledGeneration: scheduledGeneration, pending: pending)
+                pending.publish(ips)
             }
-            state.inFlight[key] = task
-            return (.join(task), cached)
+            state.inFlight[key] = pending
+            return (.join(pending), cached)
         }
 
         let ips: [String]
         switch role {
         case .cacheHit(let hit): return hit
-        case .join(let task): ips = await task.value
+        case .join(let pending): ips = await pending.value(orOnCancel: [])
         }
 
         guard !ips.isEmpty else {
             if let cached { return cached }
-            logger.warning("[DNS] Resolution failed for \(bare)")
+            if !Task.isCancelled { logger.warning("[DNS] Resolution failed for \(bare)") }
             return []
         }
 
@@ -136,7 +139,13 @@ nonisolated final class DNSResolver: Sendable {
 
     // MARK: - Internal
     
-    private func lookup(key: String, host: String, upstream: DNSUpstream, scheduledGeneration: UInt64) async -> [String] {
+    private func lookup(
+        key: String,
+        host: String,
+        upstream: DNSUpstream,
+        scheduledGeneration: UInt64,
+        pending: LookupBroadcast<[String]>
+    ) async -> [String] {
         var resolved: [String] = []
         if !upstream.isSystem {
             resolved = (try? await DNSUpstreamClient.resolve(host, via: upstream)) ?? []
@@ -148,7 +157,7 @@ nonisolated final class DNSResolver: Sendable {
             resolved = await Self.blockingBridge.run { Self.resolveViaGetaddrinfo(host) }
         }
         state.withLock { state in
-            state.inFlight.removeValue(forKey: key)
+            if state.inFlight[key] === pending { state.inFlight.removeValue(forKey: key) }
             guard scheduledGeneration == state.generation, !resolved.isEmpty else { return }
             Self.store(&state, key: key, ips: resolved)
         }
@@ -156,12 +165,12 @@ nonisolated final class DNSResolver: Sendable {
     }
 
     private static func store(_ state: inout State, key: String, ips: [String]) {
-        let now = CFAbsoluteTimeGetCurrent()
+        let now = MonotonicClock.now
         state.cache[key] = CacheEntry(ips: ips, expiry: now + Self.defaultTTL)
         compact(&state.cache, now: now)
     }
     
-    private static func compact<Entry: ExpiringEntry>(_ cache: inout [String: Entry], now: CFAbsoluteTime) {
+    private static func compact<Entry: ExpiringEntry>(_ cache: inout [String: Entry], now: TimeInterval) {
         if cache.contains(where: { $0.value.expiry <= now }) {
             cache = cache.filter { $0.value.expiry > now }
         }
@@ -236,10 +245,10 @@ nonisolated final class DNSResolver: Sendable {
         if bare.isEmpty || Self.isIPAddress(bare) { return nil }
 
         let key = Self.cacheKey(for: bare)
-        let now = CFAbsoluteTimeGetCurrent()
+        let now = MonotonicClock.now
         let upstream = AWCore.getECHDNSUpstream()
 
-        enum Action { case cached(Data?); case join(Task<Data?, Never>) }
+        enum Action { case cached(Data?); case join(LookupBroadcast<Data?>) }
         let action: Action = state.withLock { state in
             if state.echUpstream != upstream {
                 state.echUpstream = upstream
@@ -256,22 +265,26 @@ nonisolated final class DNSResolver: Sendable {
                 return .join(existing)          // await the in-flight leader
             }
             let scheduledGeneration = state.generation
-            let task = Task<Data?, Never> { [self] in
-                await lookupECH(bare: bare, key: key, upstream: upstream, scheduledGeneration: scheduledGeneration)
+            let pending = LookupBroadcast<Data?>()
+            Task { [self] in
+                let config = await lookupECH(bare: bare, key: key, upstream: upstream,
+                                             scheduledGeneration: scheduledGeneration, pending: pending)
+                pending.publish(config)
             }
-            state.echInFlight[key] = task
-            return .join(task)
+            state.echInFlight[key] = pending
+            return .join(pending)
         }
 
         switch action {
         case .cached(let config):
             return config
-        case .join(let task):
-            return await task.value
+        case .join(let pending):
+            return await pending.value(orOnCancel: nil)
         }
     }
     
-    private func lookupECH(bare: String, key: String, upstream: DNSUpstream, scheduledGeneration: UInt64) async -> Data? {
+    private func lookupECH(bare: String, key: String, upstream: DNSUpstream, scheduledGeneration: UInt64,
+                           pending: LookupBroadcast<Data?>) async -> Data? {
         let result: (payload: Data, ttl: UInt32)?
         if upstream.isSystem {
             result = await Self.blockingBridge.queryFirstRecord(
@@ -290,12 +303,12 @@ nonisolated final class DNSResolver: Sendable {
         }
 
         return state.withLock { state in
-            state.echInFlight[key] = nil
+            if state.echInFlight[key] === pending { state.echInFlight.removeValue(forKey: key) }
             guard scheduledGeneration == state.generation else { return nil }
             let ttl: TimeInterval = result
                 .map { min(max(TimeInterval($0.ttl), Self.echMinTTL), Self.echMaxTTL) }
                 ?? Self.echNegativeTTL
-            let insertedAt = CFAbsoluteTimeGetCurrent()
+            let insertedAt = MonotonicClock.now
             state.echCache[key] = ECHCacheEntry(config: result?.payload,
                                                 expiry: insertedAt + ttl)
             Self.compact(&state.echCache, now: insertedAt)
@@ -305,7 +318,62 @@ nonisolated final class DNSResolver: Sendable {
 }
 
 private nonisolated protocol ExpiringEntry {
-    var expiry: CFAbsoluteTime { get }
+    var expiry: TimeInterval { get }
+}
+
+private nonisolated final class LookupBroadcast<Value: Sendable>: Sendable {
+    private enum Enrollment: Sendable {
+        case published(Value)
+        case enrolled
+    }
+
+    private struct State {
+        var value: Value?
+        var waiters: [UInt64: CheckedContinuation<Value, Never>] = [:]
+        var nextWaiterID: UInt64 = 0
+    }
+
+    private let state = Mutex(State())
+
+    func publish(_ value: Value) {
+        let waiters: [CheckedContinuation<Value, Never>] = state.withLock { state in
+            state.value = value
+            let drained = Array(state.waiters.values)
+            state.waiters.removeAll()
+            return drained
+        }
+        for waiter in waiters { waiter.resume(returning: value) }
+    }
+
+    func value(orOnCancel fallback: Value) async -> Value {
+        let waiterID: UInt64 = state.withLock { state in
+            state.nextWaiterID &+= 1
+            return state.nextWaiterID
+        }
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Value, Never>) in
+                let enrollment: Enrollment = state.withLock { state in
+                    if let value = state.value { return .published(value) }
+                    state.waiters[waiterID] = continuation
+                    return .enrolled
+                }
+                switch enrollment {
+                case .published(let value):
+                    continuation.resume(returning: value)
+                case .enrolled:
+                    // `onCancel` may already have run and found nothing to withdraw.
+                    if Task.isCancelled { withdraw(waiterID, fallback: fallback) }
+                }
+            }
+        } onCancel: {
+            withdraw(waiterID, fallback: fallback)
+        }
+    }
+
+    private func withdraw(_ waiterID: UInt64, fallback: Value) {
+        let waiter = state.withLock { $0.waiters.removeValue(forKey: waiterID) }
+        waiter?.resume(returning: fallback)
+    }
 }
 
 private nonisolated func echParseSVCBECH(_ rdata: Data) -> Data? {
@@ -314,20 +382,20 @@ private nonisolated func echParseSVCBECH(_ rdata: Data) -> Data? {
         guard let base = bytes.baseAddress else { return nil }
         let count = bytes.count
         var i = 0
-        guard count >= 2 else { return nil }                  // SvcPriority
+        guard count >= 2 else { return nil }
         i += 2
-        while i < count {                                     // TargetName labels
+        while i < count {
             let labelLen = Int(bytes[i]); i += 1
             if labelLen == 0 { break }
-            if labelLen & 0xC0 != 0 { return nil }             // no compression in SVCB
+            if labelLen & 0xC0 != 0 { return nil }
             i += labelLen
             if i > count { return nil }
         }
-        while i + 4 <= count {                                // SvcParams
+        while i + 4 <= count {
             let paramKey = Int(bytes[i]) << 8 | Int(bytes[i + 1]); i += 2
             let valueLen = Int(bytes[i]) << 8 | Int(bytes[i + 1]); i += 2
             guard i + valueLen <= count else { return nil }
-            if paramKey == 5 {                                 // SvcParamKey "ech"
+            if paramKey == 5 {
                 guard valueLen > 0 else { return nil }
                 return Data(bytes: base + i, count: valueLen)
             }

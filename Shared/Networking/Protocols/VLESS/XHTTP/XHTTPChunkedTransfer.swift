@@ -33,6 +33,8 @@ nonisolated struct ChunkedTransferDecoder {
     var isMalformed: Bool { phase == .malformed }
 
     private static let maxSizeLineLength = 1024
+    
+    private static let maxChunkSize: UInt64 = 2_097_152
 
     mutating func feed(_ data: Data) {
         buffer.append(data)
@@ -55,7 +57,8 @@ nonisolated struct ChunkedTransferDecoder {
         }
 
         let sizeStr = sizeLine.split(separator: ";", maxSplits: 1).first.map(String.init) ?? sizeLine
-        guard let chunkSize = UInt64(sizeStr.trimmingCharacters(in: .whitespaces), radix: 16) else {
+        guard let chunkSize = UInt64(sizeStr.trimmingCharacters(in: .whitespaces), radix: 16),
+              chunkSize <= Self.maxChunkSize else {
             Phase.transition(&phase, to: .malformed)
             return nil
         }

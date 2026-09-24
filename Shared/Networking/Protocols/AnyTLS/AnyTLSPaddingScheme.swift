@@ -9,22 +9,15 @@ import Foundation
 import CommonCrypto
 import Security
 
-/// Parsed AnyTLS padding scheme: `key=value` lines where numeric keys map to
-/// comma-separated `min-max` ranges or the literal `c` (checkpoint).
 nonisolated final class AnyTLSPaddingScheme: Sendable {
-
-    /// Sentinel for the `c` (checkpoint) marker: break if no payload remains, else continue.
     static let checkMark: Int = -1
 
     let rawBytes: Data
-
-    /// MD5(rawBytes) hex (lowercase); sent in cmdSettings as `padding-md5=…`.
+    
     let md5Hex: String
-
-    /// Padding is applied to the first `stop` packets only (default: 8).
+    
     let stop: UInt32
-
-    /// `key → raw value string` (e.g. `"2" → "400-500,c,500-1000"`).
+    
     private let scheme: [String: String]
 
     private init(rawBytes: Data, md5Hex: String, stop: UInt32, scheme: [String: String]) {
@@ -33,8 +26,7 @@ nonisolated final class AnyTLSPaddingScheme: Sendable {
         self.stop = stop
         self.scheme = scheme
     }
-
-    /// Must match the server's default scheme byte-for-byte so the `padding-md5` check passes.
+    
     static let `default`: AnyTLSPaddingScheme = {
         let raw = Data("""
         stop=8
@@ -54,8 +46,7 @@ nonisolated final class AnyTLSPaddingScheme: Sendable {
             scheme: [:]
         )
     }()
-
-    /// Returns `nil` when `stop` is missing or non-numeric.
+    
     static func parse(_ raw: Data) -> AnyTLSPaddingScheme? {
         let map = AnyTLSProtocol.decodeStringMap(raw)
         guard let stopString = map["stop"], let stop = UInt32(stopString) else {
@@ -70,8 +61,7 @@ nonisolated final class AnyTLSPaddingScheme: Sendable {
             scheme: scheme
         )
     }
-
-    /// Schedule for `packet`: ranges resolved via CSPRNG, `c` becomes `checkMark`.
+    
     func generateRecordPayloadSizes(packet: UInt32) -> [Int] {
         guard let value = scheme[String(packet)] else { return [] }
         var out: [Int] = []
@@ -87,6 +77,8 @@ nonisolated final class AnyTLSPaddingScheme: Sendable {
                   var hi = Int(parts[1]) else { continue }
             if lo > hi { swap(&lo, &hi) }
             guard lo > 0, hi > 0 else { continue }
+            hi = min(hi, Int(UInt16.max))
+            lo = min(lo, hi)
             if lo == hi {
                 out.append(lo)
             } else {
@@ -95,8 +87,7 @@ nonisolated final class AnyTLSPaddingScheme: Sendable {
         }
         return out
     }
-
-    /// CSPRNG draw in the half-open interval `[lo, hi)`.
+    
     private static func randomInRange(lo: Int, hi: Int) -> Int {
         let span = UInt64(hi - lo)
         guard span > 0 else { return lo }
@@ -105,13 +96,11 @@ nonisolated final class AnyTLSPaddingScheme: Sendable {
             SecRandomCopyBytes(kSecRandomDefault, buffer.count, buffer.baseAddress!)
         }
         if status != errSecSuccess {
-            // Fallback keeps padding non-deterministic without aborting the connection.
             raw = UInt64(arc4random()) << 32 | UInt64(arc4random())
         }
         return lo + Int(raw % span)
     }
-
-    /// MD5 is required for wire compatibility (`padding-md5` check), not security.
+    
     private static func md5Hex(of data: Data) -> String {
         var digest = [UInt8](repeating: 0, count: Int(CC_MD5_DIGEST_LENGTH))
         data.withUnsafeBytes { pointer in

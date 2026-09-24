@@ -355,7 +355,7 @@ nonisolated extension ProxyClient {
         let port = endpoint.port
         let security = endpoint.security
         let serverName = endpoint.serverName
-        let key = "h2|\(host)|\(port)|\(serverName)"
+        let key = "h2|\(host)|\(port)|\(serverName)|\(Self.xmuxSecurityKey(security))"
         let manager = XHTTPXMUXMultiplexerRegistry.shared.manager(key: key, config: xmux) {
             { () async -> XHTTPXMUXMultiplexerPoolable? in
                 try? await ProxyClient.dialSharedH2(host: host, port: port, security: security)
@@ -368,6 +368,17 @@ nonisolated extension ProxyClient {
         connection.configureRole(role)
         connection.configureXMUXLease(lease)
         return connection
+    }
+    
+    private static func xmuxSecurityKey(_ security: XraySecurityLayer) -> String {
+        switch security {
+        case .none:
+            return "none"
+        case .tls(let tls):
+            return "tls|\(tls.fingerprint.rawValue)|\(tls.echEnabled)|\(tls.echConfig ?? "")"
+        case .reality(let reality):
+            return "reality|\(reality.fingerprint.rawValue)|\(reality.publicKey.base64EncodedString())|\(reality.shortId.base64EncodedString())"
+        }
     }
 
     private static func dialSharedH2(
@@ -532,7 +543,7 @@ nonisolated extension ProxyClient {
             let serverName = endpoint.serverName
             var uploadXMUX = xmux
             uploadXMUX.maxConcurrency = XHTTPXMUXMultiplexerRange(from: 1, to: 1)
-            let key = "h1up|\(host)|\(port)|\(serverName)"
+            let key = "h1up|\(host)|\(port)|\(serverName)|\(Self.xmuxSecurityKey(sec))"
             let manager = XHTTPXMUXMultiplexerRegistry.shared.manager(key: key, config: uploadXMUX) {
                 { () async -> XHTTPXMUXMultiplexerPoolable? in
                     await ProxyClient.dialH1UploadConnection(host: host, port: port, security: sec)

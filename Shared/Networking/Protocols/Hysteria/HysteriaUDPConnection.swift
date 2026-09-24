@@ -39,7 +39,7 @@ actor HysteriaUDPConnection {
     }
     private nonisolated let phase = Mutex<Phase>(.idle)
     
-    private let rawInbox = AsyncInbox<HysteriaProtocol.UDPMessage>()
+    private let rawInbox = AsyncInbox<HysteriaProtocol.UDPMessage>(capacity: 256)
     
     private struct DefragSlot {
         var fragments: [Data?]
@@ -49,7 +49,7 @@ actor HysteriaUDPConnection {
     }
     private var defragSlots: [UInt16: DefragSlot] = [:]
     private nonisolated static let defragSlotTTLNanos: UInt64 = 10 * 1_000_000_000
-    private nonisolated static let maxDefragSlots = 32
+    private nonisolated static let maxDefragSlots = 4
     
     private var nextPacketID: UInt16 = 1
 

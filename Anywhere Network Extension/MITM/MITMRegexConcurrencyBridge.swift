@@ -9,13 +9,8 @@ import Foundation
 import Synchronization
 
 nonisolated final class MITMRegexConcurrencyBridge: Sendable {
-
     static let shared = MITMRegexConcurrencyBridge()
-
-    /// Worker pool for uninterruptible evaluations. Concurrent, so independent evaluations
-    /// parallelize and an abandoned (pinned) worker can't head-of-line-block later ones.
-    /// Dispatch is the right tool precisely because a pinned worker must burn a queue thread —
-    /// not a cooperative-pool lane — while the hard-cap watchdog decides its fate.
+    
     private let queue = DispatchQueue(
         label: "com.argsment.Anywhere.MITMRegexConcurrencyBridge",
         qos: .userInitiated,
@@ -26,20 +21,13 @@ nonisolated final class MITMRegexConcurrencyBridge: Sendable {
         case completed(T)
         case timedOut
     }
-
-    /// Completion flag shared between the worker and the hard-cap watchdog: the worker
-    /// publishes `true` before signalling, so a watchdog that still reads `false` at the hard
-    /// cap has found a permanently pinned worker.
+    
     private final class DoneFlag: Sendable {
         let finished = Atomic<Bool>(false)
     }
 
-    // MARK: - Regex operations (the uninterruptible ICU work — kept inside this boundary)
-
-    /// Whether `regex` has an (unanchored) first match in `string`. Fail-closed on `.timedOut` is
-    /// the caller's decision. `onResolved` runs on the worker with the verdict — even for an
-    /// abandoned (timed-out) worker that finishes late — so the caller can memoize the result
-    /// without ever re-running the match itself.
+    // MARK: - Regex operations
+    
     func firstMatch(
         _ regex: NSRegularExpression,
         in string: String,
@@ -48,16 +36,19 @@ nonisolated final class MITMRegexConcurrencyBridge: Sendable {
         hardCapMessage: @escaping @Sendable () -> String,
         onResolved: (@Sendable (Bool) -> Void)? = nil
     ) async -> Outcome<Bool> {
-        await run(deadlineMillis: deadlineMillis, hardCapSeconds: hardCapSeconds, hardCapMessage: hardCapMessage) {
-            let range = NSRange(string.startIndex..., in: string)
-            let matched = regex.firstMatch(in: string, options: [], range: range) != nil
+        let abortAfterSeconds = Self.abortAfterSeconds(hardCapSeconds: hardCapSeconds)
+        return await run(deadlineMillis: deadlineMillis, hardCapSeconds: hardCapSeconds, hardCapMessage: hardCapMessage) {
+            let matched: Bool
+            switch Self.scanFirstMatch(regex, in: string, abortAfterSeconds: abortAfterSeconds) {
+            case .match: matched = true
+            case .noMatch: matched = false
+            case .aborted: return false
+            }
             onResolved?(matched)
             return matched
         }
     }
-
-    /// Capture groups of the first match (index 0 = whole match), or `nil` on no match. The match
-    /// and the group-range reads both run on the worker, so only value-typed strings escape.
+    
     func firstMatchCaptureGroups(
         _ regex: NSRegularExpression,
         in string: String,
@@ -65,16 +56,12 @@ nonisolated final class MITMRegexConcurrencyBridge: Sendable {
         hardCapSeconds: Int,
         hardCapMessage: @escaping @Sendable () -> String
     ) async -> Outcome<[String?]?> {
-        await run(deadlineMillis: deadlineMillis, hardCapSeconds: hardCapSeconds, hardCapMessage: hardCapMessage) {
-            Self.captureGroups(regex, in: string)
+        let abortAfterSeconds = Self.abortAfterSeconds(hardCapSeconds: hardCapSeconds)
+        return await run(deadlineMillis: deadlineMillis, hardCapSeconds: hardCapSeconds, hardCapMessage: hardCapMessage) {
+            Self.captureGroups(regex, in: string, abortAfterSeconds: abortAfterSeconds)
         }
     }
-
-    /// Applies `regex` substitution over `text`, replacing each match with `staticReplacement`
-    /// (when non-nil) or with `expand(match output)`. The substitution *traversal* is the
-    /// uninterruptible ICU work and stays inside this boundary; `expand` only builds a replacement
-    /// string from an already-computed match. `onResolved` runs on the worker after the traversal
-    /// (even if abandoned), for the caller's single-flight bookkeeping.
+    
     func applyingSubstitution(
         _ regex: Regex<AnyRegexOutput>,
         to text: String,
@@ -97,11 +84,36 @@ nonisolated final class MITMRegexConcurrencyBridge: Sendable {
         }
     }
 
-    /// Extracts the first match's groups (index 0 = whole match); a non-participating group is
-    /// `nil`, and `nil` overall means the pattern did not match. Runs on the worker.
-    private static func captureGroups(_ regex: NSRegularExpression, in string: String) -> [String?]? {
+    private enum ScanResult {
+        case match(NSTextCheckingResult)
+        case noMatch
+        case aborted
+    }
+    
+    private static func abortAfterSeconds(hardCapSeconds: Int) -> Int {
+        max(1, hardCapSeconds / 2)
+    }
+    
+    private static func scanFirstMatch(_ regex: NSRegularExpression, in string: String, abortAfterSeconds: Int) -> ScanResult {
         let range = NSRange(string.startIndex..., in: string)
-        guard let match = regex.firstMatch(in: string, options: [], range: range) else { return nil }
+        let abortAt = DispatchTime.now().uptimeNanoseconds + UInt64(abortAfterSeconds) * 1_000_000_000
+        var outcome = ScanResult.noMatch
+        regex.enumerateMatches(in: string, options: [.reportProgress], range: range) { result, _, stop in
+            if let result {
+                outcome = .match(result)
+                stop.pointee = true
+            } else if DispatchTime.now().uptimeNanoseconds >= abortAt {
+                outcome = .aborted
+                stop.pointee = true
+            }
+        }
+        return outcome
+    }
+    
+    private static func captureGroups(_ regex: NSRegularExpression, in string: String, abortAfterSeconds: Int) -> [String?]? {
+        guard case .match(let match) = scanFirstMatch(regex, in: string, abortAfterSeconds: abortAfterSeconds) else {
+            return nil
+        }
         var groups: [String?] = []
         groups.reserveCapacity(match.numberOfRanges)
         for i in 0..<match.numberOfRanges {
@@ -118,22 +130,13 @@ nonisolated final class MITMRegexConcurrencyBridge: Sendable {
     }
 
     // MARK: - Bounded worker
-
-    /// Runs `body` on the worker pool and suspends the caller until it completes or
-    /// `deadlineMillis` elapses. On timeout the worker is abandoned — the evaluation is
-    /// uninterruptible, so nothing can stop it — and a watchdog crashes the process
-    /// (`hardCapMessage`) if the worker still hasn't returned `hardCapSeconds` later.
-    ///
-    /// Cancellation of the calling task reads as `.timedOut` (the deadline sleep returns early);
-    /// the worker itself is unaffected either way.
+    
     private func run<T: Sendable>(
         deadlineMillis: Int,
         hardCapSeconds: Int,
         hardCapMessage: @escaping @Sendable () -> String,
         _ body: @escaping @Sendable () -> T
     ) async -> Outcome<T> {
-        // One-shot signal: the stream's iterator is cancellation-aware, so losing the race
-        // unblocks the caller immediately while the worker keeps spinning toward the hard cap.
         let (done, doneSignal) = AsyncStream.makeStream(of: T.self)
         let flag = DoneFlag()
         queue.async {

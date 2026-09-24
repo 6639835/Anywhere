@@ -288,20 +288,41 @@ actor MITMScriptEngine {
     }
 
     // MARK: - Script
+    
+    private final class CancelHandle: Sendable {
+        let state = Mutex<(runID: UInt64?, cancelled: Bool)>((runID: nil, cancelled: false))
+    }
 
     func applyAsync(
         _ message: Message,
         source: String
     ) async -> Outcome {
-        await JSCConcurrencyBridge.shared.runParked { (continuation: CheckedContinuation<Outcome, Never>) in
-            self.runApply(message, source: source, continuation: continuation)
+        let cancelHandle = CancelHandle()
+        return await withTaskCancellationHandler {
+            await JSCConcurrencyBridge.shared.runParked { (continuation: CheckedContinuation<Outcome, Never>) in
+                self.runApply(message, source: source, continuation: continuation, cancelHandle: cancelHandle)
+            }
+        } onCancel: {
+            JSCConcurrencyBridge.shared.enqueue { [self] in
+                self.assumeIsolated { $0.cancelRun(cancelHandle) }
+            }
         }
+    }
+
+    private func cancelRun(_ cancelHandle: CancelHandle) {
+        let runID = cancelHandle.state.withLock { state -> UInt64? in
+            state.cancelled = true
+            return state.runID
+        }
+        guard let runID, let run = liveRuns[runID], !run.delivered, let original = run.original else { return }
+        deliver(.modified(original), for: run)
     }
 
     private func runApply(
         _ message: Message,
         source: String,
-        continuation: CheckedContinuation<Outcome, Never>
+        continuation: CheckedContinuation<Outcome, Never>,
+        cancelHandle: CancelHandle
     ) {
         let bodyBytes = message.body.count
         let pinned = Self.suspendedBodyBytes()
@@ -323,20 +344,28 @@ actor MITMScriptEngine {
             deliver(.modified(message), for: run)
             return
         }
-        let contextValue = makeContextValue(message, in: run.context)
-        run.ctxValue = contextValue
-        let returned = runUserScript(source) { function.call(withArguments: [contextValue]) }
-        guard let returned, isThenable(returned, in: run.context) else {
-            let updated = readBack(message, from: contextValue, in: run.context)
-            deliver(finalize(run, original: message, updated: updated), for: run)
-            return
+        
+        runUserScript(source) { () -> Void in
+            let contextValue = makeContextValue(message, in: run.context)
+            run.ctxValue = contextValue
+            let returned = function.call(withArguments: [contextValue])
+            guard let returned, isThenable(returned, in: run.context) else {
+                let updated = readBack(message, from: contextValue, in: run.context)
+                deliver(finalize(run, original: message, updated: updated), for: run)
+                return
+            }
+            run.pinnedBodyBytes = bodyBytes
+            Self.addSuspendedBodyBytes(bodyBytes)
+            run.resultPromise = returned
+            liveRuns[run.id] = run
+            armWatchdog(for: run)
+            attachSettleHandlers(to: returned, for: run)
+            let cancelled = cancelHandle.state.withLock { state -> Bool in
+                state.runID = run.id
+                return state.cancelled
+            }
+            if cancelled { deliver(.modified(message), for: run) }
         }
-        run.pinnedBodyBytes = bodyBytes
-        Self.addSuspendedBodyBytes(bodyBytes)
-        run.resultPromise = returned
-        liveRuns[run.id] = run
-        armWatchdog(for: run)
-        attachSettleHandlers(to: returned, for: run)
     }
 
     private func attachSettleHandlers(to promise: JSValue, for run: ScriptRun) {
@@ -447,16 +476,17 @@ actor MITMScriptEngine {
         }
         run.directive = nil
         let context = run.context
-        let ctxArg = makeFrameContextValue(frameContext, frame: frame, in: run)
-        _ = runUserScript(source) { function.call(withArguments: [ctxArg]) }
-        let body: Data
-        if let bodyVal = ctxArg.objectForKeyedSubscript("body"),
-           let bytes = Self.bytesFromValue(bodyVal, in: context) {
-            body = bytes
-        } else {
-            body = frame
+        let body: Data = runUserScript(source) { () -> Data in
+            let ctxArg = makeFrameContextValue(frameContext, frame: frame, in: run)
+            _ = function.call(withArguments: [ctxArg])
+            var result = frame
+            if let bodyVal = ctxArg.objectForKeyedSubscript("body"),
+               let bytes = Self.bytesFromValue(bodyVal, in: context) {
+                result = bytes
+            }
+            run.streamState = ctxArg.objectForKeyedSubscript("state")
+            return result
         }
-        run.streamState = ctxArg.objectForKeyedSubscript("state")
         let hadException = context.exception != nil
         if let directive = run.directive {
             context.exception = nil
@@ -1494,7 +1524,7 @@ actor MITMScriptEngine {
             if let statusVal = spec.objectForKeyedSubscript("status"),
                statusVal.isNumber {
                 let d = statusVal.toDouble()
-                let raw = (d.isFinite && d.rounded() == d) ? Int(d) : -1
+                let raw = Int(exactly: d) ?? -1
                 if (100...599).contains(raw) {
                     status = raw
                 } else {

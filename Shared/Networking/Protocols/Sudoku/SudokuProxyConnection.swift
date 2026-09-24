@@ -336,22 +336,29 @@ nonisolated private enum SudokuTableCache {
             asciiMode: config.asciiMode,
             customTable: config.selectedCustomTable
         )
-        return try state.withLock { (state: inout State) -> SudokuTablePair in
-            if let pair = state.pairs[cacheKey] {
+        if let cached = state.withLock({ (state: inout State) -> SudokuTablePair? in
+            guard let pair = state.pairs[cacheKey] else { return nil }
+            touch(cacheKey, in: &state)
+            return pair
+        }) {
+            return cached
+        }
+        
+        let built = try SudokuTablePair(
+            key: config.key,
+            asciiMode: config.asciiMode,
+            customUplink: config.selectedCustomTable,
+            customDownlink: config.selectedCustomTable
+        )
+        return state.withLock { (state: inout State) -> SudokuTablePair in
+            if let existing = state.pairs[cacheKey] {
                 touch(cacheKey, in: &state)
-                return pair
+                return existing
             }
-
-            let pair = try SudokuTablePair(
-                key: config.key,
-                asciiMode: config.asciiMode,
-                customUplink: config.selectedCustomTable,
-                customDownlink: config.selectedCustomTable
-            )
-            state.pairs[cacheKey] = pair
+            state.pairs[cacheKey] = built
             touch(cacheKey, in: &state)
             trimIfNeeded(in: &state)
-            return pair
+            return built
         }
     }
 
@@ -535,6 +542,7 @@ nonisolated final class SudokuConnectionFactory: Sendable {
     private static let preparedConnectionWaitTimeout: TimeInterval = 0.25
     private let configuration: ProxyConfiguration
     private let directDialHost: String
+    private let dialChain: [ProxyConfiguration]
     
     private struct State: PhaseHolding {
         var initialTunnel: ProxyConnection?
@@ -583,8 +591,8 @@ nonisolated final class SudokuConnectionFactory: Sendable {
         preparedState.withLock { s in s.waiters.removeAll { $0.id == id } }
     }
     
-    private func waitPreparedSignal(observed: UInt64, until deadline: Date) async {
-        let interval = deadline.timeIntervalSinceNow
+    private func waitPreparedSignal(observed: UInt64, until deadline: TimeInterval) async {
+        let interval = deadline - MonotonicClock.now
         guard interval > 0 else { return }
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await self.waitPreparedSignal(observed: observed) }
@@ -594,10 +602,20 @@ nonisolated final class SudokuConnectionFactory: Sendable {
         }
     }
 
-    init(configuration: ProxyConfiguration, initialTunnel: ProxyConnection?, directDialHost: String) {
+    init(
+        configuration: ProxyConfiguration,
+        initialTunnel: ProxyConnection?,
+        directDialHost: String,
+        parentChain: [ProxyConfiguration] = []
+    ) {
         self.configuration = configuration
         self.stateLock = Mutex(State(initialTunnel: initialTunnel))
         self.directDialHost = directDialHost
+        if let chain = configuration.chain, !chain.isEmpty {
+            self.dialChain = chain
+        } else {
+            self.dialChain = parentChain
+        }
     }
 
     func open(host: String, port: UInt16, useTLS: Bool, serverName: String?) async throws -> BlockingProxyStream {
@@ -752,7 +770,7 @@ nonisolated final class SudokuConnectionFactory: Sendable {
     }
 
     private var supportsPreparedConnections: Bool {
-        guard configuration.chain?.isEmpty != false else { return false }
+        guard dialChain.isEmpty else { return false }
         return stateLock.withLock { $0.phase == .open && $0.initialTunnel == nil }
     }
 
@@ -762,7 +780,7 @@ nonisolated final class SudokuConnectionFactory: Sendable {
     }
 
     private func takePreparedConnection(for key: PreparedKey) async -> PreparedConnection? {
-        let deadline = Date().addingTimeInterval(Self.preparedConnectionWaitTimeout)
+        let deadline = MonotonicClock.now + Self.preparedConnectionWaitTimeout
         while true {
             let taken: PreparedConnection?
             let shouldWait: Bool
@@ -783,7 +801,7 @@ nonisolated final class SudokuConnectionFactory: Sendable {
             if let taken {
                 return taken
             }
-            guard shouldWait, Date() < deadline else { return nil }
+            guard shouldWait, MonotonicClock.now < deadline else { return nil }
             await waitPreparedSignal(observed: generation, until: deadline)
             if Task.isCancelled { return nil }
         }
@@ -894,14 +912,8 @@ nonisolated final class SudokuConnectionFactory: Sendable {
             return tunnel
         }
 
-        if let chain = configuration.chain, !chain.isEmpty {
-            return try await buildChainTunnel(
-                chain: chain,
-                index: 0,
-                currentTunnel: nil,
-                targetHost: host,
-                targetPort: port
-            )
+        if !dialChain.isEmpty {
+            return try await buildChainTunnel(chain: dialChain, targetHost: host, targetPort: port)
         }
 
         if useTLS {
@@ -935,38 +947,29 @@ nonisolated final class SudokuConnectionFactory: Sendable {
 
     private func buildChainTunnel(
         chain: [ProxyConfiguration],
-        index: Int,
-        currentTunnel: ProxyConnection?,
         targetHost: String,
         targetPort: UInt16
     ) async throws -> ProxyConnection {
-        let chainConfig = chain[index]
-        let nextHost: String
-        let nextPort: UInt16
-        if index + 1 < chain.count {
-            nextHost = chain[index + 1].serverAddress
-            nextPort = chain[index + 1].serverPort
-        } else {
-            nextHost = targetHost
-            nextPort = targetPort
+        let hopNetworks = try ProxyClient.computeChainHopNetworks(chain: chain, lastDeliver: .tcp).get()
+        let dialing = Mutex<[ProxyClient]>([])
+        defer {
+            for client in dialing.withLock({ $0 }) { releaseClient(client) }
         }
-
-        let client = ProxyClient(configuration: chainConfig, tunnel: currentTunnel)
-        guard retainClient(client) else {
-            currentTunnel?.cancel()
-            throw AnywhereError.proxy(.sudoku, .connectionClosed(detail: nil))
-        }
-        let connection = try await client.connect(to: nextHost, port: nextPort)
-        if index + 1 < chain.count {
-            return try await buildChainTunnel(
+        do {
+            return try await ProxyClient.buildDetachedChainTunnel(
                 chain: chain,
-                index: index + 1,
-                currentTunnel: connection,
-                targetHost: targetHost,
-                targetPort: targetPort
+                hopNetworks: hopNetworks,
+                finalDestination: (targetHost, targetPort),
+                useResolvedAddressForDirectDial: false,
+                track: { [self] client in
+                    dialing.withLock { $0.append(client) }
+                    if !retainClient(client) { client.cancel() }
+                }
             )
+        } catch {
+            for client in dialing.withLock({ $0 }) { await client.cancel() }
+            throw error
         }
-        return connection
     }
 
     private func retainClient(_ client: ProxyClient) -> Bool {
@@ -974,6 +977,12 @@ nonisolated final class SudokuConnectionFactory: Sendable {
             guard state.phase == .open else { return false }
             state.retainedClients.append(client)
             return true
+        }
+    }
+
+    private func releaseClient(_ client: ProxyClient) {
+        stateLock.withLock { state in
+            state.retainedClients.removeAll { $0 === client }
         }
     }
 
@@ -1073,7 +1082,7 @@ nonisolated private final class SudokuHTTPBodyReader {
             while chunkRemaining == 0 {
                 let line = try await sudokuReadHTTPLine(from: stream)
                 let lenText = line.split(separator: ";", maxSplits: 1).first.map(String.init) ?? line
-                guard let length = Int(lenText.trimmingCharacters(in: .whitespacesAndNewlines), radix: 16) else {
+                guard let length = Int(lenText.trimmingCharacters(in: .whitespacesAndNewlines), radix: 16), length >= 0 else {
                     throw AnywhereError.proxy(.sudoku, .protocolViolation(detail: "bad chunk length"))
                 }
                 if length == 0 {
@@ -1218,8 +1227,8 @@ nonisolated final class SudokuHTTPMaskTransport: Sendable {
         state.withLock { s in s.waiters.removeAll { $0.id == id } }
     }
     
-    private func waitSignal(observed: UInt64, until deadline: Date) async {
-        let interval = deadline.timeIntervalSinceNow
+    private func waitSignal(observed: UInt64, until deadline: TimeInterval) async {
+        let interval = deadline - MonotonicClock.now
         guard interval > 0 else { return }
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await self.waitSignal(observed: observed) }
@@ -1281,9 +1290,8 @@ nonisolated final class SudokuHTTPMaskTransport: Sendable {
     func close() {
         markClosed(fatal: false)
         let path = paths.closePath
-        let task = Task { [weak self] in
-            guard let self else { return }
-            try? await self.sendSessionControl(path: path, attempts: 1)
+        let task: Task<Void, Never> = Task {
+            _ = try? await self.sendSessionControl(path: path, attempts: 1)
         }
         let previous: Task<Void, Never>? = state.withLock { s in
             let previous = s.closeTask
@@ -1294,7 +1302,7 @@ nonisolated final class SudokuHTTPMaskTransport: Sendable {
     }
 
     func waitReady(timeout: TimeInterval) async throws {
-        let deadline = Date().addingTimeInterval(timeout)
+        let deadline = MonotonicClock.now + timeout
         ready: while true {
             try Task.checkCancellation()
             let step: Step<Void> = state.withLock { s in
@@ -1306,7 +1314,7 @@ nonisolated final class SudokuHTTPMaskTransport: Sendable {
             case .done: break ready
             case .fail(let error): throw error
             case .wait(let generation):
-                if Date() >= deadline {
+                if MonotonicClock.now >= deadline {
                     throw AnywhereError.proxy(.sudoku, .connectionClosed(detail: "timeout waiting for HTTPMask tunnel readiness"))
                 }
                 await waitSignal(observed: generation, until: deadline)
@@ -1399,7 +1407,9 @@ nonisolated final class SudokuHTTPMaskTransport: Sendable {
             if header.isEmpty { break }
             let lower = header.lowercased()
             if lower.hasPrefix("transfer-encoding:") && lower.contains("chunked") { chunked = true }
-            if lower.hasPrefix("content-length:"), let value = Int(header.split(separator: ":", maxSplits: 1)[1].trimmingCharacters(in: .whitespaces)) { contentLength = value }
+            if lower.hasPrefix("content-length:"),
+               let value = Int(header.dropFirst("content-length:".count).trimmingCharacters(in: .whitespaces)),
+               value >= 0 { contentLength = value }
         }
         return SudokuHTTPBodyReader(stream: stream, status: status, chunked: chunked, contentLength: contentLength)
     }
@@ -1495,6 +1505,7 @@ nonisolated final class SudokuHTTPMaskTransport: Sendable {
                 while true {
                     let data = try await opened.readSome()
                     if data.isEmpty { break }
+                    retryDelayMs = 10
                     if mode == .poll {
                         for byte in data where byte != 0x0d {
                             if byte == 0x0a {
@@ -1580,7 +1591,7 @@ nonisolated final class SudokuHTTPMaskTransport: Sendable {
             }
             if state.withLock({ $0.phase == .closed }) { return }
             
-            let flushDeadline = Date().addingTimeInterval(flushInterval)
+            let flushDeadline = MonotonicClock.now + flushInterval
             coalesce: while true {
                 let step: Step<Void> = state.withLock { s in
                     if s.phase == .closed || s.txQueue.isEmpty { return .done(()) }
@@ -1590,7 +1601,7 @@ nonisolated final class SudokuHTTPMaskTransport: Sendable {
                 switch step {
                 case .done, .fail: break coalesce
                 case .wait(let generation):
-                    if Date() >= flushDeadline { break coalesce }
+                    if MonotonicClock.now >= flushDeadline { break coalesce }
                     await waitSignal(observed: generation, until: flushDeadline)
                 }
             }
@@ -2392,6 +2403,8 @@ nonisolated final class SudokuMuxClient: Multiplexer, Sendable {
         do {
             try await record.sendBuffers([header, payload])
             state.withLock { $0.lastWrite = ContinuousClock.now }
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             close(error: error)
             throw error
@@ -2641,7 +2654,7 @@ nonisolated final class SudokuMuxStream: Sendable {
         guard closedNow else { return }
 
         if let client = clientBox.withLock({ $0.value }) {
-            Task { [weak self] in await self?.sendCloseFrame(to: client) }
+            Task { await self.sendCloseFrame(to: client) }
             client.removeStream(id: id)
         }
     }

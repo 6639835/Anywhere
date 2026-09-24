@@ -12,6 +12,7 @@ import Synchronization
 nonisolated protocol TCPTransportEngine: AnyObject, Sendable {
     func send(_ data: Data) async throws
     func receive(atMost maxLength: Int) async throws -> (content: Data, endOfStream: Bool)
+    func cancel()
 }
 
 nonisolated final class TCPTransport: ByteTransport, Sendable {
@@ -153,8 +154,7 @@ nonisolated final class TCPTransport: ByteTransport, Sendable {
     }
 
     func cancel() {
-        // Engines tear down on release; in-flight operations end via task cancellation.
-        let (_, slot): ((any TCPTransportEngine)?, FlowSlot?) = state.withLock { state in
+        let (engine, slot): ((any TCPTransportEngine)?, FlowSlot?) = state.withLock { state in
             if state.failure == nil { state.failure = .transport(.terminated) }
             state.transition(to: .cancelled)
             let pair = (state.engine, state.flowSlot)
@@ -162,6 +162,7 @@ nonisolated final class TCPTransport: ByteTransport, Sendable {
             state.flowSlot = nil
             return pair
         }
+        engine?.cancel()
         slot?.release()
     }
 
@@ -185,7 +186,6 @@ nonisolated final class TCPTransport: ByteTransport, Sendable {
 
 @available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *)
 nonisolated final class ModernTCPEngine: TCPTransportEngine, Sendable {
-
     private let connection: NetworkConnection<TCP>
 
     init(endpoint: NWEndpoint, connectTimeout: UInt32) {
@@ -205,4 +205,6 @@ nonisolated final class ModernTCPEngine: TCPTransportEngine, Sendable {
         let message = try await connection.receive(atLeast: 1, atMost: maxLength)
         return (message.content, message.metadata.endOfStream)
     }
+    
+    func cancel() {}
 }

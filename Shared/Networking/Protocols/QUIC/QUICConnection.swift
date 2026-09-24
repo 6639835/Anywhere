@@ -87,11 +87,11 @@ actor QUICConnection {
         bridge.enqueue(work)
     }
 
-    nonisolated func run<T>(_ body: @escaping () -> T) async -> T {
+    nonisolated func run<T>(_ body: @escaping @Sendable () -> T) async -> T {
         await bridge.run(body)
     }
 
-    nonisolated func run<T>(_ body: @escaping () -> Result<T, Error>) async throws -> T {
+    nonisolated func run<T>(_ body: @escaping @Sendable () -> Result<T, Error>) async throws -> T {
         try await bridge.run(body).get()
     }
 
@@ -230,6 +230,8 @@ actor QUICConnection {
         var endOffset: UInt64 = 0
         var finQueued = false
         var finSent = false
+        var isFailed = false
+        var flowBlocked = false
 
         var hasUnsent: Bool { sentOffset < endOffset || (finQueued && !finSent) }
         var unsentBytes: Int { Int(endOffset - sentOffset) }
@@ -286,6 +288,7 @@ actor QUICConnection {
             while let last = chunks.last, last.startOffset >= sentOffset {
                 chunks.removeLast()
             }
+            if let last = chunks.last, last.endOffset > sentOffset { isFailed = true }
             endOffset = sentOffset
             finQueued = finSent
             return failed
@@ -298,6 +301,7 @@ actor QUICConnection {
     }
     var pendingDatagrams: [PendingDatagram] = []
     static let maxPendingDatagrams = 1024
+    static let maxQueuedTransportDatagrams = 512
 
     final class DatagramBatchLatch {
         private var remaining: Int

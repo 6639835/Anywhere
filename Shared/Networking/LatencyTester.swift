@@ -17,16 +17,14 @@ nonisolated enum LatencyTester {
     private static let latencyPort: UInt16 = 80
     
     nonisolated static func test(_ configuration: ProxyConfiguration) async -> LatencyResult {
-        // Keep probe timings out of the live dial/handshake gauges.
         ConnectionMetrics.shared.suspendRecording()
         defer { ConnectionMetrics.shared.resumeRecording() }
-
-        let testConfiguration = await resolvedConfiguration(configuration)
 
         do {
             let latencyMilliseconds = try await withThrowingTaskGroup(of: Int.self) { group in
                 group.addTask {
-                    try await Self.performTest(testConfiguration)
+                    let testConfiguration = await Self.resolvedConfiguration(configuration)
+                    return try await Self.performTest(testConfiguration)
                 }
                 group.addTask {
                     try await Task.sleep(for: Self.timeout)
@@ -120,10 +118,8 @@ nonisolated enum LatencyTester {
     }
     
     private static func establishWarmedConnection(client: ProxyClient) async throws -> ProxyConnection {
-        // Phase 1 (untimed): TCP/TLS/outbound handshake.
         let proxyConnection = try await client.connect(to: Self.latencyHost, port: Self.latencyPort)
-
-        // Phase 2 (untimed): warmup request primes the proxy-to-target connection.
+        
         let warmupRequest = "HEAD / HTTP/1.1\r\nHost: \(Self.latencyHost)\r\n\r\n".data(using: .utf8)!
         try await proxyConnection.send(warmupRequest)
 

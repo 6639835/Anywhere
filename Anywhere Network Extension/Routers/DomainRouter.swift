@@ -91,19 +91,20 @@ nonisolated final class DomainRouter: Sendable {
     // MARK: - Loading
 
     func reset() {
-        routingState.withLock { state in
-            let next = state.version &+ 1
-            state = RoutingState()
-            state.version = next
-        }
+        _ = replaceRoutingState(with: RoutingState())
     }
 
     func loadRoutingConfiguration() {
         let newState = Self.makeRoutingState()
+        _ = replaceRoutingState(with: newState)
+    }
+    
+    private func replaceRoutingState(with replacement: RoutingState) -> RoutingState {
         routingState.withLock { state in
-            let next = state.version &+ 1
-            state = newState
-            state.version = next
+            var displaced = replacement
+            displaced.version = state.version &+ 1
+            swap(&state, &displaced)
+            return displaced
         }
     }
 
@@ -117,11 +118,7 @@ nonisolated final class DomainRouter: Sendable {
     }
 
     func install(_ compiled: CompiledRouting) {
-        routingState.withLock { state in
-            let next = state.version &+ 1
-            state = compiled.state
-            state.version = next
-        }
+        _ = replaceRoutingState(with: compiled.state)
     }
 
     private static func makeRoutingState() -> RoutingState {

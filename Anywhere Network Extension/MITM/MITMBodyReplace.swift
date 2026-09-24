@@ -11,7 +11,6 @@ import Synchronization
 nonisolated private let logger = AnywhereLogger(category: "MITMBodyReplace")
 
 nonisolated enum MITMBodyReplace {
-    
     struct CompiledOperation {
         let search: Regex<AnyRegexOutput>
         let template: MITMCaptureTemplate
@@ -54,16 +53,13 @@ nonisolated enum MITMBodyReplace {
     private static let substitutionInFlight = Atomic<Bool>(false)
     
     private static func boundedReplace(_ text: String, operation: CompiledOperation) async -> String? {
-        // Single-flight admission: one substitution at a time process-wide, so a slow pattern
-        // can't fan out pinned workers. Released by the worker itself (even an abandoned one).
         guard substitutionInFlight.compareExchange(
             expected: false, desired: true, ordering: .sequentiallyConsistent
-        ).exchanged else { return nil }
-
-        // The substitution is uninterruptible — the regex bridge owns the traversal on its worker
-        // pool with a soft deadline, and crashes a worker still pinned at the hard cap. `expand`
-        // only builds a replacement from an already-matched span; `onResolved` releases the
-        // single-flight admission on the worker (even if it's abandoned).
+        ).exchanged else {
+            logger.warning("bodyReplace: another substitution is in flight; leaving this \(text.utf8.count) B body unchanged")
+            return nil
+        }
+        
         let byteCount = text.utf8.count
         let search = operation.search
         let staticReplacement = operation.staticReplacement

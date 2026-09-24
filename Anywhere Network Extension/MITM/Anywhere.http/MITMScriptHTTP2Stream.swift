@@ -53,7 +53,7 @@ nonisolated final class MITMScriptHTTP2Stream: Sendable {
         var reservedBytes = 0
         var endStreamReceived = false
         var streamReceiveConsumed = 0
-
+        var headersSent = false
         var idleGeneration = 0
     }
     private let state = Mutex(State())
@@ -144,8 +144,13 @@ nonisolated final class MITMScriptHTTP2Stream: Sendable {
             fail(AnywhereError.mitm(.invalidScriptRequest))
             return
         }
+        guard headerBlock.count <= Int(MITMScriptHTTP2Connection.maxFrameSize) else {
+            fail(AnywhereError.mitm(.requestHeadersTooLarge))
+            return
+        }
         let requestBody = request.httpBody ?? Data()
         let hasBody = !requestBody.isEmpty
+        state.withLock { $0.headersSent = true }
         do {
             try await connection.sendHeaders(streamID: streamID, headerBlock: headerBlock, endStream: !hasBody)
             if hasBody {
@@ -238,7 +243,12 @@ nonisolated final class MITMScriptHTTP2Stream: Sendable {
         let outcome: Outcome = state.withLock { state in
             switch state.phase {
             case .finished: return .ignore
-            case .awaitingHead: return .failNoHead
+            case .awaitingHead:
+                if fullPayloadCount == 0 && !endStream {
+                    return .ignore
+                } else {
+                    return .failNoHead
+                }
             case .receivingBody: break
             }
 
@@ -285,6 +295,10 @@ nonisolated final class MITMScriptHTTP2Stream: Sendable {
         finish(.failure(error), removeFromConnection: false, sendRST: false)
     }
 
+    func cancelByConsumer() {
+        fail(CancellationError())
+    }
+
     // MARK: - Completion
 
     private func fail(_ error: Error) {
@@ -328,9 +342,9 @@ nonisolated final class MITMScriptHTTP2Stream: Sendable {
         removeFromConnection: Bool,
         sendRST: Bool
     ) {
-        let captured: (reservedBytes: Int, endStreamReceived: Bool)? = state.withLock { state in
+        let captured: (reservedBytes: Int, endStreamReceived: Bool, headersSent: Bool)? = state.withLock { state in
             guard state.transition(to: .finished) else { return nil }
-            let c = (state.reservedBytes, state.endStreamReceived)
+            let c = (state.reservedBytes, state.endStreamReceived, state.headersSent)
             state.reservedBytes = 0
             return c
         }
@@ -340,7 +354,7 @@ nonisolated final class MITMScriptHTTP2Stream: Sendable {
         idleFinishPoke.finish()
         MITMScriptHTTPClient.releaseInFlight(captured.reservedBytes)
         if removeFromConnection {
-            connection?.removeStream(self, sendRST: sendRST && !captured.endStreamReceived)
+            connection?.removeStream(self, sendRST: sendRST && captured.headersSent && !captured.endStreamReceived)
         }
         connection?.wakeFlowParks()
         switch result {

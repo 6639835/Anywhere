@@ -11,7 +11,6 @@ import Synchronization
 nonisolated private let logger = AnywhereLogger(category: "HysteriaSession")
 
 nonisolated final class HysteriaSession: Sendable {
-
     private enum Phase: PhaseTransitionable {
         case idle, connecting, authenticating, ready, closed
 
@@ -58,6 +57,8 @@ nonisolated final class HysteriaSession: Sendable {
     private static let authBufferMaxBytes = 16 * 1024
 
     private static let idleCloseDelay: TimeInterval = 60
+
+    private static let authResponseTimeout: Duration = .seconds(10)
 
     private let readySignal: AsyncThrowingStream<Never, Error>.Continuation
     private let readyTask: Task<Void, Error>
@@ -148,6 +149,19 @@ nonisolated final class HysteriaSession: Sendable {
             let opened: Bool = await quic.run { self.openControlAndAuthOnQueue() }
             if !opened {
                 failSession(AnywhereError.proxy(.hysteria, .connectionClosed(detail: "Failed to open auth stream")))
+                return
+            }
+            armAuthDeadline()
+        }
+    }
+    
+    private func armAuthDeadline() {
+        Task { [weak self] in
+            try? await Task.sleep(for: Self.authResponseTimeout)
+            guard let self else { return }
+            let stalled = self.state.withLock { $0.phase == .authenticating }
+            if stalled {
+                self.failSession(AnywhereError.proxy(.hysteria, .connectionClosed(detail: "Auth response timed out")))
             }
         }
     }
@@ -197,12 +211,10 @@ nonisolated final class HysteriaSession: Sendable {
     }
 
     private static func clientSettingsFrame() -> Data {
-        // id=0x01 (QPACK_MAX_TABLE_CAPACITY) val=0,
-        // id=0x07 (QPACK_BLOCKED_STREAMS) val=0.
         let payload = Data([0x01, 0x00, 0x07, 0x00])
         var frame = Data()
-        frame.append(0x04)                  // type = SETTINGS (1-byte varint)
-        frame.append(UInt8(payload.count))  // len   (1-byte varint)
+        frame.append(0x04)
+        frame.append(UInt8(payload.count))
         frame.append(payload)
         return frame
     }
@@ -210,15 +222,15 @@ nonisolated final class HysteriaSession: Sendable {
     // MARK: - Stream dispatch
 
     private func handleStreamData(sid: Int64, data: Data, fin: Bool) {
-        enum Route { case auth; case tcp(HysteriaConnection); case serverReject(first: Bool); case ignore }
+        enum Route { case auth; case tcp(HysteriaConnection); case serverReject(first: Bool); case orphan; case ignore }
         let route: Route = state.withLock { session in
             if sid == session.authStreamID { return .auth }
             if let connection = session.tcpStreams[sid] { return .tcp(connection) }
-            // Server-initiated stream (uni or bidi): reject it once so it stops streaming garbage.
-            if (sid & 0x01) == 0x01, !data.isEmpty {
+            guard !data.isEmpty else { return .ignore }
+            if (sid & 0x01) == 0x01 {
                 return .serverReject(first: session.rejectedServerStreams.insert(sid).inserted)
             }
-            return .ignore
+            return .orphan
         }
 
         switch route {
@@ -231,6 +243,8 @@ nonisolated final class HysteriaSession: Sendable {
             if first {
                 quic.shutdownStream(sid, appErrorCode: HysteriaProtocol.closeErrCodeProtocolError)
             }
+        case .orphan:
+            quic.extendStreamOffset(sid, count: data.count)
         case .ignore:
             break
         }

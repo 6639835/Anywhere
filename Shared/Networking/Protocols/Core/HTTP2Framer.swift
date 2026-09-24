@@ -59,6 +59,12 @@ nonisolated enum HTTP2Framer {
 
     // MARK: - Deserialize
     
+    static func declaredPayloadLength(in buffer: Data) -> Int? {
+        guard buffer.count >= headerSize else { return nil }
+        let start = buffer.startIndex
+        return Int(buffer[start]) << 16 | Int(buffer[start + 1]) << 8 | Int(buffer[start + 2])
+    }
+
     static func deserialize(from buffer: inout Data) -> HTTP2Frame? {
         guard buffer.count >= headerSize else { return nil }
 

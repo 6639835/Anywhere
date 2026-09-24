@@ -267,6 +267,7 @@ nonisolated final class MITMCertificateStore: Sendable {
             .privateKeyUsage,
             &error
         ) else {
+            _ = error?.takeRetainedValue()
             return nil
         }
         let attributes: [String: Any] = [
@@ -281,7 +282,9 @@ nonisolated final class MITMCertificateStore: Sendable {
             ]
         ]
         var err: Unmanaged<CFError>?
-        return SecKeyCreateRandomKey(attributes as CFDictionary, &err)
+        let key = SecKeyCreateRandomKey(attributes as CFDictionary, &err)
+        if key == nil { _ = err?.takeRetainedValue() }
+        return key
     }
 
     private func generateSoftwareKey() throws -> SecKey {

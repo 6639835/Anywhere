@@ -45,6 +45,10 @@ nonisolated final class NowhereMultiplexerConnection: ProxyConnection, NowhereTe
         }
     }
 
+    deinit {
+        cancel()
+    }
+
     var outerTLSVersion: TLSVersion? { stream.outerTLSVersion }
 
     var isConnected: Bool {

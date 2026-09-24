@@ -58,6 +58,7 @@ extension QUICConnection {
     }
     
     func handleReceivedPacket(_ packet: Data, localAddr: sockaddr_storage) {
+        guard !packet.isEmpty else { return }
         if let dialAttempt {
             self.dialAttempt = nil
             dialAttempt.noteServerResponse()
@@ -218,7 +219,7 @@ extension QUICConnection {
         guard let connectionOpaquePointer else { return }
         var expiry = self.expiry(connectionOpaquePointer)
         
-        if !pendingDatagrams.isEmpty || streamSendQueues.contains(where: { $0.value.hasUnsent }) {
+        if !pendingDatagrams.isEmpty || streamSendQueues.contains(where: { $0.value.hasUnsent && !$0.value.flowBlocked }) {
             expiry = min(expiry, currentTimestamp() &+ 2_000_000)
         }
 

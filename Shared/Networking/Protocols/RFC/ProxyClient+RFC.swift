@@ -22,12 +22,13 @@ extension ProxyClient {
         let initialData = request.initialData
         let authority = RFCProtocol.authority(host: request.host, port: request.port)
         let credentials = rfc.basicCredentials
-
-        let pool = RFCMultiplexerRegistry.shared.pool(for: configuration)
+        
+        let chained = tunnel != nil
+        let pool = chained ? nil : RFCMultiplexerRegistry.shared.pool(for: configuration)
         if let pool, let warm = pool.reserveWarmSession() {
             do {
                 return try await openRFCTunnel(
-                    on: warm, pool: pool, authority: authority,
+                    on: warm, onEnd: pool.idleClockHook(for: warm), authority: authority,
                     credentials: credentials, initialData: initialData
                 )
             } catch {
@@ -44,15 +45,21 @@ extension ProxyClient {
         switch dialed.version {
         case .http2:
             guard let pool else {
-                dialed.connection.cancel()
-                throw AnywhereError.proxy(.rfc, .notReady)
+                guard chained else {
+                    dialed.connection.cancel()
+                    throw AnywhereError.proxy(.rfc, .notReady)
+                }
+                return try await openDedicatedRFCTunnel(
+                    over: dialed.connection, authority: authority,
+                    credentials: credentials, initialData: initialData
+                )
             }
             guard let multiplexer = try await pool.adopt(dialed.connection) else {
                 dialed.connection.cancel()
                 throw AnywhereError.transport(.terminated)
             }
             return try await openRFCTunnel(
-                on: multiplexer, pool: pool, authority: authority,
+                on: multiplexer, onEnd: pool.idleClockHook(for: multiplexer), authority: authority,
                 credentials: credentials, initialData: initialData
             )
 
@@ -136,7 +143,7 @@ extension ProxyClient {
     
     private func openRFCTunnel(
         on multiplexer: RFCHTTP2Multiplexer,
-        pool: RFCMultiplexerPool,
+        onEnd: @escaping @Sendable () -> Void,
         authority: String,
         credentials: String?,
         initialData: Data?
@@ -144,7 +151,7 @@ extension ProxyClient {
         let stream = try await multiplexer.openTunnel(
             authority: authority,
             credentials: credentials,
-            onEnd: pool.idleClockHook(for: multiplexer)
+            onEnd: onEnd
         )
         guard !isCancelled else {
             stream.cancel()
@@ -159,6 +166,29 @@ extension ProxyClient {
             }
         }
         return stream
+    }
+    
+    private func openDedicatedRFCTunnel(
+        over connection: ProxyConnection,
+        authority: String,
+        credentials: String?,
+        initialData: Data?
+    ) async throws -> ProxyConnection {
+        let multiplexer = RFCHTTP2Multiplexer(inner: connection)
+        _ = multiplexer.tryReserveStream()
+        do {
+            try await multiplexer.start()
+            return try await openRFCTunnel(
+                on: multiplexer,
+                onEnd: { [weak multiplexer] in multiplexer?.close(error: nil) },
+                authority: authority,
+                credentials: credentials,
+                initialData: initialData
+            )
+        } catch {
+            multiplexer.close(error: error)
+            throw error
+        }
     }
 
     // MARK: - Retry classification

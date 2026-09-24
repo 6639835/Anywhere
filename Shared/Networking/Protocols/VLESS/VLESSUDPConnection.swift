@@ -30,7 +30,7 @@ nonisolated final class VLESSUDPConnection: ProxyConnection, UDPFramingCapable {
     // MARK: - Send: length-prefix each datagram, then hand off to the TCP-style inner.
 
     func sendRaw(_ data: Data) async throws {
-        let frame = frameUDPPacket(data)
+        guard let frame = frameUDPPacket(data) else { throw AnywhereError.proxy(.vless, .packetTooLarge) }
         let inner = self.inner
         try await sendChain.run { try await inner.sendRaw(frame) }
     }

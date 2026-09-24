@@ -124,6 +124,7 @@ extension TLSClient {
     ) async throws -> TLSRecordConnection {
         var buffer = initialBuffer
         var startOffset = initialOffset
+        var pendingHandshake = Data()
 
         while true {
             guard let keys = tls13.handshakeKeys, let kd = tls13.keyDerivation else {
@@ -159,15 +160,17 @@ extension TLSClient {
                         )
                         tls13.serverHandshakeSeqNum += 1
                         
+                        pendingHandshake.append(decrypted)
+                        let messages = pendingHandshake
                         var hsOffset = 0
-                        while hsOffset + 4 <= decrypted.count {
-                            let hsType = decrypted[hsOffset]
-                            let hsLen = Int(decrypted[hsOffset + 1]) << 16 | Int(decrypted[hsOffset + 2]) << 8 | Int(decrypted[hsOffset + 3])
+                        while hsOffset + 4 <= messages.count {
+                            let hsType = messages[hsOffset]
+                            let hsLen = Int(messages[hsOffset + 1]) << 16 | Int(messages[hsOffset + 2]) << 8 | Int(messages[hsOffset + 3])
                             
-                            guard hsOffset + 4 + hsLen <= decrypted.count else { break }
+                            guard hsOffset + 4 + hsLen <= messages.count else { break }
                             
-                            let hsMessage = decrypted.subdata(in: hsOffset..<(hsOffset + 4 + hsLen))
-                            let hsBody = decrypted.subdata(in: (hsOffset + 4)..<(hsOffset + 4 + hsLen))
+                            let hsMessage = messages.subdata(in: hsOffset..<(hsOffset + 4 + hsLen))
+                            let hsBody = messages.subdata(in: (hsOffset + 4)..<(hsOffset + 4 + hsLen))
                             
                             switch hsType {
                             case TLSHandshakeType.encryptedExtensions:
@@ -228,6 +231,7 @@ extension TLSClient {
                             
                             hsOffset += 4 + hsLen
                         }
+                        pendingHandshake = messages.subdata(in: hsOffset..<messages.count)
                     } catch {
                         throw AnywhereError.tls(.handshakeFailed(detail: "Record decryption failed"))
                     }
@@ -249,7 +253,7 @@ extension TLSClient {
                     throw AnywhereError.tls(.ech(.rejected(retryConfigList: retryConfigList)))
                 }
                 
-                try validateCertificate()
+                try await validateCertificate()
                 
                 let skipVerification = self.configuration.insecureSkipVerify || CertificatePolicy.allowInsecure
                 if !skipVerification {
@@ -272,6 +276,9 @@ extension TLSClient {
                 switch try await connection.receive() {
                 case .bytes(let moreData):
                     buffer.append(moreData)
+                    guard buffer.count <= Self.maxHandshakeBufferSize else {
+                        throw AnywhereError.tls(.handshakeFailed(detail: "Handshake flight exceeds \(Self.maxHandshakeBufferSize) bytes"))
+                    }
                     startOffset = processedOffset
                     continue
                 case .end:
@@ -451,10 +458,10 @@ extension TLSClient {
         let algorithm = UInt16(body[0]) << 8 | UInt16(body[1])
         let uncompressedLength = Int(body[2]) << 16 | Int(body[3]) << 8 | Int(body[4])
         let compressedLength = Int(body[5]) << 16 | Int(body[6]) << 8 | Int(body[7])
-        guard 8 + compressedLength <= body.count else { return nil }
+        guard compressedLength > 0, 8 + compressedLength <= body.count else { return nil }
         let compressed = body.subdata(in: 8..<(8 + compressedLength))
-
-        guard uncompressedLength > 0 && uncompressedLength <= 1 << 24 else { return nil }
+        
+        guard uncompressedLength > 0 && uncompressedLength <= 1 << 17 else { return nil }
 
         let compressionAlgorithm: compression_algorithm
         switch algorithm {
@@ -478,10 +485,10 @@ extension TLSClient {
                 )
             }
         }
-        guard decodedSize > 0 else {
+        guard decodedSize == uncompressedLength else {
             logger.warning("[TLS] Certificate decompression failed (algorithm: 0x\(String(format: "%04x", algorithm)))")
             return nil
         }
-        return Data(decompressed.prefix(decodedSize))
+        return decompressed
     }
 }

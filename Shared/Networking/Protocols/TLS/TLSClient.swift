@@ -152,6 +152,10 @@ actor TLSClient {
     // MARK: - Public API
 
     private static let handshakeDeadline: Duration = .seconds(30)
+    
+    static let maxHandshakeBufferSize = 1 << 18
+    
+    private static let tls12DowngradeSentinel = Data([0x44, 0x4F, 0x57, 0x4E, 0x47, 0x52, 0x44, 0x01])
 
     private func withHandshakeDeadline(
         _ handshake: @escaping @Sendable () async throws -> TLSRecordConnection
@@ -375,6 +379,9 @@ actor TLSClient {
             switch try await connection.receive() {
             case .bytes(let moreData):
                 buffer.append(moreData)
+                guard buffer.count <= Self.maxHandshakeBufferSize else {
+                    throw AnywhereError.tls(.handshakeFailed(detail: "Handshake flight exceeds \(Self.maxHandshakeBufferSize) bytes"))
+                }
             case .end:
                 throw AnywhereError.tls(.handshakeFailed(detail: "Connection closed before ServerHello"))
             }
@@ -390,6 +397,9 @@ actor TLSClient {
             throw AnywhereError.tls(.helloRetryRequest)
 
         case .tls13(let serverKeyShare, let keyShareGroup, let cipherSuite):
+            if let maxVersion = configuration.maxVersion, maxVersion.rawValue < TLSVersion.tls13.rawValue {
+                throw AnywhereError.tls(.handshakeFailed(detail: "Server selected TLS 1.3 above the configured maximum"))
+            }
             return try await handleTLS13Handshake(
                 buffer: buffer,
                 serverKeyShare: serverKeyShare,
@@ -401,6 +411,16 @@ actor TLSClient {
         case .tls12(let cipherSuite, let serverRandom, let version, let extendedMasterSecret):
             if echContext != nil {
                 throw AnywhereError.tls(.ech(.tls12Negotiated))
+            }
+            guard version == TLSVersion.tls12.rawValue else {
+                throw AnywhereError.tls(.handshakeFailed(detail: "Unsupported TLS version 0x\(String(version, radix: 16))"))
+            }
+            if let minVersion = configuration.minVersion, minVersion.rawValue > version {
+                throw AnywhereError.tls(.handshakeFailed(detail: "Server selected TLS 1.2 below the configured minimum"))
+            }
+            if (configuration.maxVersion?.rawValue ?? TLSVersion.tls13.rawValue) >= TLSVersion.tls13.rawValue,
+               serverRandom.suffix(8) == Self.tls12DowngradeSentinel {
+                throw AnywhereError.tls(.handshakeFailed(detail: "TLS 1.3 downgrade detected"))
             }
             self.serverRandom = serverRandom
             self.tls12CipherSuite = cipherSuite
@@ -602,11 +622,11 @@ actor TLSClient {
 
     // MARK: - Certificate Validation
 
-    func validateCertificate() throws {
+    func validateCertificate() async throws {
         if configuration.insecureSkipVerify {
             return
         }
-        switch CertificatePolicy.verify(chain: serverCertificates, serverName: configuration.serverName) {
+        switch await CertificatePolicy.verify(chain: serverCertificates, serverName: configuration.serverName) {
         case .trusted:
             return
         case .rejected(let reason):

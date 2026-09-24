@@ -10,8 +10,6 @@ import Synchronization
 
 nonisolated private let logger = AnywhereLogger(category: "RFCHTTP2Multiplexer")
 
-// MARK: - RFCHTTP2Multiplexer
-
 nonisolated final class RFCHTTP2Multiplexer: Multiplexer, Sendable {
 
     // MARK: - Types
@@ -159,7 +157,7 @@ nonisolated final class RFCHTTP2Multiplexer: Multiplexer, Sendable {
             guard let self else { return }
             do {
                 try await self.readLoop()
-                self.close(error: nil)
+                self.close(error: AnywhereError.proxy(.http2, .connectionClosed(detail: "RFC session closed by peer")))
             } catch {
                 self.close(error: error)
             }
@@ -214,12 +212,16 @@ nonisolated final class RFCHTTP2Multiplexer: Multiplexer, Sendable {
         typealias Opened = (
             stream: RFCHTTP2Stream,
             streamID: UInt32,
-            sendWindow: Int,
-            handshake: AsyncInbox<Int>
+            handshake: AsyncInbox<Int>,
+            headersSent: SerialSender.Pending
         )
-        let opened: Opened? = state.withLock { state in
-            guard state.phase.acceptsNewStreams else { return nil }
-            guard state.nextStreamID <= 0x7FFF_FFFF else { return nil }
+        let headerBlock = RFCProtocol.http2ConnectHeaders(authority: authority, credentials: credentials)
+        let outcome: Result<Opened, AnywhereError> = state.withLock { state in
+            guard state.phase.acceptsNewStreams else { return .failure(.proxy(.http2, .notReady)) }
+            guard state.nextStreamID <= 0x7FFF_FFFF else { return .failure(.proxy(.http2, .streamIDsExhausted)) }
+            guard headerBlock.count <= state.peerMaxFrameSize else {
+                return .failure(.proxy(.http2, .protocolViolation(detail: "CONNECT header block too large")))
+            }
             let streamID = state.nextStreamID
             state.nextStreamID &+= 2
 
@@ -234,27 +236,22 @@ nonisolated final class RFCHTTP2Multiplexer: Multiplexer, Sendable {
             let pending = PendingOpen()
             state.pendingOpens[streamID] = pending
             if state.reservations > 0 { state.reservations -= 1 }
-            return (stream, streamID, state.peerInitialWindowSize, pending.inbox)
+            let frame = HTTP2Framer.headersFrame(streamID: streamID, headerBlock: headerBlock)
+            let headersSent = sendChain.submit { [inner] in try await inner.send(frame.serialized) }
+            return .success((stream, streamID, pending.inbox, headersSent))
         }
 
-        guard let opened else {
+        let opened: Opened
+        switch outcome {
+        case .failure(let error):
             releaseReservation()
-            let exhausted = state.withLock { $0.nextStreamID > 0x7FFF_FFFF }
-            throw AnywhereError.proxy(.http2, exhausted ? .streamIDsExhausted : .notReady)
+            throw error
+        case .success(let value):
+            opened = value
         }
-
-        let headerBlock = RFCProtocol.http2ConnectHeaders(authority: authority, credentials: credentials)
-        guard headerBlock.count <= state.withLock({ $0.peerMaxFrameSize }) else {
-            failOpen(streamID: opened.streamID, error: AnywhereError.proxy(.http2, .protocolViolation(
-                detail: "CONNECT header block exceeds the peer's maximum frame size"
-            )))
-            throw AnywhereError.proxy(.http2, .protocolViolation(detail: "CONNECT header block too large"))
-        }
-
-        let frame = HTTP2Framer.headersFrame(streamID: opened.streamID, headerBlock: headerBlock)
 
         do {
-            try await sendChain.run { [inner] in try await inner.send(frame.serialized) }
+            try await opened.headersSent.value()
         } catch {
             failOpen(streamID: opened.streamID, error: error)
             throw error
@@ -318,6 +315,8 @@ nonisolated final class RFCHTTP2Multiplexer: Multiplexer, Sendable {
             let frame = HTTP2Framer.dataFrame(streamID: streamID, payload: chunk)
             do {
                 try await sendChain.run { [inner] in try await inner.send(frame.serialized) }
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
                 close(error: error)
                 throw error
@@ -367,9 +366,10 @@ nonisolated final class RFCHTTP2Multiplexer: Multiplexer, Sendable {
     
     func resetStream(streamID: UInt32, errorCode: UInt32) {
         let taken: (live: Bool, owed: Int) = state.withLock { state in
-            let flow = state.flow.removeValue(forKey: streamID)
+            var flow = state.flow.removeValue(forKey: streamID)
+            flow?.gate.wakeAll()
             state.streams.removeValue(forKey: streamID)
-            return (state.phase != .closed, (flow?.unconsumed ?? 0) + (flow?.pendingCredit ?? 0))
+            return (state.phase != .closed, flow?.unconsumed ?? 0)
         }
         guard taken.live else { return }
         let frame = HTTP2Framer.rstStreamFrame(streamID: streamID, errorCode: errorCode)
@@ -438,9 +438,10 @@ nonisolated final class RFCHTTP2Multiplexer: Multiplexer, Sendable {
     
     func detachStream(streamID: UInt32) -> (stream: RFCHTTP2Stream?, owed: Int) {
         state.withLock { state in
-            let flow = state.flow.removeValue(forKey: streamID)
+            var flow = state.flow.removeValue(forKey: streamID)
+            flow?.gate.wakeAll()
             let stream = state.streams.removeValue(forKey: streamID)
-            return (stream, (flow?.unconsumed ?? 0) + (flow?.pendingCredit ?? 0))
+            return (stream, flow?.unconsumed ?? 0)
         }
     }
 }
@@ -457,10 +458,15 @@ nonisolated extension RFCHTTP2Multiplexer {
             guard let chunk = try await inner.receive() else { return }
             guard !chunk.isEmpty else { continue }
 
-            let frames: [HTTP2Frame] = state.withLock { state in
-                state.receiveBuffer.append(chunk)
+            let frames: [HTTP2Frame] = try state.withLock { state in
+                state.receiveBuffer.appendCompacting(chunk)
                 var frames: [HTTP2Frame] = []
-                while state.receiveBuffer.count >= HTTP2Framer.headerSize {
+                while let declaredLength = HTTP2Framer.declaredPayloadLength(in: state.receiveBuffer) {
+                    guard declaredLength <= RFCProtocol.http2MaxFrameSize else {
+                        throw AnywhereError.proxy(.http2, .protocolViolation(
+                            detail: "Frame of \(declaredLength) bytes exceeds SETTINGS_MAX_FRAME_SIZE"
+                        ))
+                    }
                     let typeByte = state.receiveBuffer[state.receiveBuffer.startIndex + 3]
                     let known = HTTP2FrameType(rawValue: typeByte) != nil
                     guard let frame = HTTP2Framer.deserialize(from: &state.receiveBuffer) else { break }
@@ -505,9 +511,13 @@ nonisolated extension RFCHTTP2Multiplexer {
         let flowBytes = frame.payload.count
         let payload = try strippedPadding(of: frame)
 
-        let stream: RFCHTTP2Stream? = state.withLock { state in
+        let stream: RFCHTTP2Stream? = try state.withLock { state in
             guard let stream = state.streams[frame.streamID] else { return nil }
-            state.flow[frame.streamID]?.unconsumed += flowBytes
+            let unconsumed = (state.flow[frame.streamID]?.unconsumed ?? 0) + flowBytes
+            guard unconsumed <= Int(RFCProtocol.http2StreamWindowSize) else {
+                throw AnywhereError.proxy(.http2, .protocolViolation(detail: "Peer exceeded the stream flow-control window"))
+            }
+            state.flow[frame.streamID]?.unconsumed = unconsumed
             return stream
         }
 
@@ -527,8 +537,15 @@ nonisolated extension RFCHTTP2Multiplexer {
         if frame.hasFlag(HTTP2FrameFlags.endStream) {
             let detached = detachStream(streamID: frame.streamID)
             creditConnection(bytes: detached.owed)
+            if detached.stream != nil { closeLocalHalf(streamID: frame.streamID) }
             stream.deliverClose(error: nil)
         }
+    }
+    
+    private func closeLocalHalf(streamID: UInt32) {
+        guard !isClosed else { return }
+        let frame = HTTP2Framer.rstStreamFrame(streamID: streamID, errorCode: RFCProtocol.HTTP2ErrorCode.noError)
+        _ = sendChain.submit { [inner] in try await inner.send(frame.serialized) }
     }
     
     private func strippedPadding(of frame: HTTP2Frame) throws -> Data {
@@ -611,6 +628,7 @@ nonisolated extension RFCHTTP2Multiplexer {
 
         let pending: PendingOpen? = state.withLock { $0.pendingOpens.removeValue(forKey: streamID) }
 
+        var openAccepted = false
         if let pending {
             pending.watchdog?.cancel()
             guard let status = RFCProtocol.http2Status(from: decoded.fields) else {
@@ -621,11 +639,13 @@ nonisolated extension RFCHTTP2Multiplexer {
             }
             pending.inbox.yield(status)
             pending.inbox.finish()
+            openAccepted = RFCProtocol.tunnelError(status: status, reason: nil, wire: .http2) == nil
         }
 
         if endStream {
             let detached = detachStream(streamID: streamID)
             creditConnection(bytes: detached.owed)
+            if pending == nil || openAccepted, detached.stream != nil { closeLocalHalf(streamID: streamID) }
             detached.stream?.deliverClose(error: nil)
         }
     }
@@ -712,7 +732,7 @@ nonisolated extension RFCHTTP2Multiplexer {
             for id in ids {
                 if let stream = state.streams.removeValue(forKey: id) { streams.append(stream) }
                 if let open = state.pendingOpens.removeValue(forKey: id) { pending.append(open) }
-                state.flow.removeValue(forKey: id)
+                if var flow = state.flow.removeValue(forKey: id) { flow.gate.wakeAll() }
             }
             return (streams, pending)
         }

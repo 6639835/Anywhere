@@ -220,6 +220,7 @@ nonisolated final class MITMRewritePolicy: Sendable {
         state.withLock { $0 = newState }
         let activeIDs = Set(ruleSets.map { $0.id })
         MITMScriptEngine.purgeRuns(activeIDs: activeIDs)
+        MITMScriptStore.shared.purgeExcept(activeIDs: activeIDs)
         MITMParamStore.shared.replaceAll(ruleSets.map { (scope: $0.id, values: $0.parameterValues) })
         MITMScriptTransform.rulesDidReload(scopedRules: scopedRules)
     }

@@ -9,28 +9,26 @@ import Foundation
 import CryptoKit
 
 nonisolated enum QUICCrypto {
-
-    /// Call before any connection is created.
     static func registerCallbacks() {
-        ngtcp2_crypto_apple_set_aead_callbacks(aeadEncrypt, aeadDecrypt)
+        _ = registration
     }
+
+    private static let registration: Void = ngtcp2_crypto_apple_set_aead_callbacks(aeadEncrypt, aeadDecrypt)
 }
 
 // MARK: - AEAD Encrypt Callback
 
-/// Writes ciphertext + 16-byte tag to `destination`. Inputs are non-owning `bytesNoCopy` views
-/// into ngtcp2's memory — safe because the callback is synchronous.
 nonisolated private let aeadEncrypt: @convention(c) (
-    UnsafeMutablePointer<UInt8>?,    // destination
-    UnsafePointer<UInt8>?,           // key
-    Int,                              // keylen
-    UnsafePointer<UInt8>?,           // nonce
-    Int,                              // noncelen
-    UnsafePointer<UInt8>?,           // plaintext
-    Int,                              // plaintextlen
-    UnsafePointer<UInt8>?,           // aad
-    Int,                              // aadlen
-    Int32                             // aead_type
+    UnsafeMutablePointer<UInt8>?,
+    UnsafePointer<UInt8>?,
+    Int,
+    UnsafePointer<UInt8>?,
+    Int,
+    UnsafePointer<UInt8>?,
+    Int,
+    UnsafePointer<UInt8>?,
+    Int,
+    Int32
 ) -> Int32 = { destination, key, keylen, nonce, noncelen, plaintext, plaintextlen, aad, aadlen, aeadType in
     guard let destination, let key, let nonce else { return -1 }
 

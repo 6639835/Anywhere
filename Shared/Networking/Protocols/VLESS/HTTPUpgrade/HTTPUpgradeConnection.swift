@@ -45,6 +45,10 @@ nonisolated final class HTTPUpgradeConnection: Sendable {
 
     private let state: Mutex<ConnectionState>
 
+    private static let upgradeDeadline: Duration = .seconds(30)
+
+    private static let maxResponseHeaderSize = 65_536
+
     static let chromeUserAgent = ProxyUserAgent.chrome
 
     var isConnected: Bool {
@@ -70,6 +74,16 @@ nonisolated final class HTTPUpgradeConnection: Sendable {
     // MARK: - HTTP Upgrade Handshake
 
     func performUpgrade() async throws {
+        try await withDialDeadline(Self.upgradeDeadline, onExpiry: {
+            self.cancel()
+        }, error: {
+            AnywhereError.proxy(.httpUpgrade, .upgradeFailed(detail: "handshake timed out"))
+        }) {
+            try await self.sendAndAwaitUpgrade()
+        }
+    }
+
+    private func sendAndAwaitUpgrade() async throws {
         var request = "GET \(configuration.normalizedPath) HTTP/1.1\r\n"
         request += "Host: \(configuration.host)\r\n"
         request += "Connection: Upgrade\r\n"
@@ -111,11 +125,14 @@ nonisolated final class HTTPUpgradeConnection: Sendable {
                 throw AnywhereError.proxy(.httpUpgrade, .upgradeFailed(detail: "Empty response from server"))
             }
 
-            let headerData: Data? = state.withLock { state in
+            let headerData: Data? = try state.withLock { state in
                 state.leftoverBuffer.append(data)
 
                 let headerEnd = Data([0x0D, 0x0A, 0x0D, 0x0A])
                 guard let range = state.leftoverBuffer.range(of: headerEnd) else {
+                    if state.leftoverBuffer.count > Self.maxResponseHeaderSize {
+                        throw AnywhereError.proxy(.httpUpgrade, .upgradeFailed(detail: "response headers too large"))
+                    }
                     return nil
                 }
 

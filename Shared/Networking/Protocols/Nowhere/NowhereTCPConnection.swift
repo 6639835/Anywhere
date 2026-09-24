@@ -315,31 +315,29 @@ actor NowhereTCPConnection: ProxyConnection, NowhereTerminationObservable {
             guard state.phase == .ready,
                   state.flowKind == .udp,
                   state.flowRole == .open,
-                  state.monitorTask == nil else {
+                  state.monitorTask == nil,
+                  let transport = state.transport else {
                 return
             }
             state.monitorTask = Task { [weak self] in
-                await self?.monitorUplink()
+                do {
+                    switch try await transport.receive() {
+                    case .bytes:
+                        throw AnywhereError.proxy(
+                            .nowhere,
+                            .connectionClosed(detail: "Unexpected reverse UoT payload")
+                        )
+                    case .end:
+                        self?.finish(error: nil)
+                    }
+                } catch is CancellationError {
+                    guard let self, self.isConnected else { return }
+                    self.fail(AnywhereError.proxy(.nowhere, .streamClosed))
+                } catch {
+                    guard let self else { return }
+                    self.fail(self.terminalError(fallback: error))
+                }
             }
-        }
-    }
-
-    private func monitorUplink() async {
-        do {
-            let transport = try readyTransport()
-            switch try await transport.receive() {
-            case .bytes:
-                throw AnywhereError.proxy(
-                    .nowhere,
-                    .connectionClosed(detail: "Unexpected reverse UoT payload")
-                )
-            case .end:
-                finish(error: nil)
-            }
-        } catch is CancellationError {
-            if isConnected { fail(AnywhereError.proxy(.nowhere, .streamClosed)) }
-        } catch {
-            fail(terminalError(fallback: error))
         }
     }
 
@@ -369,6 +367,7 @@ actor NowhereTCPConnection: ProxyConnection, NowhereTerminationObservable {
         resources.3?.cancel()
         resources.0?.cancel()
         resources.1?.cancel()
+        tunnel?.cancel()
         termination.fire(error)
     }
 

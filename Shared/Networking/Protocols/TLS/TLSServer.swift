@@ -144,6 +144,16 @@ nonisolated final class TLSServer {
     }
 
     private func processClientHello() throws {
+        if phase == .waitingClientHelloAfterHRR {
+            while rxBuffer.count >= 5, rxBuffer[rxBuffer.startIndex] == TLSContentType.changeCipherSpec {
+                guard let record = try peekTLSRecord() else { return }
+                rxBuffer.removeFirst(record.count)
+                ccsBudget -= 1
+                guard ccsBudget > 0 else {
+                    throw AnywhereError.tls(.handshakeFailed(detail: "too many change_cipher_spec records"))
+                }
+            }
+        }
         guard let handshakeMessage = try peekReassembledClientHello() else { return }
 
         let parsed = try TLSClientHelloParser.parseHandshakeBody(handshakeMessage)

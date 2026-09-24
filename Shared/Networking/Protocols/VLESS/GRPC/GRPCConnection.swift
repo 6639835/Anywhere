@@ -83,7 +83,7 @@ nonisolated final class GRPCConnection: Sendable {
 
         var initialState = State()
         if configuration.initialWindowsSize > 0 {
-            initialState.h2LocalWindowSize = configuration.initialWindowsSize
+            initialState.h2LocalWindowSize = min(configuration.initialWindowsSize, 0x7FFF_FFFF)
         }
         self.state = Mutex(initialState)
     }
@@ -359,14 +359,14 @@ nonisolated extension GRPCConnection {
             offset += 6
 
             switch id {
-            case 0x04: // INITIAL_WINDOW_SIZE
+            case 0x04:
                 state.withLock { state in
                     let delta = Int(value) - state.h2PeerInitialWindowSize
                     state.h2PeerInitialWindowSize = Int(value)
                     state.h2PeerStreamSendWindow += delta
                 }
-            case 0x05: // MAX_FRAME_SIZE
-                state.withLock { $0.h2MaxFrameSize = Int(value) }
+            case 0x05:
+                state.withLock { $0.h2MaxFrameSize = min(max(Int(value), 16_384), 16_777_215) }
             default:
                 break
             }
@@ -376,7 +376,7 @@ nonisolated extension GRPCConnection {
     fileprivate func handleWindowUpdate(frame: (type: UInt8, flags: UInt8, streamId: UInt32, payload: Data)) {
         state.withLock { state in
             if frame.payload.count >= 4 {
-                let raw = frame.payload.prefix(4).withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
+                let raw = H2Framing.readUInt32(frame.payload)
                 let increment = Int(raw & 0x7FFFFFFF)
                 if frame.streamId == 0 {
                     state.h2PeerConnectionWindow += increment
@@ -621,10 +621,10 @@ nonisolated extension GRPCConnection {
                     throw AnywhereError.proxy(.grpc, .protocolViolation(detail: "truncated protobuf length"))
                 }
                 offset += lenConsumed
-                let lenInt = Int(length)
-                guard offset + lenInt <= message.count else {
+                guard length <= UInt64(message.count - offset) else {
                     throw AnywhereError.proxy(.grpc, .protocolViolation(detail: "truncated protobuf value"))
                 }
+                let lenInt = Int(length)
                 if fieldNumber == 1 {
                     out.append(message.subdata(in: message.startIndex + offset ..< message.startIndex + offset + lenInt))
                 }
@@ -694,6 +694,7 @@ nonisolated extension GRPCConnection {
                 throw AnywhereError.proxy(.grpc, .connectionClosed(detail: nil))
             case .park:
                 await parkForFlowWindow()
+                try Task.checkCancellation()
             case .built(let frames, let nextOffset):
                 do {
                     try await transport.send(frames)
@@ -1148,20 +1149,10 @@ nonisolated extension GRPCConnection {
     }
 
     private static func decodeHPACKInteger(_ data: Data, at start: Int, prefixBits: Int) -> (Int, Int) {
-        let maxPrefix = (1 << prefixBits) - 1
         guard start < data.endIndex else { return (0, 0) }
-        let first = Int(data[start] & UInt8(maxPrefix))
-        if first < maxPrefix { return (first, 1) }
-        var value = maxPrefix
-        var shift = 0
-        var offset = start + 1
-        while offset < data.endIndex {
-            let b = data[offset]
-            value += (Int(b & 0x7F)) << shift
-            offset += 1
-            shift += 7
-            if b & 0x80 == 0 { return (value, offset - start) }
-            if shift >= 64 { return (value, offset - start) }
+        var offset = start
+        guard let value = HPACKEncoder.decodeInteger(from: data, at: &offset, prefixBits: prefixBits) else {
+            return (0, data.endIndex - start)
         }
         return (value, offset - start)
     }
@@ -1172,7 +1163,7 @@ nonisolated extension GRPCConnection {
         let isHuffman = (meta & 0x80) != 0
         let (length, lenConsumed) = decodeHPACKInteger(data, at: start, prefixBits: 7)
         let bytesStart = start + lenConsumed
-        guard bytesStart + length <= data.endIndex else { return nil }
+        guard length >= 0, length <= data.endIndex - bytesStart else { return nil }
         let bytes = data.subdata(in: bytesStart ..< bytesStart + length)
         let string: String
         if isHuffman {

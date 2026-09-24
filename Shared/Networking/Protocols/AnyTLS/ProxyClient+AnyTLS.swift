@@ -30,12 +30,30 @@ extension ProxyClient {
             }
             return TLSProxyConnection(tlsConnection: tlsConnection)
         }
-
-        guard let pool = AnyTLSMultiplexerRegistry.shared.pool(for: configuration, dialOut: dialOut) else {
-            throw AnywhereError.proxy(.anyTLS, .notReady)
+        
+        let stream: AnyTLSStream
+        if tunnel != nil {
+            let connection = try await dialOut()
+            let multiplexer = AnyTLSMultiplexer(
+                inner: connection,
+                passwordHash: AnyTLSProtocol.passwordHash(anytls.password),
+                padding: AnyTLSPaddingScheme.default
+            )
+            _ = multiplexer.tryReserveStream()
+            await multiplexer.start()
+            guard let opened = await multiplexer.openStream(onEnd: { [weak multiplexer] in
+                multiplexer?.close(error: nil)
+            }) else {
+                multiplexer.close(error: nil)
+                throw AnywhereError.proxy(.anyTLS, .connectionClosed(detail: "Failed to open AnyTLS stream"))
+            }
+            stream = opened
+        } else {
+            guard let pool = AnyTLSMultiplexerRegistry.shared.pool(for: configuration, dialOut: dialOut) else {
+                throw AnywhereError.proxy(.anyTLS, .notReady)
+            }
+            stream = try await pool.acquireStream()
         }
-
-        let stream = try await pool.acquireStream()
         guard !isCancelled else {
             stream.cancel()
             throw AnywhereError.transport(.terminated)

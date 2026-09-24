@@ -17,7 +17,9 @@ nonisolated extension ProxyClient {
         }
         let directProxyConnection = try await dialDirectProxyConnection()
         do {
-            return try await sendShadowsocksProtocolHandshake(over: directProxyConnection, request: request)
+            let connection = try await sendShadowsocksProtocolHandshake(over: directProxyConnection, request: request)
+            try await connection.send(request.initialData ?? Data())
+            return connection
         } catch {
             directProxyConnection.cancel()
             throw error
@@ -54,12 +56,17 @@ nonisolated extension ProxyClient {
             try await transport.connect()
             udpInner = DirectUDPProxyConnection(transport: transport)
         }
-        return try wrapWithShadowsocks(
-            inner: udpInner,
-            network: .udp,
-            destinationHost: destinationHost,
-            destinationPort: destinationPort
-        ).get()
+        do {
+            return try wrapWithShadowsocks(
+                inner: udpInner,
+                network: .udp,
+                destinationHost: destinationHost,
+                destinationPort: destinationPort
+            ).get()
+        } catch {
+            udpInner.cancel()
+            throw error
+        }
     }
 
     fileprivate func wrapWithShadowsocks(

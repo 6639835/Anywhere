@@ -23,6 +23,7 @@ extension TunnelStack {
         pendingConfigurationSwitch = nil
         pendingSuspend = false
         makeFreshDutyCycleStreams()
+        purgeOutputBuffer()
         AnywhereLogger.installLogSink { [weak self] message, level in
             let logLevel: TunnelLogLevel
             switch level {
@@ -400,7 +401,9 @@ extension TunnelStack {
         guard phase.isActive else { return }
         guard proxyMode == .rule else { return }
         logger.info("[VPN] Routing changed")
-        domainRouter.install(await domainRouter.compileRoutingConfiguration())
+        let compiled = await domainRouter.compileRoutingConfiguration()
+        guard phase.isActive, proxyMode == .rule else { return }
+        domainRouter.install(compiled)
         connectionRouter.clearRejectMarks()
     }
 

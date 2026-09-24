@@ -11,7 +11,6 @@ import Synchronization
 nonisolated private let logger = AnywhereLogger(category: "HysteriaConnection")
 
 actor HysteriaConnection {
-
     private let session: HysteriaSession
     private let destination: String
 
@@ -42,6 +41,15 @@ actor HysteriaConnection {
 
     private let rawInbox = AsyncInbox<Data>()
     private var pendingData = Data()
+    
+    private struct FlowCredit {
+        var pending = 0
+        var releasedSID: Int64?
+    }
+    private nonisolated let flowCredit = Mutex(FlowCredit())
+    
+    private nonisolated static let maxTCPResponseLength =
+        1 + 8 + HysteriaProtocol.maxResponseMessageLength + 8 + HysteriaProtocol.maxPaddingLength
 
     init(session: HysteriaSession, destination: String) {
         self.session = session
@@ -94,6 +102,7 @@ actor HysteriaConnection {
         guard adopted else {
             session.shutdownStream(sid)
             session.releaseTCPStream(sid)
+            releaseCredit(sid)
             throw AnywhereError.proxy(.hysteria, .streamClosed)
         }
 
@@ -106,13 +115,17 @@ actor HysteriaConnection {
                 throw AnywhereError.proxy(.hysteria, .connectionClosed(detail: "Stream closed before response"))
             }
             buffer.append(chunk)
-            guard let parsed = HysteriaProtocol.parseTCPResponse(from: buffer) else { continue }
-            if parsed.consumed > 0 { session.extendStreamOffset(sid, count: parsed.consumed) }
+            guard let parsed = HysteriaProtocol.parseTCPResponse(from: buffer) else {
+                if buffer.count > Self.maxTCPResponseLength {
+                    throw AnywhereError.proxy(.hysteria, .connectionClosed(detail: "Malformed TCP response"))
+                }
+                continue
+            }
+            if parsed.consumed > 0 { returnCredit(sid, count: parsed.consumed) }
             guard parsed.status == HysteriaProtocol.tcpResponseStatusOK else {
                 throw AnywhereError.proxy(.hysteria, .tunnelRejected(detail: parsed.message))
             }
-            buffer.removeFirst(parsed.consumed)
-            pendingData = buffer
+            pendingData = Data(buffer.dropFirst(parsed.consumed))
             let becameReady = phase.withLock { state -> Bool in
                 guard case .open(let s, false) = state else { return false }
                 return Phase.transition(&state, to: .open(sid: s, ready: true))
@@ -125,7 +138,18 @@ actor HysteriaConnection {
     // MARK: - Demux feed
 
     nonisolated func feedStreamData(_ data: Data, fin: Bool) {
-        if !data.isEmpty { rawInbox.yield(Data(data)) }
+        if !data.isEmpty {
+            let orphanSID: Int64? = flowCredit.withLock { credit in
+                guard credit.releasedSID == nil else { return credit.releasedSID }
+                credit.pending += data.count
+                return nil
+            }
+            if let orphanSID {
+                session.extendStreamOffset(orphanSID, count: data.count)
+            } else {
+                rawInbox.yield(Data(data))
+            }
+        }
         if fin { rawInbox.finish() }
     }
 
@@ -160,14 +184,34 @@ actor HysteriaConnection {
         if !pendingData.isEmpty {
             let out = pendingData
             pendingData = Data()
-            if let sid = currentSID { session.extendStreamOffset(sid, count: out.count) }
+            if let sid = currentSID { returnCredit(sid, count: out.count) }
             return out
         }
         guard let chunk = try await nextChunk() else { return nil }
         if !chunk.isEmpty, let sid = currentSID {
-            session.extendStreamOffset(sid, count: chunk.count)
+            returnCredit(sid, count: chunk.count)
         }
         return chunk
+    }
+
+    private nonisolated func returnCredit(_ sid: Int64, count: Int) {
+        let granted = flowCredit.withLock { credit -> Int in
+            let take = min(credit.pending, count)
+            credit.pending -= take
+            return take
+        }
+        if granted > 0 { session.extendStreamOffset(sid, count: granted) }
+    }
+    
+    private nonisolated func releaseCredit(_ sid: Int64) {
+        let residual = flowCredit.withLock { credit -> Int in
+            guard credit.releasedSID == nil else { return 0 }
+            credit.releasedSID = sid
+            let outstanding = credit.pending
+            credit.pending = 0
+            return outstanding
+        }
+        if residual > 0 { session.extendStreamOffset(sid, count: residual) }
     }
 
     private func nextChunk() async throws -> Data? {
@@ -185,6 +229,7 @@ actor HysteriaConnection {
             session.shutdownStream(sid)
             session.releaseTCPStream(sid)
         }
+        if let sid = currentSID { releaseCredit(sid) }
     }
 }
 

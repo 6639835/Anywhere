@@ -718,7 +718,6 @@ actor TCPConnection: MITMSessionHost {
         guard phase != .closed, !data.isEmpty else { return }
         markActivity()
         if let mitmSession {
-            acknowledgeReceivedBytes(data.count)
             mitmSession.assumeIsolated { $0.feedClientBytes(data) }
         } else if stream != nil {
             uploadInbox.yield(data)
@@ -1069,6 +1068,16 @@ actor TCPConnection: MITMSessionHost {
         try await connection.send(data)
         markActivity()
         activityRecord.addBytesIn(data.count)
+    }
+
+    nonisolated func mitmSessionDidConsumeClientBytes(_ count: Int) {
+        guard count > 0 else { return }
+        sessionContext.enqueue {
+            self.assumeIsolated { me in
+                guard me.phase != .closed else { return }
+                me.acknowledgeReceivedBytes(count)
+            }
+        }
     }
 
     nonisolated func mitmSessionDidTearDown(error: Error?) {

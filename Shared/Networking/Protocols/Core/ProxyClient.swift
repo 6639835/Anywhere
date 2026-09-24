@@ -172,7 +172,15 @@ nonisolated final class ProxyClient: Sendable {
         let chainTunnel = try await buildChainTunnel(
             chain: chain, index: 0, currentTunnel: nil, hopNetworks: hopNetworks
         )
-        setChainTunnel(chainTunnel)
+        let installed: Bool = state.withLock { s in
+            if case .cancelled = s.phase { return false }
+            s.tunnel = chainTunnel
+            return true
+        }
+        guard installed else {
+            chainTunnel.cancel()
+            throw AnywhereError.transport(.terminated)
+        }
         return try await connectWithOutbound(request)
     }
 

@@ -32,6 +32,8 @@ nonisolated final class NowhereFlowOpenAttempt: Sendable {
 
     var hasStartedEarlyDataWrite: Bool { state.withLock { $0.earlyDataWriteStarted } }
 
+    var isCancelled: Bool { state.withLock { $0.cancelled } }
+
     func cancel() {
         let connections = state.withLock { state -> [ProxyConnection] in
             guard !state.cancelled else { return [] }
@@ -256,7 +258,12 @@ nonisolated final class NowhereClient: Sendable {
 
         switch acquired {
         case .reuse(let existing):
-            try await existing.ensureReady()
+            do {
+                try await existing.ensureReady()
+            } catch {
+                if Self.isStaleSessionError(error) { invalidateSession(ifCurrent: existing) }
+                throw error
+            }
             return existing
         case .transportSpent:
             throw AnywhereError.proxy(.nowhere, .streamClosed)
@@ -299,13 +306,7 @@ nonisolated final class NowhereClient: Sendable {
         initialData: Data?,
         attempt: NowhereFlowOpenAttempt? = nil
     ) async throws -> ProxyConnection {
-        let session: NowhereSession
-        do {
-            session = try await acquireSession()
-        } catch {
-            if Self.isStaleSessionError(error) { invalidateSession() }
-            throw error
-        }
+        let session = try await acquireSession()
         let connection = NowhereConnection(
             session: session,
             destination: destination,
@@ -321,7 +322,7 @@ nonisolated final class NowhereClient: Sendable {
             return connection
         } catch {
             connection.cancel()
-            if Self.isStaleSessionError(error) {
+            if Self.isStaleSessionError(error), attempt?.isCancelled != true {
                 invalidateSession(ifCurrent: session)
             }
             throw error
@@ -333,13 +334,7 @@ nonisolated final class NowhereClient: Sendable {
         header: NowhereProtocol.FlowHeader,
         attempt: NowhereFlowOpenAttempt? = nil
     ) async throws -> ProxyConnection {
-        let session: NowhereSession
-        do {
-            session = try await acquireSession()
-        } catch {
-            if Self.isStaleSessionError(error) { invalidateSession() }
-            throw error
-        }
+        let session = try await acquireSession()
         let connection = NowhereUDPConnection(
             session: session,
             destination: destination,
@@ -353,7 +348,7 @@ nonisolated final class NowhereClient: Sendable {
             return connection
         } catch {
             connection.cancel()
-            if Self.isStaleSessionError(error) {
+            if Self.isStaleSessionError(error), attempt?.isCancelled != true {
                 invalidateSession(ifCurrent: session)
             }
             throw error

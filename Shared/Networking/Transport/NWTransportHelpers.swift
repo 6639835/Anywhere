@@ -7,6 +7,36 @@
 
 import Foundation
 import Network
+import Synchronization
+
+// MARK: - Legacy engine stall
+
+nonisolated final class NWStallLatch: Sendable {
+    private let stallError = Mutex<NWError?>(nil)
+
+    func watch(_ connection: NWConnection) {
+        connection.stateUpdateHandler = { [weak connection, self] state in
+            switch state {
+            case .waiting(let error), .failed(let error):
+                if self.record(error) { connection?.cancel() }
+            default:
+                break
+            }
+        }
+    }
+
+    func failure(for error: NWError, operation: AnywhereError.Transport.Operation) -> any Error {
+        (stallError.withLock { $0 } ?? error).legacyEngineError(operation: operation)
+    }
+
+    private func record(_ error: NWError) -> Bool {
+        stallError.withLock { stored in
+            guard stored == nil else { return false }
+            stored = error
+            return true
+        }
+    }
+}
 
 // MARK: - NWError
 

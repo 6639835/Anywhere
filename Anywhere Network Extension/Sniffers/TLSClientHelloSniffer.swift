@@ -8,16 +8,10 @@
 import Foundation
 
 nonisolated struct TLSClientHelloSniffer {
-
     enum State: Equatable {
-        /// Need more bytes to decide.
         case needMore
-        /// First bytes do not start with a TLS Handshake record (0x16).
         case notTLS
-        /// SNI extracted from a well-formed ClientHello (lowercased).
         case found(serverName: String)
-        /// TLS-shaped but SNI unavailable (malformed, absent, or cap reached);
-        /// caller should fall back to IP-based routing.
         case unavailable
     }
 
@@ -28,13 +22,10 @@ nonisolated struct TLSClientHelloSniffer {
     init(bufferLimit: Int = TunnelConstants.tlsSnifferBufferLimit) {
         self.bufferLimit = bufferLimit
     }
-
-    /// Appends `data` and returns the new state; no-ops after a terminal state.
+    
     mutating func feed(_ data: Data) -> State {
         guard state == .needMore, !data.isEmpty else { return state }
-
-        // Fast reject before copying: a TLS record starts with 0x16, so the
-        // buffer stays empty for non-TLS protocols.
+        
         if buffer.isEmpty, data[data.startIndex] != 0x16 {
             state = .notTLS
             return state
@@ -51,27 +42,20 @@ nonisolated struct TLSClientHelloSniffer {
     }
 
     // MARK: - Parsing
-
-    /// TLS record layer: [content_type:1][legacy_version:2][length:2][fragment]
-    ///
-    /// A client may split the ClientHello across several TLS records (RFC 8446 §5.1) — common with
-    /// TLS-fragmenting / anti-censorship clients. Reassemble the handshake message across consecutive
-    /// handshake records before parsing, rather than giving up after the first record (which would
-    /// drop SNI-based routing for those clients). The total is bounded by `bufferLimit`.
+    
     private func parse(_ buf: Data) -> State {
         guard buf.count >= 5 else { return .needMore }
         let base = buf.startIndex
         guard buf[base] == 0x16 else { return .unavailable }
 
         var fragment = Data()
-        var offset = 0                  // bytes scanned from base
-        var messageLength: Int?         // 4 + bodyLen, once the handshake header is in hand
+        var offset = 0
+        var messageLength: Int?
         let total = buf.count
         while true {
             guard total - offset >= 5 else { return .needMore }
             let recordStart = buf.index(base, offsetBy: offset)
-            guard buf[recordStart] == 0x16 else { return .unavailable } // non-handshake record mid-message
-            // RFC 8446 §5.1: record fragment length ≤ 2^14.
+            guard buf[recordStart] == 0x16 else { return .unavailable }
             let fragLen = (Int(buf[buf.index(recordStart, offsetBy: 3)]) << 8) | Int(buf[buf.index(recordStart, offsetBy: 4)])
             guard fragLen > 0, fragLen <= 16_384 else { return .unavailable }
             let recordTotal = 5 + fragLen
@@ -93,22 +77,14 @@ nonisolated struct TLSClientHelloSniffer {
             }
         }
     }
-
-    /// Handshake layer: [msg_type:1][length:3][body]
+    
     private func parseHandshake(_ frag: Data) -> State {
         var current = Cursor(frag)
         guard let msgType = current.readU8(), msgType == 0x01 else { return .unavailable } // ClientHello
         guard let bodyLen = current.readU24(), let body = current.readBytes(bodyLen) else { return .unavailable }
         return parseClientHello(body)
     }
-
-    /// ClientHello body (after the 4-byte handshake header):
-    ///   legacy_version (uint16)
-    ///   random [32]
-    ///   session_id             opaque<0..32>      (uint8  len + bytes)
-    ///   cipher_suites          CipherSuite<2..2^16-2> (uint16 len + bytes)
-    ///   compression_methods    opaque<1..2^8-1>   (uint8  len + bytes)
-    ///   extensions             Extension<8..2^16-1> (uint16 len + bytes)
+    
     private func parseClientHello(_ body: Data) -> State {
         var current = Cursor(body)
 
@@ -139,11 +115,7 @@ nonisolated struct TLSClientHelloSniffer {
         }
         return .unavailable
     }
-
-    /// server_name extension:
-    ///   ServerNameList: uint16 length + list of ServerName
-    ///   ServerName:     uint8 name_type + opaque<0..2^16-1>
-    ///   name_type 0x00 = HostName (ASCII per RFC 6066)
+    
     private func parseServerNameList(_ buf: Data) -> String? {
         var current = Cursor(buf)
         guard let listLen = current.readU16(), let list = current.readBytes(listLen) else { return nil }
@@ -154,8 +126,9 @@ nonisolated struct TLSClientHelloSniffer {
                   let nameData = listCursor.readBytes(nameLen) else { return nil }
             if nameType == 0x00,
                !nameData.isEmpty,
-               let host = String(data: nameData, encoding: .utf8) {
-                return host.lowercased()
+               let host = String(data: nameData, encoding: .utf8)?.lowercased(),
+               host.utf8.count <= 253 {
+                return host
             }
         }
         return nil

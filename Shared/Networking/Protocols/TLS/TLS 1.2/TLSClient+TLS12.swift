@@ -40,6 +40,9 @@ extension TLSClient {
             switch try await connection.receive() {
             case .bytes(let moreData):
                 buffer.append(moreData)
+                guard buffer.count <= Self.maxHandshakeBufferSize else {
+                    throw AnywhereError.tls(.handshakeFailed(detail: "Handshake flight exceeds \(Self.maxHandshakeBufferSize) bytes"))
+                }
             case .end:
                 throw AnywhereError.tls(.handshakeFailed(detail: "Connection closed before TLS 1.2 handshake completed"))
             }
@@ -153,7 +156,7 @@ extension TLSClient {
 
         tls12Transcript?.append(messages.handshakeBytes)
 
-        try validateCertificate()
+        try await validateCertificate()
 
         let preMasterSecret: Data
         let clientKeyExchangeBody: Data
@@ -286,10 +289,10 @@ extension TLSClient {
         )
 
         if !isValid {
+            let message = error?.takeRetainedValue().localizedDescription ?? "Signature verification failed"
             if CertificatePolicy.allowInsecure {
                 return
             }
-            let message = error?.takeRetainedValue().localizedDescription ?? "Signature verification failed"
             throw AnywhereError.tls(.certificateValidationFailed(detail: "ServerKeyExchange signature failed: \(message)"))
         }
     }
@@ -617,6 +620,9 @@ extension TLSClient {
             switch try await connection.receive() {
             case .bytes(let moreData):
                 buffer.append(moreData)
+                guard buffer.count <= Self.maxHandshakeBufferSize else {
+                    throw AnywhereError.tls(.handshakeFailed(detail: "Handshake flight exceeds \(Self.maxHandshakeBufferSize) bytes"))
+                }
             case .end:
                 throw AnywhereError.tls(.handshakeFailed(detail: "Connection closed before server Finished"))
             }
@@ -630,6 +636,7 @@ extension TLSClient {
         var offset = 0
         var foundCCS = false
         var serverSeqNum: UInt64 = 0
+        var transcriptThroughCCS = tls12Transcript
 
         while offset + 5 <= buffer.count {
             let contentType = buffer[offset]
@@ -641,7 +648,7 @@ extension TLSClient {
                 foundCCS = true
             } else if contentType == TLSContentType.handshake && !foundCCS {
                 let recordBody = buffer.subdata(in: (offset + 5)..<(offset + 5 + recordLen))
-                tls12Transcript?.append(recordBody)
+                transcriptThroughCCS?.append(recordBody)
             } else if contentType == TLSContentType.handshake && foundCCS {
                 let recordBody = buffer.subdata(in: (offset + 5)..<(offset + 5 + recordLen))
 
@@ -663,7 +670,7 @@ extension TLSClient {
 
                     let verifyData = decrypted.subdata(in: 4..<16)
 
-                    guard let ms = masterSecret, let transcript = tls12Transcript else {
+                    guard let ms = masterSecret, let transcript = transcriptThroughCCS else {
                         return .failure(AnywhereError.tls(.handshakeFailed(detail: "Missing state for Finished verification")))
                     }
 
@@ -799,11 +806,10 @@ extension TLSClient {
                     paddingGood |= decrypted[i] ^ UInt8(paddingByte)
                 }
             }
-
-            guard paddingGood == 0 else {
-                throw AnywhereError.tls(.handshakeFailed(detail: "Invalid CBC padding"))
+            
+            if paddingGood == 0 {
+                decrypted = decrypted.prefix(decrypted.count - paddingLen)
             }
-            decrypted = decrypted.prefix(decrypted.count - paddingLen)
 
             let macSize = TLSCipherSuite.macLength(tls12CipherSuite)
             guard decrypted.count >= macSize else {
@@ -831,8 +837,7 @@ extension TLSClient {
                 payload: payload, useSHA384: useSHA384, useSHA256: useSHA256
             )
 
-            guard receivedMAC.count == expectedMAC.count,
-                  constantTimeEqual(receivedMAC, expectedMAC) else {
+            guard constantTimeEqual(receivedMAC, expectedMAC), paddingGood == 0 else {
                 throw AnywhereError.tls(.handshakeFailed(detail: "MAC verification failed"))
             }
 

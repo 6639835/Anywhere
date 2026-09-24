@@ -6,28 +6,60 @@
 //
 
 import Foundation
+import Synchronization
 import dnssd
 
 nonisolated final class DNSSyscallConcurrencyBridge: Sendable {
+    private static let maxConcurrentCalls = 16
+
     private let queue: DispatchQueue = DispatchQueue(
         label: "com.argsment.Anywhere.DNSSyscallConcurrencyBridge",
         qos: .userInitiated,
         attributes: .concurrent
     )
 
+    private struct Gate {
+        var running = 0
+        var waiters: [CheckedContinuation<Void, Never>] = []
+    }
+
+    private let gate = Mutex(Gate())
+
     func run<T: Sendable>(_ body: @escaping @Sendable () -> T) async -> T {
-        await withCheckedContinuation { continuation in
+        await acquireSlot()
+        defer { releaseSlot() }
+        return await withCheckedContinuation { continuation in
             queue.async { continuation.resume(returning: body()) }
         }
     }
+    
+    private func acquireSlot() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let admitted: Bool = gate.withLock { gate in
+                guard gate.running < Self.maxConcurrentCalls else {
+                    gate.waiters.append(continuation)
+                    return false
+                }
+                gate.running += 1
+                return true
+            }
+            if admitted { continuation.resume() }
+        }
+    }
+
+    private func releaseSlot() {
+        let next: CheckedContinuation<Void, Never>? = gate.withLock { gate in
+            guard !gate.waiters.isEmpty else {
+                gate.running -= 1
+                return nil
+            }
+            return gate.waiters.removeFirst()
+        }
+        next?.resume()
+    }
 
     // MARK: - Record query
-
-    /// One-shot `DNSServiceQueryRecord` for `host`/`rrtype`, blocking on this bridge's pool (a
-    /// private fd + `poll` loop, never a cooperative thread). Resumes with the first record
-    /// `accept` extracts a payload from — plus its TTL — or `nil` on a negative answer or after
-    /// `timeout`. The C-callback trampoline and its context passing stay inside this bridge;
-    /// callers supply only the record-payload parser.
+    
     func queryFirstRecord(
         host: String,
         rrtype: UInt16,
@@ -36,14 +68,13 @@ nonisolated final class DNSSyscallConcurrencyBridge: Sendable {
     ) async -> (payload: Data, ttl: UInt32)? {
         await run { Self.queryFirstRecordBlocking(host: host, rrtype: rrtype, timeout: timeout, accept: accept) }
     }
-
-    /// Carried across the C callback as its context pointer (unretained; the blocking frame
-    /// below owns it for the query's whole span).
+    
     private final class QueryResult {
         let rrtype: UInt16
         let accept: (Data) -> Data?
         var payload: Data?
         var ttl: UInt32 = 0
+        var sawFinal = false
         var answered = false
         init(rrtype: UInt16, accept: @escaping (Data) -> Data?) {
             self.rrtype = rrtype
@@ -58,19 +89,16 @@ nonisolated final class DNSSyscallConcurrencyBridge: Sendable {
         accept: @escaping @Sendable (Data) -> Data?
     ) -> (payload: Data, ttl: UInt32)? {
         let result = QueryResult(rrtype: rrtype, accept: accept)
-
-        // Non-capturing so it bridges to the C callback; state flows via context.
+        
         let callback: DNSServiceQueryRecordReply = { _, flags, _, errorCode, _, rrtype, _, rdlen, rdata, ttl, context in
             guard let context else { return }
             let result = BridgeContext.unretained(context, as: QueryResult.self)
-            // MoreComing clear marks the batch complete; note it so the poll loop
-            // stops instead of waiting out the timeout when the host publishes no
-            // usable record (the common negative case resolves promptly).
-            if (flags & kDNSServiceFlagsMoreComing) == 0 { result.answered = true }
+            if rrtype == result.rrtype || errorCode != kDNSServiceErr_NoError { result.sawFinal = true }
+            if result.sawFinal, (flags & kDNSServiceFlagsMoreComing) == 0 { result.answered = true }
             guard errorCode == kDNSServiceErr_NoError,
                   rrtype == result.rrtype, let rdata, rdlen > 0
             else { return }
-            guard result.payload == nil else { return }   // keep the first usable record
+            guard result.payload == nil else { return }
             if let payload = result.accept(Data(bytes: rdata, count: Int(rdlen))) {
                 result.payload = payload
                 result.ttl = ttl
@@ -80,8 +108,15 @@ nonisolated final class DNSSyscallConcurrencyBridge: Sendable {
         var serviceRef: DNSServiceRef?
         let context = BridgeContext.passUnretained(result)
         let queryError = host.withCString { cHost in
-            DNSServiceQueryRecord(&serviceRef, 0, 0, cHost,
-                                  rrtype, UInt16(kDNSServiceClass_IN), callback, context)
+            DNSServiceQueryRecord(
+                &serviceRef,
+                DNSServiceFlags(kDNSServiceFlagsReturnIntermediates),
+                0,
+                cHost,
+                rrtype, UInt16(kDNSServiceClass_IN),
+                callback,
+                context
+            )
         }
         guard queryError == kDNSServiceErr_NoError, let serviceRef else { return nil }
         defer { DNSServiceRefDeallocate(serviceRef) }
@@ -89,12 +124,12 @@ nonisolated final class DNSSyscallConcurrencyBridge: Sendable {
         let fd = DNSServiceRefSockFD(serviceRef)
         guard fd >= 0 else { return nil }
 
-        let deadline = CFAbsoluteTimeGetCurrent() + timeout
+        let deadline = MonotonicClock.now + timeout
         while result.payload == nil, !result.answered {
-            let remaining = deadline - CFAbsoluteTimeGetCurrent()
+            let remaining = deadline - MonotonicClock.now
             if remaining <= 0 { break }
             var pollDescriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
-            let ready = poll(&pollDescriptor, 1, Int32(remaining * 1000))
+            let ready = poll(&pollDescriptor, 1, Int32(min(remaining * 1000, 60_000)))
             guard ready > 0, (pollDescriptor.revents & Int16(POLLIN)) != 0 else { break }
             if DNSServiceProcessResult(serviceRef) != kDNSServiceErr_NoError { break }
         }

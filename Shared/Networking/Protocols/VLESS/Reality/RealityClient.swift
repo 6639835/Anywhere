@@ -88,6 +88,8 @@ actor RealityClient {
     }
     
     private static let handshakeDeadline: Duration = .seconds(30)
+    
+    private static let maxHandshakeBufferSize = 1 << 18
 
     private func withHandshakeDeadline(
         _ handshake: @escaping @Sendable () async throws -> TLSRecordConnection
@@ -227,6 +229,9 @@ actor RealityClient {
             switch try await connection.receive() {
             case .bytes(let moreData):
                 buffer.append(moreData)
+                guard buffer.count <= Self.maxHandshakeBufferSize else {
+                    throw AnywhereError.tls(.handshakeFailed(detail: "Handshake flight exceeds \(Self.maxHandshakeBufferSize) bytes"))
+                }
             case .end:
                 throw AnywhereError.tls(.handshakeFailed(detail: "Connection closed before ServerHello"))
             }
@@ -541,6 +546,9 @@ actor RealityClient {
                 switch try await connection.receive() {
                 case .bytes(let moreData):
                     buffer.append(moreData)
+                    guard buffer.count <= Self.maxHandshakeBufferSize else {
+                        throw AnywhereError.tls(.handshakeFailed(detail: "Handshake flight exceeds \(Self.maxHandshakeBufferSize) bytes"))
+                    }
                     startOffset = processedOffset
                     continue
                 case .end:
@@ -650,9 +658,8 @@ actor RealityClient {
         let tbsHeaderStart = offset
         guard let tbsLen = parseDERSequence(certDER, offset: &offset) else { return nil }
         let tbsEnd = offset + tbsLen
-
-        // Search TBSCertificate for ed25519 OID (1.3.101.112 = 06 03 2b 65 70)
-        // followed by BIT STRING containing 32-byte public key (03 21 00 <32 bytes>)
+        guard tbsEnd <= certDER.count else { return nil }
+        
         var publicKey: Data?
         for i in tbsHeaderStart..<tbsEnd {
             guard i + 40 <= tbsEnd else { break }
@@ -673,7 +680,7 @@ actor RealityClient {
         guard offset < certDER.count, certDER[offset] == 0x03 else { return nil }
         offset += 1
         guard let sigBitStringLen = parseDERLength(certDER, offset: &offset) else { return nil }
-        guard sigBitStringLen >= 1, offset < certDER.count, certDER[offset] == 0x00 else { return nil }
+        guard sigBitStringLen >= 1, offset + sigBitStringLen <= certDER.count, certDER[offset] == 0x00 else { return nil }
         let signature = certDER.subdata(in: (offset + 1)..<(offset + sigBitStringLen))
 
         return (pubKey, signature)
@@ -713,8 +720,8 @@ actor RealityClient {
         let algorithm = UInt16(body[0]) << 8 | UInt16(body[1])
         let uncompressedLength = Int(body[2]) << 16 | Int(body[3]) << 8 | Int(body[4])
         let compressedLength = Int(body[5]) << 16 | Int(body[6]) << 8 | Int(body[7])
-        guard 8 + compressedLength <= body.count else { return nil }
-        guard uncompressedLength > 0 && uncompressedLength <= 1 << 24 else { return nil }
+        guard compressedLength > 0, 8 + compressedLength <= body.count else { return nil }
+        guard uncompressedLength > 0 && uncompressedLength <= 1 << 17 else { return nil }
         let compressed = body.subdata(in: 8..<(8 + compressedLength))
 
         let compressionAlgorithm: compression_algorithm
@@ -739,11 +746,11 @@ actor RealityClient {
                 )
             }
         }
-        guard decodedSize > 0 else {
+        guard decodedSize == uncompressedLength else {
             logger.warning("[Reality] Certificate decompression failed (algorithm: 0x\(String(format: "%04x", algorithm)))")
             return nil
         }
-        return Data(decompressed.prefix(decodedSize))
+        return decompressed
     }
 
     // MARK: - Helpers

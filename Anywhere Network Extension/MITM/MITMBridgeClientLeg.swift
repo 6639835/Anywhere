@@ -16,12 +16,12 @@ nonisolated protocol MITMBridgeClientLegDelegate: AnyObject {
     func clientLegAbortRequest(streamID: UInt32)
     func clientLegResponseComplete(streamID: UInt32)
     func clientLegWriteToClient(_ data: Data)
+    func clientLegWriteReplyToClient(_ data: Data)
     func clientLegFatalError(_ message: String)
     func clientLegResponseDrained(streamID: UInt32, byteCount: Int)
 }
 
 actor MITMBridgeClientLeg: MITMResponseSink {
-
     nonisolated var unownedExecutor: UnownedSerialExecutor {
         sessionContext.executor.asUnownedSerialExecutor()
     }
@@ -40,6 +40,7 @@ actor MITMBridgeClientLeg: MITMResponseSink {
     private static let maxTrackedStreams = 256
     private static let advertisedMaxConcurrentStreams = 128
     private static let maxClientBufferedBytes = 8 * 1024 * 1024
+    private static let maxClientBufferedBytesTotal = 16 * 1024 * 1024
 
     private static let receiveWindow = 4 * 1024 * 1024
 
@@ -214,21 +215,27 @@ actor MITMBridgeClientLeg: MITMResponseSink {
         preface.append(contentsOf: [0x00, 0x02, 0x00, 0x00, 0x00, 0x00]) // SETTINGS_ENABLE_PUSH = 0
         let maxStreams = UInt32(Self.advertisedMaxConcurrentStreams)
         preface.append(
-            contentsOf: [0x00, 0x03, // SETTINGS_MAX_CONCURRENT_STREAMS
-                         UInt8((maxStreams >> 24) & 0xFF), UInt8((maxStreams >> 16) & 0xFF),
-                         UInt8((maxStreams >> 8) & 0xFF), UInt8(maxStreams & 0xFF)]
+            contentsOf: [
+                0x00, 0x03, // SETTINGS_MAX_CONCURRENT_STREAMS
+                UInt8((maxStreams >> 24) & 0xFF), UInt8((maxStreams >> 16) & 0xFF),
+                UInt8((maxStreams >> 8) & 0xFF), UInt8(maxStreams & 0xFF)
+            ]
         )
         let w = UInt32(Self.receiveWindow)
         preface.append(
-            contentsOf: [0x00, 0x04, // SETTINGS_INITIAL_WINDOW_SIZE
-                         UInt8((w >> 24) & 0xFF), UInt8((w >> 16) & 0xFF),
-                         UInt8((w >> 8) & 0xFF), UInt8(w & 0xFF)]
+            contentsOf: [
+                0x00, 0x04, // SETTINGS_INITIAL_WINDOW_SIZE
+                UInt8((w >> 24) & 0xFF), UInt8((w >> 16) & 0xFF),
+                UInt8((w >> 8) & 0xFF), UInt8(w & 0xFF)
+            ]
         )
         let maxHeaderList = UInt32(HPACKDecoder.maxDecodedHeaderListSize)
         preface.append(
-            contentsOf: [0x00, 0x06, // SETTINGS_MAX_HEADER_LIST_SIZE
-                         UInt8((maxHeaderList >> 24) & 0xFF), UInt8((maxHeaderList >> 16) & 0xFF),
-                         UInt8((maxHeaderList >> 8) & 0xFF), UInt8(maxHeaderList & 0xFF)]
+            contentsOf: [
+                0x00, 0x06, // SETTINGS_MAX_HEADER_LIST_SIZE
+                UInt8((maxHeaderList >> 24) & 0xFF), UInt8((maxHeaderList >> 16) & 0xFF),
+                UInt8((maxHeaderList >> 8) & 0xFF), UInt8(maxHeaderList & 0xFF)
+            ]
         )
         delegate?.clientLegWriteToClient(preface)
         delegate?.clientLegWriteToClient(Codec.windowUpdate(streamID: 0, increment: Self.receiveWindow - 65_535))
@@ -296,7 +303,7 @@ actor MITMBridgeClientLeg: MITMResponseSink {
         case Codec.FrameType.settings:     handleSettings(frame)
         case Codec.FrameType.windowUpdate: handleWindowUpdate(frame)
         case Codec.FrameType.ping:
-            if frame.flags & 0x1 == 0 { delegate?.clientLegWriteToClient(Codec.pingAck(opaque: frame.payload)) }
+            if frame.flags & 0x1 == 0 { delegate?.clientLegWriteReplyToClient(Codec.pingAck(opaque: frame.payload)) }
         case Codec.FrameType.rstStream:    handleClientRST(frame)
         case Codec.FrameType.priority:     break
         case Codec.FrameType.goaway:       break
@@ -322,7 +329,7 @@ actor MITMBridgeClientLeg: MITMResponseSink {
             if identifier == 0x4 { applyClientInitialWindowSize(Int(value)) }
             i += 6
         }
-        delegate?.clientLegWriteToClient(Codec.settingsAck())
+        delegate?.clientLegWriteReplyToClient(Codec.settingsAck())
     }
 
     private func applyClientInitialWindowSize(_ newValue: Int) {
@@ -936,6 +943,13 @@ actor MITMBridgeClientLeg: MITMResponseSink {
         if let backlog = paceStates[streamID]?.pending.count, backlog > Self.maxClientBufferedBytes {
             logger.warning("bridge \(host) stream \(streamID): client-bound backlog \(backlog) B over cap; resetting stream")
             rstToClient(streamID, errorCode: Codec.ErrorCode.internalError, abortUpstream: true)
+            return
+        }
+        let total = paceStates.values.reduce(0) { $0 + $1.pending.count }
+        if total > Self.maxClientBufferedBytesTotal,
+           let victim = paceStates.max(by: { $0.value.pending.count < $1.value.pending.count })?.key {
+            logger.warning("bridge \(host): client-bound backlog \(total) B across streams over cap; resetting largest stream \(victim)")
+            rstToClient(victim, errorCode: Codec.ErrorCode.internalError, abortUpstream: true)
         }
     }
 

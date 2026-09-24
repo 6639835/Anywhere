@@ -22,10 +22,10 @@ nonisolated struct QUICSessionTicket {
     let issued: CFAbsoluteTime
     let lifetime: UInt32
     let ticketAgeAdd: UInt32
+    let issuedInsecure: Bool
 }
 
 extension QUICSessionTicket {
-    /// The maximum cache lifetime allowed by RFC 8446.
     nonisolated static let maxLifetime = UInt32(604800)
 }
 
@@ -112,14 +112,13 @@ nonisolated class QUICTLSHandler {
     private var privateKeyP256: P256.KeyAgreement.PrivateKey?
     private var privateKeyX25519: Curve25519.KeyAgreement.PrivateKey?
     private var clientRandom = Data(count: 32)
-
-    /// Concatenation of all handshake messages.
+    
     private var transcript = Data()
 
     private(set) var cipherSuite: UInt16 = TLSCipherSuite.TLS_AES_128_GCM_SHA256
-
-    /// Accumulates partial TLS messages across CRYPTO frames.
+    
     private var cryptoBuffer = Data()
+    private var cryptoBufferLevel: ngtcp2_encryption_level?
 
     private var serverCertificates: [SecCertificate] = []
     private var transcriptBeforeCertVerify: Data?
@@ -132,6 +131,8 @@ nonisolated class QUICTLSHandler {
     private var offeredPSKCipherSuite: UInt16?
     private var pskAccepted = false
     private var pskBinderLength: Int = 0
+    private var offeredTicketInsecure = false
+    private var authenticatedInsecurely = false
 
     private(set) var peerQUICTransportParameters: Data?
 
@@ -195,12 +196,14 @@ nonisolated class QUICTLSHandler {
         let cachedTicket = QUICSessionTicketCache.lookup(serverName: serverName, alpn: alpn)
 
         if let ticket = cachedTicket,
-           CFAbsoluteTimeGetCurrent() - ticket.issued < Double(ticket.lifetime) {
+           CFAbsoluteTimeGetCurrent() - ticket.issued < Double(ticket.lifetime),
+           !ticket.issuedInsecure || CertificatePolicy.allowInsecure {
             let (extData, binderLen) = buildPSKExtension(ticket: ticket)
             pskExtData = extData
             pskBinderLength = binderLen
             candidatePSK = ticket.psk
             candidateCipherSuite = ticket.cipherSuite
+            offeredTicketInsecure = ticket.issuedInsecure
         }
 
         var clientHello = TLSClientHelloBuilder.buildQUICClientHello(
@@ -236,23 +239,29 @@ nonisolated class QUICTLSHandler {
     }
 
     // MARK: - Process Crypto Data
-
-    /// Bytes that don't form a complete message remain buffered for the next call.
-    func processCryptoData(_ data: Data, level: ngtcp2_encryption_level,
-                           conn: OpaquePointer) -> QUICTLSResult {
+    
+    func processCryptoData(
+        _ data: Data, level: ngtcp2_encryption_level,
+        conn: OpaquePointer
+    ) -> QUICTLSResult {
+        if !cryptoBuffer.isEmpty, let bufferedLevel = cryptoBufferLevel, bufferedLevel != level {
+            return fail("handshake message split across encryption levels (\(bufferedLevel.rawValue) → \(level.rawValue))")
+        }
+        cryptoBufferLevel = level
         cryptoBuffer.append(data)
 
         while cryptoBuffer.count >= 4 {
             let startIndex = cryptoBuffer.startIndex
             let msgType = cryptoBuffer[startIndex]
             let msgLen = (Int(cryptoBuffer[startIndex + 1]) << 16)
-                       | (Int(cryptoBuffer[startIndex + 2]) << 8)
-                       |  Int(cryptoBuffer[startIndex + 3])
-
-            // Length field is uint24; this cap is not RFC-specified but guards against
-            // huge allocations from erroneous lengths.
+            | (Int(cryptoBuffer[startIndex + 2]) << 8)
+            |  Int(cryptoBuffer[startIndex + 3])
+            
             guard msgLen <= 0xFFFF else {
                 return fail("handshake message too long (type \(msgType), \(msgLen) B, level \(level.rawValue))")
+            }
+            if let expected = QUICTLSHandler.expectedLevel(for: msgType), level != expected {
+                return fail("handshake message type \(msgType) at level \(level.rawValue), expected \(expected.rawValue)")
             }
             let totalLen = 4 + msgLen
 
@@ -266,8 +275,6 @@ nonisolated class QUICTLSHandler {
             if msgType == TLSHandshakeType.certificateVerify {
                 transcriptBeforeCertVerify = transcript
             } else if msgType == TLSHandshakeType.finished {
-                // The server Finished verify_data covers the transcript up to but not
-                // including the Finished itself.
                 transcriptBeforeServerFinished = transcript
             }
 
@@ -283,12 +290,31 @@ nonisolated class QUICTLSHandler {
 
         return .success
     }
+    
+    private static func expectedLevel(for msgType: UInt8) -> ngtcp2_encryption_level? {
+        switch msgType {
+        case TLSHandshakeType.serverHello:
+            return NGTCP2_ENCRYPTION_LEVEL_INITIAL
+        case TLSHandshakeType.encryptedExtensions, TLSHandshakeType.certificate,
+             TLSHandshakeType.certificateRequest, TLSHandshakeType.certificateVerify,
+             TLSHandshakeType.finished:
+            return NGTCP2_ENCRYPTION_LEVEL_HANDSHAKE
+        case TLSHandshakeType.newSessionTicket:
+            return NGTCP2_ENCRYPTION_LEVEL_1RTT
+        default:
+            return nil
+        }
+    }
 
     // MARK: - Process Individual Messages
 
-    private func processHandshakeMessage(msgType: UInt8, body: Data, fullMessage: Data,
-                                          level: ngtcp2_encryption_level,
-                                          conn: OpaquePointer) -> QUICTLSResult {
+    private func processHandshakeMessage(
+        msgType: UInt8,
+        body: Data,
+        fullMessage: Data,
+        level: ngtcp2_encryption_level,
+        conn: OpaquePointer
+    ) -> QUICTLSResult {
         switch msgType {
         case TLSHandshakeType.serverHello:         return processServerHello(body, conn: conn)
         case TLSHandshakeType.encryptedExtensions: return processEncryptedExtensions(body, conn: conn)
@@ -531,16 +557,15 @@ nonisolated class QUICTLSHandler {
             return fail("internal: handshake secrets unavailable at server Finished")
         }
 
-        // A resumed handshake carries no Certificate/CertificateVerify; the server
-        // is authenticated by the PSK.
+        authenticatedInsecurely = pskAccepted ? offeredTicketInsecure : CertificatePolicy.allowInsecure
+        
         if !pskAccepted {
             if let error = validateCertificate() {
                 logger.warning("[QUIC-TLS] Certificate validation failed: \(error.localizedDescription)")
                 handshakeError = error
                 return .error(NGTCP2_ERR_CALLBACK_FAILURE)
             }
-
-            // CertificateVerify is MANDATORY in a full TLS 1.3 handshake.
+            
             if !CertificatePolicy.allowInsecure {
                 if let error = TLS13CertificateVerifier.verify(
                     transcriptBeforeCertVerify: transcriptBeforeCertVerify,
@@ -769,7 +794,8 @@ nonisolated class QUICTLSHandler {
         let cached = QUICSessionTicket(
             ticket: ticket, nonce: nonce, psk: psk,
             cipherSuite: cipherSuite, issued: CFAbsoluteTimeGetCurrent(),
-            lifetime: lifetime, ticketAgeAdd: ticketAgeAdd
+            lifetime: lifetime, ticketAgeAdd: ticketAgeAdd,
+            issuedInsecure: authenticatedInsecurely
         )
         QUICSessionTicketCache.store(cached, serverName: serverName, alpn: alpn)
 
@@ -777,10 +803,10 @@ nonisolated class QUICTLSHandler {
     }
 
     // MARK: - PSK Extension Building
-
-    /// Binder is left zero-filled here; patched in later by patchPSKBinder.
+    
     private func buildPSKExtension(ticket: QUICSessionTicket) -> (extensionData: Data, binderLen: Int) {
-        let ticketAgeMs = UInt32((CFAbsoluteTimeGetCurrent() - ticket.issued) * 1000)
+        let ageMs = max(0, (CFAbsoluteTimeGetCurrent() - ticket.issued) * 1000)
+        let ticketAgeMs = UInt32(min(ageMs, Double(UInt32.max)))
         let obfuscatedAge = ticketAgeMs &+ ticket.ticketAgeAdd
 
         var identities = Data()
@@ -816,8 +842,7 @@ nonisolated class QUICTLSHandler {
 
         return (ext, binderLen)
     }
-
-    /// Replaces the zero-filled binder placeholder with the computed PSK binder.
+    
     private func patchPSKBinder(clientHello: inout Data, binderLen: Int, psk: Data, cipherSuite ticketCipherSuite: UInt16) {
         let kd = TLS13KeyDerivation(cipherSuite: ticketCipherSuite)
 
@@ -829,9 +854,7 @@ nonisolated class QUICTLSHandler {
             context: Data(),
             length: kd.hashLength
         )
-
-        // Strip the single binder (binderLen) plus its 1-byte length and the
-        // 2-byte binder-list length before hashing the truncated ClientHello.
+        
         let truncatedSuffix = binderLen + 3
         guard clientHello.count >= truncatedSuffix else { return }
         let partial = Data(clientHello[0..<(clientHello.count - truncatedSuffix)])
@@ -896,8 +919,7 @@ nonisolated class QUICTLSHandler {
             return fail("CertificateVerify truncated (\(body.count) B)")
         }
         certificateVerifyAlgorithm = UInt16(body[0]) << 8 | UInt16(body[1])
-
-        // Parse-time sanity check: must be an algorithm we offered.
+        
         guard TLSClientHelloBuilder.quicSignatureAlgorithms.contains(certificateVerifyAlgorithm) else {
             return fail(String(format: "CertificateVerify uses signature algorithm 0x%04x", certificateVerifyAlgorithm))
         }

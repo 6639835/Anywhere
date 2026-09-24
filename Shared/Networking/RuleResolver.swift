@@ -21,7 +21,7 @@ nonisolated final class RuleResolver: Sendable {
 
     private struct Entry {
         let ip: String
-        let expiry: CFAbsoluteTime
+        let expiry: TimeInterval
     }
 
     private struct State {
@@ -43,7 +43,7 @@ nonisolated final class RuleResolver: Sendable {
     func cachedIPv4(for domain: String) -> String? {
         let key = Self.key(for: domain)
         return state.withLock { state in
-            guard let entry = state.cache[key], entry.expiry > CFAbsoluteTimeGetCurrent() else { return nil }
+            guard let entry = state.cache[key], entry.expiry > MonotonicClock.now else { return nil }
             return entry.ip
         }
     }
@@ -83,7 +83,7 @@ nonisolated final class RuleResolver: Sendable {
 
     private func lookupAction(for key: String) -> Action {
         state.withLock { state in
-            if let entry = state.cache[key], entry.expiry > CFAbsoluteTimeGetCurrent() {
+            if let entry = state.cache[key], entry.expiry > MonotonicClock.now {
                 return .cached(entry.ip)
             }
             if let existing = state.inFlight[key] {
@@ -139,7 +139,7 @@ nonisolated final class RuleResolver: Sendable {
     }
     
     private static func store(_ state: inout State, key: String, ip: String) {
-        let now = CFAbsoluteTimeGetCurrent()
+        let now = MonotonicClock.now
         if state.cache[key] == nil { state.order.append(key) }
         state.cache[key] = Entry(ip: ip, expiry: now + Self.entryTTL)
 

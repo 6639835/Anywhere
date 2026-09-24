@@ -182,7 +182,7 @@ extension QUICConnection {
             queue = StreamSendQueue()
             streamSendQueues[streamId] = queue
         }
-        guard !queue.finQueued else {
+        guard !queue.finQueued, !queue.isFailed else {
             continuation?.resume(throwing: AnywhereError.quic(.closed(graceful: false)))
             return
         }
@@ -209,6 +209,7 @@ extension QUICConnection {
 
         outer: for id in ids {
             guard let queue = streamSendQueues[id] else { continue }
+            queue.flowBlocked = false
             while queue.hasUnsent {
                 guard let chunk = queue.currentChunk() else { break }
                 let offsetInChunk = Int(queue.sentOffset - chunk.startOffset)
@@ -245,6 +246,7 @@ extension QUICConnection {
                 if nwrite < 0, Int32(nwrite) != NGTCP2_ERR_WRITE_MORE {
                     let code = Int32(nwrite)
                     if code == NGTCP2_ERR_STREAM_DATA_BLOCKED {
+                        queue.flowBlocked = true
                         if pdatalen > 0 {
                             for continuation in queue.advance(
                                 accepted: Int(pdatalen),
@@ -257,7 +259,14 @@ extension QUICConnection {
                         streamPumpCursor = id
                         continue outer
                     }
-                    if code == NGTCP2_ERR_STREAM_NOT_FOUND || code == NGTCP2_ERR_STREAM_SHUT_WR {
+                    if code == NGTCP2_ERR_STREAM_NOT_FOUND {
+                        terminateStreamSendQueue(
+                            streamId: id,
+                            error: AnywhereError.quic(.closed(graceful: false))
+                        )
+                        continue outer
+                    }
+                    if code == NGTCP2_ERR_STREAM_SHUT_WR {
                         failStreamSendQueue(
                             streamId: id,
                             error: AnywhereError.quic(.closed(graceful: false))
@@ -273,7 +282,7 @@ extension QUICConnection {
                 }
 
                 let accepted = pdatalen > 0 ? Int(pdatalen) : 0
-                if accepted > 0 || regionLength == 0 {
+                if accepted > 0 || (regionLength == 0 && pdatalen == 0) {
                     for continuation in queue.advance(
                         accepted: accepted,
                         regionLength: regionLength,

@@ -30,7 +30,11 @@ nonisolated func withDialDeadline<T: Sendable>(
             }
         }
         group.addTask {
-            do { try await Task.sleep(for: duration) } catch { return nil }
+            do { try await Task.sleep(for: duration) } catch {
+                guard winner.claim() else { return nil }
+                onExpiry()
+                throw CancellationError()
+            }
             guard winner.claim() else { return nil }
             onExpiry()
             throw makeError()

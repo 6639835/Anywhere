@@ -18,8 +18,7 @@ nonisolated enum CertificatePolicy {
     }
 
     private static let state = Mutex(State())
-
-    /// Idempotent.
+    
     static func startObserving() {
         state.withLock { state in
             guard !state.observerRegistered else { return }
@@ -48,8 +47,7 @@ nonisolated enum CertificatePolicy {
     static var allowInsecure: Bool {
         state.withLock { $0.allowInsecure }
     }
-
-    /// SHA-256 fingerprints.
+    
     private static var trustedFingerprints: [String] {
         state.withLock { $0.trustedFingerprints }
     }
@@ -60,36 +58,80 @@ nonisolated enum CertificatePolicy {
         case trusted
         case rejected(reason: String)
     }
-
-    /// `chain` is leaf-first. A user-pinned leaf SHA-256 match short-circuits all other
-    /// checks: the pin is the user's full trust decision, so chain-of-trust, hostname/SAN,
-    /// and validity-period are not verified. Otherwise standard system SSL trust evaluation.
+    
     static func verify(chain: [SecCertificate], serverName: String) -> Verification {
+        switch prepare(chain: chain, serverName: serverName) {
+        case .decided(let verification):
+            return verification
+        case .evaluate(let trust):
+            var cfError: CFError?
+            let trusted = SecTrustEvaluateWithError(trust, &cfError)
+            return outcome(trusted: trusted, error: cfError)
+        }
+    }
+    
+    static func verify(chain: [SecCertificate], serverName: String) async -> Verification {
+        switch prepare(chain: chain, serverName: serverName) {
+        case .decided(let verification):
+            return verification
+        case .evaluate(let trust):
+            let handoff = TrustHandoff(trust: trust)
+            let resumed = OneShotLatch()
+            return await withCheckedContinuation { continuation in
+                evaluationQueue.async {
+                    let status = SecTrustEvaluateAsyncWithError(handoff.trust, evaluationQueue) { _, trusted, error in
+                        guard resumed.claim() else { return }
+                        continuation.resume(returning: outcome(trusted: trusted, error: error))
+                    }
+                    if status != errSecSuccess, resumed.claim() {
+                        continuation.resume(returning: .rejected(reason: "Certificate evaluation could not start (\(status))"))
+                    }
+                }
+            }
+        }
+    }
+
+    private static let evaluationQueue = DispatchQueue(
+        label: "com.argsment.Anywhere.CertificatePolicy",
+        qos: .userInitiated
+    )
+    
+    private struct TrustHandoff: @unchecked Sendable {
+        let trust: SecTrust
+    }
+
+    private enum Preparation {
+        case decided(Verification)
+        case evaluate(SecTrust)
+    }
+
+    private static func prepare(chain: [SecCertificate], serverName: String) -> Preparation {
         if allowInsecure {
-            return .trusted
+            return .decided(.trusted)
         }
 
         guard let leaf = chain.first else {
-            return .rejected(reason: "No server certificates received")
+            return .decided(.rejected(reason: "No server certificates received"))
         }
 
         if isPinned(leaf) {
-            return .trusted
+            return .decided(.trusted)
         }
 
         var trust: SecTrust?
         let policy = SecPolicyCreateSSL(true, serverName as CFString)
         guard SecTrustCreateWithCertificates(chain as CFArray, policy, &trust) == errSecSuccess,
               let trust else {
-            return .rejected(reason: "Failed to create trust object")
+            return .decided(.rejected(reason: "Failed to create trust object"))
         }
+        return .evaluate(trust)
+    }
 
-        var cfError: CFError?
-        if SecTrustEvaluateWithError(trust, &cfError) {
+    private static func outcome(trusted: Bool, error: CFError?) -> Verification {
+        if trusted {
             return .trusted
         }
-
-        let message = (cfError as Error?)?.localizedDescription ?? "Certificate evaluation failed"
+        let message = (error as Error?)?.localizedDescription ?? "Certificate evaluation failed"
         return .rejected(reason: message)
     }
 

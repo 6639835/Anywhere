@@ -386,7 +386,7 @@ nonisolated final class SOCKS5UDPProxyConnection: ProxyConnection, Sendable {
         default: return nil
         }
 
-        guard data.count > headerEnd else { return nil }
+        guard data.count >= headerEnd else { return nil }
         return Data(data[(base + headerEnd)...])
     }
 }
