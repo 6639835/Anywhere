@@ -11,12 +11,14 @@ struct DataView: View {
     @Environment(AppSettings.self) private var appSettings
 
     var body: some View {
-        @Bindable var appSettings = appSettings
-        List {
-            Toggle(isOn: $appSettings.iCloudSyncEnabled) {
-                TextWithColorfulIcon(title: "iCloud Sync", systemName: "icloud.fill", foregroundStyle: .blue, backgroundStyle: .white.gradient)
+        NavigationStack {
+            @Bindable var appSettings = appSettings
+            List {
+                Toggle(isOn: $appSettings.iCloudSyncEnabled) {
+                    TextWithColorfulIcon(title: "iCloud Sync", systemName: "icloud.fill", foregroundStyle: .blue, backgroundStyle: .white.gradient)
+                }
             }
+            .navigationTitle("Data")
         }
-        .navigationTitle("Data")
     }
 }

@@ -23,7 +23,7 @@ struct VPNToggleControl: ControlWidget {
             ) { isOn in
                 Label(
                     isOn ? "Connected" : "Disconnected",
-                    image: "anywhere"
+                    image: "anywhere.fill"
                 )
             }
         }

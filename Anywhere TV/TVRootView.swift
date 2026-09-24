@@ -12,7 +12,7 @@ struct TVRootView: View {
 
     var body: some View {
         TabView {
-            Tab("Launchpad", image: "anywhere") {
+            Tab("Launchpad", image: "anywhere.fill") {
                 TVPageHost { TVLaunchpadViewController(container: container) }
                     .ignoresSafeArea()
             }

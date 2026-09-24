@@ -49,6 +49,7 @@ struct DashboardView: View {
                     ContentUnavailableView("Not Connected", systemImage: "power")
                 }
             }
+            .containerBackground(.clear, for: .navigation)
             .toolbar {
                 if #available(iOS 27.0, *) {
                     ToolbarOverflowMenu {

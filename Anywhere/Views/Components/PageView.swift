@@ -41,6 +41,7 @@ struct PageView<Content: View>: View {
                     progress: progress,
                     selection: $selection
                 )
+                .padding(.bottom)
             }
         }
     }
@@ -57,7 +58,7 @@ struct PageView<Content: View>: View {
 }
 
 struct PageIndicatorItem {
-    let image: Image
+    let symbol: String
     let label: LocalizedStringKey
 }
 
@@ -66,8 +67,8 @@ extension ContainerValues {
 }
 
 extension View {
-    func pageIndicator(_ image: Image, label: LocalizedStringKey) -> some View {
-        containerValue(\.pageIndicator, PageIndicatorItem(image: image, label: label))
+    func pageIndicator(symbol: String, label: LocalizedStringKey) -> some View {
+        containerValue(\.pageIndicator, PageIndicatorItem(symbol: symbol, label: label))
     }
 }
 
@@ -80,6 +81,16 @@ private struct PageIndicator: View {
     @Binding var selection: Int
 
     var body: some View {
+        if #available(iOS 27.0, *) {
+            indicators
+                .glassEffect(.regular.interactive(), in: .capsule)
+        } else {
+            indicators
+        }
+    }
+    
+    @ViewBuilder
+    private var indicators: some View {
         HStack(spacing: 0) {
             ForEach(items.indices, id: \.self) { index in
                 Button {
@@ -87,11 +98,10 @@ private struct PageIndicator: View {
                         selection = index
                     }
                 } label: {
-                    (items[index]?.image ?? Image(systemName: "circle.fill"))
+                    Image(systemName: items[index]?.symbol ?? "circle.fill")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary.opacity(opacity(for: index)))
-                        .frame(minWidth: 44, minHeight: 44)
-                        .contentShape(.rect)
+                        .frame(minWidth: 40, minHeight: 40)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(items[index]?.label ?? "")

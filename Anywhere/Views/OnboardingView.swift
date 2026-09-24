@@ -144,7 +144,7 @@ struct OnboardingView: View {
                 if bypassCountryCode == code {
                     Image(systemName: "checkmark")
                         .fontWeight(.semibold)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.accentColor)
                 }
             }
             .padding(.horizontal, 16)

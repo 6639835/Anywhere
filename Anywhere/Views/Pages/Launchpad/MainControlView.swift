@@ -44,7 +44,7 @@ struct MainControlView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        MainControlLayout(maxSpacing: 100, minSpacing: 20) {
             VStack(spacing: 20) {
                 PowerButton(
                     isConnected: isConnected,
@@ -74,11 +74,6 @@ struct MainControlView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .layoutPriority(1)
-
-            Rectangle()
-                .fill(.clear)
-                .frame(idealHeight: 100, maxHeight: 100)
 
             ConfigurationCapsule(
                 isConnected: isConnected,
@@ -86,9 +81,8 @@ struct MainControlView: View {
                 showingAddSheet: $showingAddSheet
             )
             .frame(maxWidth: 500)
-            .layoutPriority(1)
         }
-        .padding()
+        .padding(.horizontal)
         .animation(connectionEffectsEnabled ? Animation.bouncy : nil, value: isConnected)
         .sheet(isPresented: $showingProxiesView) {
             ProxiesView()
@@ -111,6 +105,41 @@ struct MainControlView: View {
                 operations.configurations.add(configuration); operations.selection.selectIfNone(configuration)
             }
         }
+    }
+}
+
+// MARK: - Layout
+
+private struct MainControlLayout: Layout {
+    let maxSpacing: CGFloat
+    let minSpacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let sizes = measure(subviews, width: proposal.width) else { return .zero }
+        let idealSize = CGSize(
+            width: max(sizes.group.width, sizes.capsule.width),
+            height: sizes.group.height + 2 * (maxSpacing + sizes.capsule.height)
+        )
+        return proposal.replacingUnspecifiedDimensions(by: idealSize)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let sizes = measure(subviews, width: bounds.width) else { return }
+        let group = sizes.group, capsule = sizes.capsule
+
+        let centeredTop = bounds.midY - group.height / 2
+        let roomBelow = bounds.maxY - (centeredTop + group.height) - capsule.height
+        let spacing = min(max(roomBelow, minSpacing), maxSpacing)
+        let top = max(bounds.minY, min(centeredTop, bounds.maxY - capsule.height - spacing - group.height))
+
+        subviews[0].place(at: CGPoint(x: bounds.midX, y: top), anchor: .top, proposal: ProposedViewSize(group))
+        subviews[1].place(at: CGPoint(x: bounds.midX, y: top + group.height + spacing), anchor: .top, proposal: ProposedViewSize(capsule))
+    }
+
+    private func measure(_ subviews: Subviews, width: CGFloat?) -> (group: CGSize, capsule: CGSize)? {
+        guard subviews.count == 2 else { return nil }
+        let proposal = ProposedViewSize(width: width, height: nil)
+        return (subviews[0].sizeThatFits(proposal), subviews[1].sizeThatFits(proposal))
     }
 }
 
@@ -138,17 +167,17 @@ private struct PowerButton: View {
                 if #available(iOS 27.0, *) {
                     Circle()
                         .fill(.clear)
-                        .frame(width: Self.circleDiameter)
+                        .frame(width: Self.circleDiameter, height: Self.circleDiameter)
                         .glassEffect(.regular, in: .circle)
                 } else if #available(iOS 26.0, *) {
                     Circle()
                         .fill(.clear)
-                        .frame(width: Self.circleDiameter)
+                        .frame(width: Self.circleDiameter, height: Self.circleDiameter)
                         .glassEffect(.clear, in: .circle)
                 } else {
                     Circle()
                         .fill(.white.opacity(0.2))
-                        .frame(width: Self.circleDiameter)
+                        .frame(width: Self.circleDiameter, height: Self.circleDiameter)
                         .shadow(color: isConnected ? .cyan.opacity(0.4) : .black.opacity(0.08), radius: isConnected ? 24 : 8)
                 }
                 ZStack {
@@ -199,7 +228,7 @@ private struct ConfigurationCapsule: View {
             ProminentCapsule {
                 HStack {
                     HStack {
-                        Image("anywhere")
+                        Image("anywhere.fill")
                             .font(.body.weight(.medium))
                         Text(configuration.name)
                             .font(.body.weight(.medium))
