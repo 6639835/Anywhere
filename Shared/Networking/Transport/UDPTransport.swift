@@ -157,19 +157,28 @@ nonisolated final class UDPTransport: DatagramTransport, Sendable {
 @available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *)
 nonisolated final class ModernUDPEngine: UDPTransportEngine, Sendable {
     private let connection: NetworkConnection<UDP>
+    private let stall = NetworkConnectionStallLatch()
 
     init(endpoint: NWEndpoint) {
         connection = NetworkConnection(to: endpoint) { UDP() }
+        stall.watch(connection)
+    }
+
+    func cancel() {
+        stall.cancel()
     }
 
     func send(_ datagram: Data) async throws {
-        try await connection.send(datagram)
+        let connection = connection
+        try await stall.perform(.send) {
+            try await connection.send(datagram)
+        }
     }
 
     func receive() async throws -> Data {
-        let message = try await connection.receive()
-        return message.content
+        let connection = connection
+        return try await stall.perform(.receive) {
+            try await connection.receive().content
+        }
     }
-    
-    func cancel() {}
 }

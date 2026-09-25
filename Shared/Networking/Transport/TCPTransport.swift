@@ -187,6 +187,7 @@ nonisolated final class TCPTransport: ByteTransport, Sendable {
 @available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *)
 nonisolated final class ModernTCPEngine: TCPTransportEngine, Sendable {
     private let connection: NetworkConnection<TCP>
+    private let stall = NetworkConnectionStallLatch()
 
     init(endpoint: NWEndpoint, connectTimeout: UInt32) {
         connection = NetworkConnection(to: endpoint) {
@@ -195,16 +196,25 @@ nonisolated final class ModernTCPEngine: TCPTransportEngine, Sendable {
                 .keepalive(idleTimeInSeconds: 30, count: 3, intervalInSeconds: 10)
                 .connectionTimeout(connectTimeout)
         }
+        stall.watch(connection)
+    }
+
+    func cancel() {
+        stall.cancel()
     }
 
     func send(_ data: Data) async throws {
-        try await connection.send(data, endOfStream: false)
+        let connection = connection
+        try await stall.perform(.send) {
+            try await connection.send(data, endOfStream: false)
+        }
     }
 
     func receive(atMost maxLength: Int) async throws -> (content: Data, endOfStream: Bool) {
-        let message = try await connection.receive(atLeast: 1, atMost: maxLength)
-        return (message.content, message.metadata.endOfStream)
+        let connection = connection
+        return try await stall.perform(.receive) {
+            let message = try await connection.receive(atLeast: 1, atMost: maxLength)
+            return (message.content, message.metadata.endOfStream)
+        }
     }
-    
-    func cancel() {}
 }
