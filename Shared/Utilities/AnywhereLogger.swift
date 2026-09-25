@@ -12,9 +12,14 @@ import os.log
 nonisolated struct AnywhereLogger {
     private let logger: Logger
     
-    private static let _logSink = Mutex<(@Sendable (String, Level) -> Void)?>(nil)
+    private struct LogSink: Sendable {
+        let deliver: @Sendable (String, Level) -> Void
+    }
+
+    private static let _logSink = Mutex<LogSink?>(nil)
     static func installLogSink(_ sink: (@Sendable (String, Level) -> Void)?) {
-        _logSink.withLock { $0 = sink }
+        let box = sink.map { LogSink(deliver: $0) }
+        _logSink.withLock { $0 = box }
     }
     static let minimumSinkLevel: Level = .info
     
@@ -53,7 +58,7 @@ nonisolated struct AnywhereLogger {
 
         if level >= Self.minimumSinkLevel {
             let sink = Self._logSink.withLock { $0 }
-            sink?(message, level)
+            sink?.deliver(message, level)
         }
     }
 }

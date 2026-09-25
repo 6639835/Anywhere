@@ -98,7 +98,7 @@ nonisolated final class SyncStore: Sendable {
 
     private let persistsImportState: Bool
     private let importFingerprints = Mutex<[Key: [String]]>([:])
-    private let changeObserver = Mutex<(@Sendable ([SyncChange]) -> Void)?>(nil)
+    private let changeObserver = Mutex<ChangeObserver?>(nil)
 
     private init(container: ModelContainer?, persistsImportState: Bool) {
         self.persistsImportState = persistsImportState
@@ -149,13 +149,18 @@ nonisolated final class SyncStore: Sendable {
 
     // MARK: - Change observation
 
+    private struct ChangeObserver: Sendable {
+        let deliver: @Sendable ([SyncChange]) -> Void
+    }
+
     func setChangeObserver(_ observer: (@Sendable ([SyncChange]) -> Void)?) {
-        changeObserver.withLock { $0 = observer }
+        let box = observer.map { ChangeObserver(deliver: $0) }
+        changeObserver.withLock { $0 = box }
     }
 
     private func notify(_ changes: [SyncChange]) {
         guard !changes.isEmpty else { return }
-        changeObserver.withLock { $0 }?(changes)
+        changeObserver.withLock { $0 }?.deliver(changes)
     }
 
     // MARK: - Quarantine
