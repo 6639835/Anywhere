@@ -189,16 +189,15 @@ extension TunnelStack {
         udpCleanupResume.yield(())
     }
 
-    func updateNetworkContext(isWiFi: Bool, isCellular: Bool, ssid: String?) {
+    func updateNetworkContext(_ context: NetworkContext) {
+        publishNetworkSupportsIPv6(context.supportsIPv6)
         guard phase.isActive, let configuration else { return }
 
-        let context = NetworkContext(isWiFi: isWiFi, isCellular: isCellular, ssid: ssid)
         guard context != networkContext else { return }
         networkContext = context
 
         let newEffective = computeEffectiveProxyMode()
         guard newEffective != proxyMode else { return }
-        logger.info("[VPN] Trusted-network policy: effective mode \(proxyMode.rawValue) → \(newEffective.rawValue) (Wi-Fi=\(isWiFi), cellular=\(isCellular), SSID=\(ssid ?? "—"))")
         restartStack(configuration: configuration, revalidateMode: true)
     }
 

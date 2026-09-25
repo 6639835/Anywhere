@@ -87,6 +87,13 @@ actor TunnelStack {
 
     var networkContext = NetworkContext()
 
+    private let _networkSupportsIPv6 = Atomic<Bool>(true)
+    nonisolated var networkSupportsIPv6: Bool { _networkSupportsIPv6.load(ordering: .relaxed) }
+
+    func publishNetworkSupportsIPv6(_ supported: Bool) {
+        guard _networkSupportsIPv6.exchange(supported, ordering: .relaxed) != supported else { return }
+    }
+
     private let _mitmEnabled = Atomic<Bool>(false)
     nonisolated var mitmEnabled: Bool { _mitmEnabled.load(ordering: .relaxed) }
     nonisolated let mitmPolicy = MITMRewritePolicy()

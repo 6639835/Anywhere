@@ -437,14 +437,23 @@ nonisolated class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Senda
         let primaryType = path.availableInterfaces.first?.type
         let isWiFi = primaryType == .wifi
         let isCellular = primaryType == .cellular
+        let supportsIPv6 = path.supportsIPv6
 #if os(iOS)
         if isWiFi {
             let ssid = await pathMonitorBridge.currentWiFiSSID()
-            await tunnelStack.updateNetworkContext(isWiFi: true, isCellular: false, ssid: ssid)
+            await tunnelStack.updateNetworkContext(
+                NetworkContext(
+                    isWiFi: true, isCellular: false, ssid: ssid, supportsIPv6: supportsIPv6
+                )
+            )
             return
         }
 #endif
-        await tunnelStack.updateNetworkContext(isWiFi: isWiFi, isCellular: isCellular, ssid: nil)
+        await tunnelStack.updateNetworkContext(
+            NetworkContext(
+                isWiFi: isWiFi, isCellular: isCellular, ssid: nil, supportsIPv6: supportsIPv6
+            )
+        )
     }
 
     private func logTunnelStop(reason: NEProviderStopReason) {

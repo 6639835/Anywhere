@@ -28,8 +28,9 @@ extension TunnelStack {
                 Task { await self.accept(pending, generation: generation) }
             },
             synFilter: { [weak self] _, destination in
-                guard let self else { return false }
-                return !self.isRejectMarked(destination.address) && self.ipStackSynVerdict()
+                guard let self else { return .drop }
+                if destination.address.isIPv6, !self.networkSupportsIPv6 { return .reset }
+                return !self.isRejectMarked(destination.address) && self.ipStackSynVerdict() ? .accept : .drop
             },
             strayFilter: { [weak self] _, destination in
                 self.map { !$0.isRejectMarked(destination.address) } ?? false
