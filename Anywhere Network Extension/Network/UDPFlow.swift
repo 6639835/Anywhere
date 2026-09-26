@@ -103,6 +103,8 @@ actor UDPFlow {
 
     private nonisolated let activityRecord: ActivityPool.Record
 
+    private nonisolated let trafficMeter: TrafficMeter
+
     private var bypass: Bool {
         let resolved = routeTarget.resolved(against: stack?.udpConfig().defaultRouteTarget ?? .direct)
         if case .direct = resolved { return true }
@@ -146,6 +148,7 @@ actor UDPFlow {
             defaultRouteTarget: stack.udpConfig().defaultRouteTarget,
             ruleSetName: ruleSetName
         )
+        self.trafficMeter = stack.openTrafficMeter(target: routeTarget)
         (self.jobs, self.jobContinuation) = AsyncStream.makeStream(of: Job.self)
     }
 
@@ -215,7 +218,7 @@ actor UDPFlow {
     func handleReceivedData(_ data: Data, payloadLength: Int) async {
         guard phase != .closed else { return }
         activity.withLock { $0.lastActivity = MonotonicClock.now }
-        stack?.addBytesOut(Int64(payloadLength), target: routeTarget)
+        trafficMeter.addBytesOut(payloadLength)
         activityRecord.addBytesOut(payloadLength)
 
         switch phase {
@@ -547,7 +550,7 @@ actor UDPFlow {
             $0.replyCount += 1
         }
 
-        stack?.addBytesIn(Int64(data.count), target: routeTarget)
+        trafficMeter.addBytesIn(data.count)
         activityRecord.addBytesIn(data.count)
 
         stack?.writeOutboundUDP(data, from: flowKey.destination, to: flowKey.source)

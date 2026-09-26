@@ -97,34 +97,54 @@ extension TunnelStack {
             }
             continuation.onTermination = { _ in producer.cancel() }
         }
+        await consumeInbound(batches, demand: demand, udpPlane: udpPlane)
+    }
+
+    @concurrent
+    private nonisolated func consumeInbound(_ batches: AsyncStream<[Data]>, demand: AsyncInbox<Void>, udpPlane: UDPPlane) async {
+        datagramIntake.withLock { $0.plane = udpPlane }
+        defer {
+            datagramIntake.withLock { intake in
+                if intake.plane === udpPlane { intake.plane = nil }
+            }
+        }
         for await packets in batches {
             demand.yield(())
-            await processInboundBatch(packets, udpPlane: udpPlane)
+            await processInboundBatch(packets)
         }
     }
 
-    private func processInboundBatch(_ packets: [Data], udpPlane: UDPPlane) async {
+    private nonisolated func processInboundBatch(_ packets: [Data]) async {
         let reflector = reflector()
-        var ipBatch: [Data] = []
+        var ipBatch = packets
 
-        for packet in packets {
-            if reflector.isActive, let reflected = reflector.reflect(packet) {
-                enqueueOutbound(reflected.data, isIPv6: reflected.isIPv6)
-                continue
+        if reflector.isActive {
+            ipBatch = []
+            for packet in packets {
+                if let reflected = reflector.reflect(packet) {
+                    enqueueOutbound(reflected.data, isIPv6: reflected.isIPv6)
+                    continue
+                }
+                ipBatch.append(packet)
             }
-            ipBatch.append(packet)
         }
 
-        guard dataPlaneUp, let ipStack, !ipBatch.isEmpty else { return }
-        let (datagrams, sink) = AsyncStream.makeStream(of: [InboundDatagram].self)
-        datagramSink.withLock { $0 = sink }
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask { [ipBatch] in
-                await ipStack.inputBatch(ipBatch)
-                sink.finish()
-            }
-            group.addTask {
-                for await batch in datagrams { await udpPlane.feed(batch) }
+        guard !ipBatch.isEmpty, let ipStack = liveIPStack.withLock({ $0 }) else { return }
+        await ipStack.inputBatch(ipBatch)
+        let delivery = datagramIntake.withLock { intake in
+            defer { intake.delivery = nil }
+            return intake.delivery
+        }
+        await delivery?.value
+    }
+    
+    nonisolated func admitDatagrams(_ batch: [InboundDatagram]) {
+        datagramIntake.withLock { intake in
+            guard let plane = intake.plane else { return }
+            let prior = intake.delivery
+            intake.delivery = Task {
+                await prior?.value
+                await plane.feed(batch)
             }
         }
     }

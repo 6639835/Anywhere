@@ -28,7 +28,7 @@ extension TunnelStack {
                 Task { await self.accept(pending, generation: generation) }
             },
             datagrams: { [weak self] batch in
-                self?.datagramSink.withLock { $0 }?.yield(batch)
+                self?.admitDatagrams(batch)
             },
             synFilter: { [weak self] _, destination in
                 guard let self else { return .drop }

@@ -610,13 +610,12 @@ actor TCPConnection: MITMSessionHost {
     // MARK: - Relay
 
     private func runRelayAndClose(_ connection: ProxyConnection, stream: AnywhereIP.Stream) async {
-        let context = RelayContext(stack: stack, routeTarget: routeTarget)
+        let context = RelayContext(meter: stack?.openTrafficMeter(target: routeTarget))
         await runRelay(connection, stream: stream, context: context)
     }
 
     private struct RelayContext: Sendable {
-        weak var stack: TunnelStack?
-        let routeTarget: RouteTarget
+        let meter: TrafficMeter?
     }
 
     @concurrent
@@ -628,21 +627,35 @@ actor TCPConnection: MITMSessionHost {
             await self.relayFinished()
         }
     }
-
+    
     @concurrent
     private nonisolated func runUploadRelay(_ connection: ProxyConnection, _ stream: AnywhereIP.Stream, context: RelayContext) async {
         while let chunk = try? await uploadInbox.next() {
-            do {
-                try await connection.send(chunk)
-            } catch {
-                await relayFailed("Send", error: error)
-                return
-            }
-            markActivity()
-            context.stack?.addBytesOut(Int64(chunk.count), target: context.routeTarget)
-            activityRecord.addBytesOut(chunk.count)
-            stream.didConsume(chunk.count)
+            guard await forwardUpload(chunk, connection, stream, context: context) else { return }
         }
+        do {
+            while let chunk = try await stream.receive() {
+                guard !chunk.isEmpty else { continue }
+                markActivity()
+                guard await forwardUpload(chunk, connection, stream, context: context) else { return }
+            }
+        } catch {
+            await inputFailed(error)
+        }
+    }
+
+    private nonisolated func forwardUpload(_ chunk: Data, _ connection: ProxyConnection, _ stream: AnywhereIP.Stream, context: RelayContext) async -> Bool {
+        do {
+            try await connection.send(chunk)
+        } catch {
+            await relayFailed("Send", error: error)
+            return false
+        }
+        markActivity()
+        context.meter?.addBytesOut(chunk.count)
+        activityRecord.addBytesOut(chunk.count)
+        stream.didConsume(chunk.count)
+        return true
     }
 
     @concurrent
@@ -666,7 +679,7 @@ actor TCPConnection: MITMSessionHost {
                 return
             }
             markActivity()
-            context.stack?.addBytesIn(Int64(data.count), target: context.routeTarget)
+            context.meter?.addBytesIn(data.count)
             activityRecord.addBytesIn(data.count)
         }
         try? await stream.waitUntilAcknowledged()
@@ -703,14 +716,27 @@ actor TCPConnection: MITMSessionHost {
             while let data = try await connection.receive() {
                 guard phase != .closed else { return }
                 handleReceivedData(data)
+                if stream != nil, mitmSession == nil {
+                    uploadInbox.finish()
+                    return
+                }
             }
             if phase != .closed { handleRemoteClose() }
-        } catch is CancellationError {
-            return
-        } catch let error as AnywhereIP.ConnectionError {
-            if phase != .closed { handleError(error) }
         } catch {
-            if phase != .closed { reportFailure("Read", error: error); abort() }
+            inputFailed(error)
+        }
+    }
+
+    private func inputFailed(_ error: Error) {
+        guard phase != .closed else { return }
+        switch error {
+        case is CancellationError:
+            return
+        case let error as AnywhereIP.ConnectionError:
+            handleError(error)
+        default:
+            reportFailure("Read", error: error)
+            abort()
         }
     }
 

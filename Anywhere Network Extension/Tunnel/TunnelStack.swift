@@ -32,6 +32,101 @@ nonisolated struct TrafficByteCounts {
     mutating func add(bytesOut byteCount: Int64, target: RouteTarget) {
         routes[target, default: ByteCounts()].bytesOut += byteCount
     }
+
+    mutating func add(_ counts: ByteCounts, target: RouteTarget) {
+        guard counts.bytesIn != 0 || counts.bytesOut != 0 else { return }
+        routes[target, default: ByteCounts()].bytesIn += counts.bytesIn
+        routes[target, default: ByteCounts()].bytesOut += counts.bytesOut
+    }
+}
+
+nonisolated final class TrafficMeter: Sendable {
+    fileprivate final class Cell: Sendable {
+        let target: RouteTarget
+        let bytesIn = Atomic<Int64>(0)
+        let bytesOut = Atomic<Int64>(0)
+
+        init(target: RouteTarget) {
+            self.target = target
+        }
+
+        var counts: TrafficByteCounts.ByteCounts {
+            TrafficByteCounts.ByteCounts(
+                bytesIn: bytesIn.load(ordering: .relaxed),
+                bytesOut: bytesOut.load(ordering: .relaxed)
+            )
+        }
+    }
+
+    private let cell: Cell
+    private let ledger: TrafficLedger
+
+    fileprivate init(cell: Cell, ledger: TrafficLedger) {
+        self.cell = cell
+        self.ledger = ledger
+    }
+
+    deinit {
+        ledger.settle(cell)
+    }
+
+    func addBytesIn(_ count: Int) {
+        cell.bytesIn.wrappingAdd(Int64(count), ordering: .relaxed)
+    }
+
+    func addBytesOut(_ count: Int) {
+        cell.bytesOut.wrappingAdd(Int64(count), ordering: .relaxed)
+    }
+}
+
+nonisolated final class TrafficLedger: Sendable {
+    private struct State {
+        var settled = TrafficByteCounts()
+        var live: [ObjectIdentifier: TrafficMeter.Cell] = [:]
+    }
+
+    private let state = Mutex(State())
+
+    func open(target: RouteTarget) -> TrafficMeter {
+        let cell = TrafficMeter.Cell(target: target)
+        state.withLock { $0.live[ObjectIdentifier(cell)] = cell }
+        return TrafficMeter(cell: cell, ledger: self)
+    }
+
+    func add(bytesIn byteCount: Int64, target: RouteTarget) {
+        state.withLock { $0.settled.add(bytesIn: byteCount, target: target) }
+    }
+
+    func add(bytesOut byteCount: Int64, target: RouteTarget) {
+        state.withLock { $0.settled.add(bytesOut: byteCount, target: target) }
+    }
+
+    fileprivate func settle(_ cell: TrafficMeter.Cell) {
+        state.withLock { state in
+            state.live.removeValue(forKey: ObjectIdentifier(cell))
+            state.settled.add(cell.counts, target: cell.target)
+        }
+    }
+
+    func snapshot() -> TrafficByteCounts {
+        state.withLock { state in
+            var counts = state.settled
+            for cell in state.live.values {
+                counts.add(cell.counts, target: cell.target)
+            }
+            return counts
+        }
+    }
+
+    func reset() {
+        state.withLock { state in
+            state.settled = TrafficByteCounts()
+            for cell in state.live.values {
+                cell.bytesIn.store(0, ordering: .relaxed)
+                cell.bytesOut.store(0, ordering: .relaxed)
+            }
+        }
+    }
 }
 
 // MARK: - TCP Connection Table
@@ -174,21 +269,31 @@ actor TunnelStack {
     
     var dataPlaneUp = false
     
+    nonisolated let liveIPStack = Mutex<IPStack?>(nil)
+
     nonisolated let udpCleanupResume = AsyncInbox<Void>(capacity: 1)
 
-    nonisolated let datagramSink = Mutex<AsyncStream<[InboundDatagram]>.Continuation?>(nil)
+    struct DatagramIntake {
+        var plane: UDPPlane?
+        var delivery: Task<Void, Never>?
+    }
+    nonisolated let datagramIntake = Mutex(DatagramIntake())
 
-    let byteCounts = Mutex(TrafficByteCounts())
+    nonisolated let trafficLedger = TrafficLedger()
+    nonisolated func openTrafficMeter(target: RouteTarget) -> TrafficMeter {
+        trafficLedger.open(target: target.resolved(against: udpConfig().defaultRouteTarget))
+    }
     nonisolated func addBytesIn(_ n: Int64, target: RouteTarget) {
-        let resolved = target.resolved(against: udpConfig().defaultRouteTarget)
-        byteCounts.withLock { $0.add(bytesIn: n, target: resolved) }
+        trafficLedger.add(bytesIn: n, target: target.resolved(against: udpConfig().defaultRouteTarget))
     }
     nonisolated func addBytesOut(_ n: Int64, target: RouteTarget) {
-        let resolved = target.resolved(against: udpConfig().defaultRouteTarget)
-        byteCounts.withLock { $0.add(bytesOut: n, target: resolved) }
+        trafficLedger.add(bytesOut: n, target: target.resolved(against: udpConfig().defaultRouteTarget))
+    }
+    nonisolated func byteCountsSnapshot() -> TrafficByteCounts {
+        trafficLedger.snapshot()
     }
     nonisolated func resetByteCounts() {
-        byteCounts.withLock { $0 = TrafficByteCounts() }
+        trafficLedger.reset()
     }
 
     // MARK: - Log Buffer
@@ -220,8 +325,8 @@ actor TunnelStack {
     }
 
     // MARK: - UDP Config Snapshot
-
-    struct UDPConfig {
+    
+    final class UDPConfig: Sendable {
         let configuration: ProxyConfiguration?
         let configurationID: UUID?
         let defaultRouteTarget: RouteTarget
@@ -230,17 +335,39 @@ actor TunnelStack {
         let blockWebRTC: Bool
         let mitmEnabled: Bool
         let interceptExemptDNSServers: Set<String>
+
+        init(
+            configuration: ProxyConfiguration?,
+            configurationID: UUID?,
+            defaultRouteTarget: RouteTarget,
+            blockUDP: Bool,
+            quicPolicy: QUICPolicy,
+            blockWebRTC: Bool,
+            mitmEnabled: Bool,
+            interceptExemptDNSServers: Set<String>
+        ) {
+            self.configuration = configuration
+            self.configurationID = configurationID
+            self.defaultRouteTarget = defaultRouteTarget
+            self.blockUDP = blockUDP
+            self.quicPolicy = quicPolicy
+            self.blockWebRTC = blockWebRTC
+            self.mitmEnabled = mitmEnabled
+            self.interceptExemptDNSServers = interceptExemptDNSServers
+        }
     }
-    private let _udpConfig = Mutex(UDPConfig(
-        configuration: nil,
-        configurationID: nil,
-        defaultRouteTarget: .direct,
-        blockUDP: false,
-        quicPolicy: .blocked,
-        blockWebRTC: true,
-        mitmEnabled: false,
-        interceptExemptDNSServers: []
-    ))
+    private let _udpConfig = Mutex(
+        UDPConfig(
+            configuration: nil,
+            configurationID: nil,
+            defaultRouteTarget: .direct,
+            blockUDP: false,
+            quicPolicy: .blocked,
+            blockWebRTC: true,
+            mitmEnabled: false,
+            interceptExemptDNSServers: []
+        )
+    )
 
     nonisolated func udpConfig() -> UDPConfig { _udpConfig.withLock { $0 } }
 

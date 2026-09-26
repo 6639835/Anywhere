@@ -160,7 +160,7 @@ nonisolated class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Senda
     private func startStatsRecorder(claim: UInt64) {
         statsRecorder.start { [tunnelStack] in
             return StatsRecorder.RawValues(
-                byteCounts: tunnelStack.byteCounts.withLock { $0 },
+                byteCounts: tunnelStack.byteCountsSnapshot(),
                 tcpConnectionCount: FlowGauge.tcpTable,
                 udpConnectionCount: FlowGauge.udpTable,
                 memoryBytes: Self.memoryFootprint()

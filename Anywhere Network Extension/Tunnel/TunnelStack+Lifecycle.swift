@@ -216,6 +216,7 @@ extension TunnelStack {
         dataPlaneUp = true
         let ipStack = makeIPStack()
         self.ipStack = ipStack
+        liveIPStack.withLock { $0 = ipStack }
         startIPStackTick()
         submitPlaneCommand(.setMultiplexerPool(configuration.makeUDPMultiplexerPool()))
         logger.debug("[TunnelStack] Data plane up")
@@ -224,6 +225,7 @@ extension TunnelStack {
     private func tearDownDataPlane(tcp: TCPTeardown) {
         guard dataPlaneUp else { return }
         dataPlaneUp = false
+        liveIPStack.withLock { $0 = nil }
 
         ipStackTick?.cancel()
         ipStackTick = nil
