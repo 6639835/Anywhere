@@ -204,12 +204,12 @@ actor TunnelStack {
     var proxyMode: ProxyMode = .rule
 
     var networkContext = NetworkContext()
+    
+    private let _ipv6Enabled = Atomic<Bool>(false)
+    nonisolated var ipv6Enabled: Bool { _ipv6Enabled.load(ordering: .relaxed) }
 
-    private let _networkSupportsIPv6 = Atomic<Bool>(true)
-    nonisolated var networkSupportsIPv6: Bool { _networkSupportsIPv6.load(ordering: .relaxed) }
-
-    func publishNetworkSupportsIPv6(_ supported: Bool) {
-        guard _networkSupportsIPv6.exchange(supported, ordering: .relaxed) != supported else { return }
+    func publishIPv6Enabled() {
+        _ipv6Enabled.store(settings.localIPv6RequestsEnabled && networkContext.supportsIPv6, ordering: .relaxed)
     }
 
     private let _mitmEnabled = Atomic<Bool>(false)
@@ -533,6 +533,7 @@ actor TunnelStack {
 
         publishUDPConfig()
         publishReflector()
+        publishIPv6Enabled()
         publishOutboundRoutingContext(configuration: configuration)
 
         if proxyMode == .rule {

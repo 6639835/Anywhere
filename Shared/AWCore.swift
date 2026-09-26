@@ -76,6 +76,7 @@ nonisolated final class AWCore {
         static let ipRuleDNSPlainServer = "ipRuleDNSPlainServer"
         static let lastConfigurationData = "lastConfigurationData"
         static let latencyResults = "latencyResults"
+        static let localIPv6RequestsEnabled = "localIPv6RequestsEnabled"
         static let mitmEnabled = "mitmEnabled"
         static let onboardingCompleted = "onboardingCompleted"
         static let preventDNSLeak = "preventDNSLeak"
@@ -253,6 +254,74 @@ nonisolated final class AWCore {
         userDefaults.set(value, forKey: UserDefaultsKey.alwaysOnEnabled)
     }
     
+    static func getTunnelIncludeAllNetworks() -> Bool {
+        userDefaults.bool(forKey: UserDefaultsKey.tunnelIncludeAllNetworks)
+    }
+
+    static func setTunnelIncludeAllNetworks(_ value: Bool) {
+        userDefaults.set(value, forKey: UserDefaultsKey.tunnelIncludeAllNetworks)
+    }
+
+    static func getTunnelExcludeLocalNetworks() -> Bool {
+        if let value = userDefaults.object(forKey: UserDefaultsKey.tunnelExcludeLocalNetworks) as? Bool {
+            return value
+        }
+        return true
+    }
+
+    static func setTunnelExcludeLocalNetworks(_ value: Bool) {
+        userDefaults.set(value, forKey: UserDefaultsKey.tunnelExcludeLocalNetworks)
+    }
+
+    static func getTunnelExcludeAPNs() -> Bool {
+        if let value = userDefaults.object(forKey: UserDefaultsKey.tunnelExcludeAPNs) as? Bool {
+            return value
+        }
+        return true
+    }
+
+    static func setTunnelExcludeAPNs(_ value: Bool) {
+        userDefaults.set(value, forKey: UserDefaultsKey.tunnelExcludeAPNs)
+    }
+
+    static func getTunnelExcludeCellularServices() -> Bool {
+        if let value = userDefaults.object(forKey: UserDefaultsKey.tunnelExcludeCellularServices) as? Bool {
+            return value
+        }
+        return true
+    }
+
+    static func setTunnelExcludeCellularServices(_ value: Bool) {
+        userDefaults.set(value, forKey: UserDefaultsKey.tunnelExcludeCellularServices)
+    }
+
+    static func getTunnelExcludeDeviceCommunication() -> Bool {
+        if let value = userDefaults.object(forKey: UserDefaultsKey.tunnelExcludeDeviceCommunication) as? Bool {
+            return value
+        }
+        return true
+    }
+
+    static func setTunnelExcludeDeviceCommunication(_ value: Bool) {
+        userDefaults.set(value, forKey: UserDefaultsKey.tunnelExcludeDeviceCommunication)
+    }
+
+    static func getTunnelIncludedRoutes() -> [String] {
+        userDefaults.stringArray(forKey: UserDefaultsKey.tunnelIncludedRoutes) ?? []
+    }
+
+    static func setTunnelIncludedRoutes(_ routes: [String]) {
+        userDefaults.set(routes, forKey: UserDefaultsKey.tunnelIncludedRoutes)
+    }
+
+    static func getTunnelExcludedRoutes() -> [String] {
+        userDefaults.stringArray(forKey: UserDefaultsKey.tunnelExcludedRoutes) ?? []
+    }
+
+    static func setTunnelExcludedRoutes(_ routes: [String]) {
+        userDefaults.set(routes, forKey: UserDefaultsKey.tunnelExcludedRoutes)
+    }
+    
     static func getBlockUDP() -> Bool {
         userDefaults.bool(forKey: UserDefaultsKey.blockUDP)
     }
@@ -355,74 +424,6 @@ nonisolated final class AWCore {
 
     static func setHideVPNIcon(_ value: Bool) {
         userDefaults.set(value, forKey: UserDefaultsKey.hideVPNIcon)
-    }
-    
-    static func getTunnelIncludeAllNetworks() -> Bool {
-        userDefaults.bool(forKey: UserDefaultsKey.tunnelIncludeAllNetworks)
-    }
-
-    static func setTunnelIncludeAllNetworks(_ value: Bool) {
-        userDefaults.set(value, forKey: UserDefaultsKey.tunnelIncludeAllNetworks)
-    }
-
-    static func getTunnelExcludeLocalNetworks() -> Bool {
-        if let value = userDefaults.object(forKey: UserDefaultsKey.tunnelExcludeLocalNetworks) as? Bool {
-            return value
-        }
-        return true
-    }
-
-    static func setTunnelExcludeLocalNetworks(_ value: Bool) {
-        userDefaults.set(value, forKey: UserDefaultsKey.tunnelExcludeLocalNetworks)
-    }
-
-    static func getTunnelExcludeAPNs() -> Bool {
-        if let value = userDefaults.object(forKey: UserDefaultsKey.tunnelExcludeAPNs) as? Bool {
-            return value
-        }
-        return true
-    }
-
-    static func setTunnelExcludeAPNs(_ value: Bool) {
-        userDefaults.set(value, forKey: UserDefaultsKey.tunnelExcludeAPNs)
-    }
-
-    static func getTunnelExcludeCellularServices() -> Bool {
-        if let value = userDefaults.object(forKey: UserDefaultsKey.tunnelExcludeCellularServices) as? Bool {
-            return value
-        }
-        return true
-    }
-
-    static func setTunnelExcludeCellularServices(_ value: Bool) {
-        userDefaults.set(value, forKey: UserDefaultsKey.tunnelExcludeCellularServices)
-    }
-
-    static func getTunnelExcludeDeviceCommunication() -> Bool {
-        if let value = userDefaults.object(forKey: UserDefaultsKey.tunnelExcludeDeviceCommunication) as? Bool {
-            return value
-        }
-        return true
-    }
-
-    static func setTunnelExcludeDeviceCommunication(_ value: Bool) {
-        userDefaults.set(value, forKey: UserDefaultsKey.tunnelExcludeDeviceCommunication)
-    }
-
-    static func getTunnelIncludedRoutes() -> [String] {
-        userDefaults.stringArray(forKey: UserDefaultsKey.tunnelIncludedRoutes) ?? []
-    }
-
-    static func setTunnelIncludedRoutes(_ routes: [String]) {
-        userDefaults.set(routes, forKey: UserDefaultsKey.tunnelIncludedRoutes)
-    }
-
-    static func getTunnelExcludedRoutes() -> [String] {
-        userDefaults.stringArray(forKey: UserDefaultsKey.tunnelExcludedRoutes) ?? []
-    }
-
-    static func setTunnelExcludedRoutes(_ routes: [String]) {
-        userDefaults.set(routes, forKey: UserDefaultsKey.tunnelExcludedRoutes)
     }
 
     static func getReflectionEnabled() -> Bool {
@@ -590,6 +591,14 @@ nonisolated final class AWCore {
             plainServer: getECHDNSPlainServer(),
             dohURL: getECHDNSDoHURL()
         )
+    }
+    
+    static func getLocalIPv6RequestsEnabled() -> Bool {
+        userDefaults.bool(forKey: UserDefaultsKey.localIPv6RequestsEnabled)
+    }
+
+    static func setLocalIPv6RequestsEnabled(_ value: Bool) {
+        userDefaults.set(value, forKey: UserDefaultsKey.localIPv6RequestsEnabled)
     }
 
     static func getRemnawaveHWIDEnabled() -> Bool {

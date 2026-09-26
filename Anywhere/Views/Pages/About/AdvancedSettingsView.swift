@@ -46,6 +46,12 @@ struct AdvancedSettingsView: View {
                     DNSSettingsView()
                 }
             }
+            
+            Section {
+                NavigationLink("IPv6") {
+                    IPv6SettingsView()
+                }
+            }
 
             Section {
                 // Remnawave is a self-hosting proxy panel

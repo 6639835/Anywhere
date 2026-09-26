@@ -32,7 +32,7 @@ extension TunnelStack {
             },
             synFilter: { [weak self] _, destination in
                 guard let self else { return .drop }
-                if destination.address.isIPv6, !self.networkSupportsIPv6 { return .reset }
+                if destination.address.isIPv6, !self.ipv6Enabled { return .reset }
                 return !self.isRejectMarked(destination.address) && self.ipStackSynVerdict() ? .accept : .drop
             },
             strayFilter: { [weak self] _, destination in

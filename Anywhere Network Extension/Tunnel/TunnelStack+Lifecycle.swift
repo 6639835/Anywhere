@@ -190,12 +190,11 @@ extension TunnelStack {
     }
 
     func updateNetworkContext(_ context: NetworkContext) {
-        publishNetworkSupportsIPv6(context.supportsIPv6)
-        guard phase.isActive, let configuration else { return }
-
         guard context != networkContext else { return }
         networkContext = context
-
+        publishIPv6Enabled()
+        
+        guard phase.isActive, let configuration else { return }
         let newEffective = computeEffectiveProxyMode()
         guard newEffective != proxyMode else { return }
         restartStack(configuration: configuration, revalidateMode: true)
@@ -348,36 +347,24 @@ extension TunnelStack {
         let old = settings
         let new = TunnelSettings.load()
         guard new != old else { return }
+        logger.info("[VPN] Settings changed")
         settings = new
-
-        if new.quicPolicy != old.quicPolicy {
-            logger.info("[VPN] QUIC policy changed: \(old.quicPolicy.rawValue) -> \(new.quicPolicy.rawValue)")
-        }
-        if new.blockUDP != old.blockUDP {
-            logger.info("[VPN] Block UDP changed: \(old.blockUDP) -> \(new.blockUDP)")
-        }
-        if new.blockWebRTC != old.blockWebRTC {
-            logger.info("[VPN] Block WebRTC changed: \(old.blockWebRTC) -> \(new.blockWebRTC)")
-        }
+        
+        publishUDPConfig()
+        
         if new.preventDNSLeak != old.preventDNSLeak {
-            logger.info("[VPN] Prevent DNS Leak changed: \(old.preventDNSLeak) -> \(new.preventDNSLeak)")
             connectionRouter.preventDNSLeak.store(new.preventDNSLeak, ordering: .relaxed)
         }
         if new.reflectionEnabled != old.reflectionEnabled || new.reflectionAddresses != old.reflectionAddresses {
-            logger.info("[VPN] Reflection changed: enabled=\(new.reflectionEnabled), addresses=\(new.reflectionAddresses)")
             publishReflector()
         }
+        if new.localIPv6RequestsEnabled != old.localIPv6RequestsEnabled {
+            publishIPv6Enabled()
+        }
         if new.ipRuleDNSUpstream != old.ipRuleDNSUpstream {
-            logger.info("[VPN] IP-rule DNS changed")
             RuleResolver.shared.setUpstream(new.ipRuleDNSUpstream)
         }
-        if new.interceptExemptDNSServers != old.interceptExemptDNSServers {
-            logger.info("[VPN] DNS interception exemptions changed: \(new.interceptExemptDNSServers.sorted())")
-        }
-        publishUDPConfig()
-
         if new.tunnelIncludedRoutes != old.tunnelIncludedRoutes || new.tunnelExcludedRoutes != old.tunnelExcludedRoutes {
-            logger.info("[VPN] Custom routes changed: included=\(new.tunnelIncludedRoutes), excluded=\(new.tunnelExcludedRoutes)")
             requestReapplyTunnelSettings()
         }
 
@@ -387,8 +374,6 @@ extension TunnelStack {
         guard proxyModeChanged || hideVPNIconChanged else {
             return
         }
-
-        logger.info("[VPN] Settings changed")
 
         if hideVPNIconChanged {
             requestReapplyTunnelSettings()

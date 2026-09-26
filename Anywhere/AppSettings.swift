@@ -168,6 +168,13 @@ final class AppSettings {
             AWNotificationCenter.notifyTunnelSettingsChanged()
         }
     }
+
+    var localIPv6RequestsEnabled: Bool {
+        didSet {
+            AWCore.setLocalIPv6RequestsEnabled(localIPv6RequestsEnabled)
+            AWNotificationCenter.notifyTunnelSettingsChanged()
+        }
+    }
     
     var reflectionAddresses: [String] {
         didSet {
@@ -341,6 +348,7 @@ final class AppSettings {
         ipRuleDNSMode = AWCore.getIPRuleDNSMode()
         ipRuleDNSPlainServer = AWCore.getIPRuleDNSPlainServer()
         ipRuleDNSDoHURL = AWCore.getIPRuleDNSDoHURL()
+        localIPv6RequestsEnabled = AWCore.getLocalIPv6RequestsEnabled()
         preventDNSLeak = AWCore.getPreventDNSLeak()
         proxyDNSMode = AWCore.getProxyDNSMode()
         proxyDNSPlainServer = AWCore.getProxyDNSPlainServer()

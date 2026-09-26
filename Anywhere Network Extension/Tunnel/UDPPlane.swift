@@ -117,7 +117,7 @@ actor UDPPlane {
         let dstAddress = datagram.destination.address
         let dstPort = datagram.destination.port
 
-        if dstAddress.isIPv6, !stack.networkSupportsIPv6 {
+        if dstAddress.isIPv6, !stack.ipv6Enabled {
             stack.sendICMPPortUnreachable(rejecting: datagram)
             return
         }
