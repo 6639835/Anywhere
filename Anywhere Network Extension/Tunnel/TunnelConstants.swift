@@ -55,7 +55,7 @@ nonisolated enum TunnelConstants {
 
     // MARK: - Timer Intervals
 
-    static let udpCleanupIntervalSec = 1
+    static let udpCleanupCoalescingSec = 1
     static let udpCleanupLeewayMs = 250
 
     // MARK: - Stack Lifecycle

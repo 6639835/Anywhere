@@ -34,6 +34,29 @@ nonisolated struct TrafficByteCounts {
     }
 }
 
+// MARK: - TCP Connection Table
+
+nonisolated struct TCPConnectionTable {
+    private(set) var connections: [ObjectIdentifier: TCPConnection] = [:] {
+        didSet { FlowGauge.publishTCPTable(connections.count) }
+    }
+
+    var count: Int { connections.count }
+
+    mutating func insert(_ connection: TCPConnection) {
+        connections[ObjectIdentifier(connection)] = connection
+    }
+
+    mutating func remove(_ id: ObjectIdentifier) {
+        connections.removeValue(forKey: id)
+    }
+
+    mutating func removeAll() {
+        for connection in connections.values { connection.closeActivityRecord() }
+        connections.removeAll()
+    }
+}
+
 // MARK: - TunnelStack
 
 actor TunnelStack {
@@ -280,10 +303,10 @@ actor TunnelStack {
     nonisolated let tcpBufferLedger = TCPBufferLedger(budget: TunnelConstants.tcpGlobalBufferBudget)
 
     nonisolated let tcpPressureLog = Mutex(PressureEventThrottle(label: "TCP", cap: TunnelLimits.tcpMaxConnections))
-    nonisolated let tcpConnections = Mutex<[ObjectIdentifier: TCPConnection]>([:])
+    nonisolated let tcpConnections = Mutex(TCPConnectionTable())
 
     nonisolated func removeTCPConnection(_ id: ObjectIdentifier) {
-        _ = tcpConnections.withLock { $0.removeValue(forKey: id) }
+        tcpConnections.withLock { $0.remove(id) }
     }
 
     nonisolated let fakeIPPool: FakeIPPool

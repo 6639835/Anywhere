@@ -244,7 +244,6 @@ extension TunnelStack {
         ipStack = nil
         tcpConnections.withLock { $0.removeAll() }
         ipStackAbortContext.store(.none, ordering: .relaxed)
-        FlowGauge.publishTCPTable(0)
         logger.debug("[TunnelStack] Data plane down")
     }
 

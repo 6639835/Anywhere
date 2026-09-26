@@ -1173,6 +1173,10 @@ actor TCPConnection: MITMSessionHost {
 
     // MARK: - Close / abort / teardown
 
+    nonisolated func closeActivityRecord() {
+        activityRecord.close()
+    }
+
     private func closeWhenDrained() {
         guard phase != .closed else { return }
         guard stream != nil else { close(); return }

@@ -23,6 +23,8 @@ actor UDPPlane {
     private var flows: [TunnelStack.UDPFlowKey: UDPFlow] = [:] {
         didSet { FlowGauge.publishUDPTable(flows.count) }
     }
+
+    private var cleanupDeadline: TimeInterval?
     
     nonisolated private let bufferLedger = UDPBufferLedger(budget: TunnelConstants.udpGlobalBufferBudget)
 
@@ -231,11 +233,18 @@ actor UDPPlane {
             routeTarget: routeTarget,
             ruleSetName: ruleSetName
         )
-        flows[flowKey] = flow
+        insert(flow)
         await flow.handleReceivedData(payload, payloadLength: payload.count)
     }
 
     // MARK: - Flow registry
+
+    private func insert(_ flow: UDPFlow) {
+        flows[flow.flowKey] = flow
+        if cleanupDeadline.map({ flow.idleDeadline < $0 }) ?? true {
+            stack.udpCleanupResume.yield(())
+        }
+    }
 
     func remove(_ flow: UDPFlow) {
         if flows[flow.flowKey] === flow {
@@ -282,12 +291,20 @@ actor UDPPlane {
 
     // MARK: - Cleanup
 
-    func cleanup() {
+    func cleanup() -> TimeInterval? {
         let now = MonotonicClock.now
-        for (key, flow) in flows where now > flow.idleDeadline {
-            Task { await flow.close() }
-            flows.removeValue(forKey: key)
+        var next: TimeInterval?
+        for (key, flow) in flows {
+            let deadline = flow.idleDeadline
+            if now > deadline {
+                Task { await flow.close() }
+                flows.removeValue(forKey: key)
+            } else if next.map({ deadline < $0 }) ?? true {
+                next = deadline
+            }
         }
+        cleanupDeadline = next
+        return next
     }
 
     // MARK: - Shadowsocks UDP sessions
@@ -470,7 +487,7 @@ actor UDPPlane {
             routeTarget: routeTarget,
             ruleSetName: ruleSetName
         )
-        flows[flowKey] = flow
+        insert(flow)
         logger.debug("[DNS] Forwarding qtype \(qtype) for \(domain) → \(upstream):\(datagram.dstPort) via \(flowConfiguration.name)")
         await flow.handleReceivedData(payload, payloadLength: payload.count)
         return true

@@ -135,34 +135,34 @@ extension TunnelStack {
 
     func startIPStackTick() {
         guard let ipStack else { return }
-        let generation = dataPlaneGeneration.load(ordering: .acquiring)
-        ipStackTick = Task { [weak self] in
-            await ipStack.runTimer { [weak self] count in
-                guard let self, self.dataPlaneGeneration.load(ordering: .acquiring) == generation else { return }
-                FlowGauge.publishTCPTable(count)
+        ipStackTick = Task { await ipStack.runTimer() }
+    }
+
+    nonisolated func runUDPCleanupLoop(udpPlane: UDPPlane) async {
+        let coalescing = TimeInterval(TunnelConstants.udpCleanupCoalescingSec)
+        while !Task.isCancelled {
+            if publishedPhase.load(ordering: .relaxed) == .running,
+               let deadline = await udpPlane.cleanup() {
+                await udpCleanupSleep(until: deadline + coalescing)
+            } else {
+                guard (try? await udpCleanupResume.next()) != nil else { return }
             }
         }
     }
 
-    nonisolated func runUDPCleanupLoop(udpPlane: UDPPlane) async {
-        let interval = TimeInterval(TunnelConstants.udpCleanupIntervalSec)
-        var lastRun = MonotonicClock.now
-        while !Task.isCancelled {
-            guard publishedPhase.load(ordering: .relaxed) == .running else {
-                guard (try? await udpCleanupResume.next()) != nil else { return }
-                lastRun = MonotonicClock.now
-                continue
-            }
-            let remaining = interval - (MonotonicClock.now - lastRun)
-            if remaining > 0 {
+    nonisolated private func udpCleanupSleep(until deadline: TimeInterval) async {
+        let delay = deadline - MonotonicClock.now
+        guard delay > 0 else { return }
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask {
                 try? await Task.sleep(
-                    for: .seconds(remaining),
+                    for: .seconds(delay),
                     tolerance: .milliseconds(TunnelConstants.udpCleanupLeewayMs)
                 )
-                continue
             }
-            await udpPlane.cleanup()
-            lastRun = MonotonicClock.now
+            group.addTask { _ = try? await self.udpCleanupResume.next() }
+            defer { group.cancelAll() }
+            _ = await group.next()
         }
     }
 }

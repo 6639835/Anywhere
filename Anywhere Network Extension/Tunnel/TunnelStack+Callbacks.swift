@@ -60,7 +60,7 @@ extension TunnelStack {
     nonisolated private func findPressureVictim(now: TimeInterval) -> (connection: TCPConnection, idleFor: TimeInterval)? {
         var establishing: (connection: TCPConnection, idleFor: TimeInterval)?
         var established: (connection: TCPConnection, idleFor: TimeInterval)?
-        for delegate in tcpConnections.withLock({ Array($0.values) }) {
+        for delegate in tcpConnections.withLock({ Array($0.connections.values) }) {
             guard let tier = delegate.connectionPressureCandidate(now: now) else { continue }
             switch tier {
             case .establishing(let idleFor):
@@ -127,7 +127,7 @@ extension TunnelStack {
             sniffSNI: sniffSNI,
             hostIsResolvedDomain: decision.hostIsResolvedDomain
         )
-        tcpConnections.withLock { $0[ObjectIdentifier(delegate)] = delegate }
+        tcpConnections.withLock { $0.insert(delegate) }
         Task { await delegate.start() }
     }
 }
