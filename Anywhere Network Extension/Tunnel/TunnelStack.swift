@@ -176,6 +176,8 @@ actor TunnelStack {
     
     nonisolated let udpCleanupResume = AsyncInbox<Void>(capacity: 1)
 
+    nonisolated let datagramSink = Mutex<AsyncStream<[InboundDatagram]>.Continuation?>(nil)
+
     let byteCounts = Mutex(TrafficByteCounts())
     nonisolated func addBytesIn(_ n: Int64, target: RouteTarget) {
         let resolved = target.resolved(against: udpConfig().defaultRouteTarget)
@@ -282,14 +284,16 @@ actor TunnelStack {
     }
 
     struct UDPFlowKey: Hashable, CustomStringConvertible {
-        let srcIP: SIMD16<UInt8>
-        let srcPort: UInt16
-        let dstIP: SIMD16<UInt8>
-        let dstPort: UInt16
-        let isIPv6: Bool
+        let source: IPEndpoint
+        let destination: IPEndpoint
+
+        init(_ datagram: InboundDatagram) {
+            source = datagram.source
+            destination = datagram.destination
+        }
 
         var description: String {
-            "\(TunnelStack.ipAddrToString(srcIP, isIPv6: isIPv6)):\(srcPort)-\(TunnelStack.ipAddrToString(dstIP, isIPv6: isIPv6)):\(dstPort)"
+            "\(source)-\(destination)"
         }
     }
 
@@ -444,26 +448,6 @@ actor TunnelStack {
             mitmPolicy.load(ruleSets: snapshot.ruleSets)
         } else {
             mitmPolicy.reset()
-        }
-    }
-
-    // MARK: - IP Address Helpers
-
-    static func ipAddrToString(_ addr: UnsafeRawPointer, isIPv6: Bool) -> String {
-        IPAddress(bytes: addr, isIPv6: isIPv6).description
-    }
-
-    static func ipAddrToString(_ data: Data, isIPv6: Bool) -> String {
-        data.withUnsafeBytes { raw in
-            guard let base = raw.baseAddress else { return "?" }
-            return ipAddrToString(base, isIPv6: isIPv6)
-        }
-    }
-
-    static func ipAddrToString(_ addr: SIMD16<UInt8>, isIPv6: Bool) -> String {
-        withUnsafeBytes(of: addr) { raw in
-            guard let base = raw.baseAddress else { return "?" }
-            return ipAddrToString(base, isIPv6: isIPv6)
         }
     }
 }

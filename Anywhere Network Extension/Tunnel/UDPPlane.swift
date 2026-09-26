@@ -7,6 +7,7 @@
 
 import Foundation
 import Synchronization
+import AnywhereIP
 
 nonisolated private let logger = AnywhereLogger(category: "UDPPlane")
 
@@ -31,7 +32,7 @@ actor UDPPlane {
     private var udpPressureLog = PressureEventThrottle(label: "UDP", cap: TunnelLimits.udpMaxFlows)
 
     private struct PendingDatagrams {
-        var datagrams: [UDPPacket.Inbound] = []
+        var datagrams: [InboundDatagram] = []
         var byteCount = 0
     }
     private var pendingResolutions: [TunnelStack.UDPFlowKey: PendingDatagrams] = [:]
@@ -61,17 +62,15 @@ actor UDPPlane {
 
     // MARK: - Intake
 
-    func feed(_ packets: [Data]) async {
-        for packet in packets {
+    func feed(_ datagrams: [InboundDatagram]) async {
+        for datagram in datagrams {
             guard stack.publishedPhase.load(ordering: .relaxed) == .running else { return }
-            if let datagram = UDPPacket.parse(packet) {
-                await handleInboundUDP(datagram)
-            }
+            await handleInboundUDP(datagram)
         }
     }
 
     private func deferUntilResolved(
-        _ datagram: UDPPacket.Inbound,
+        _ datagram: InboundDatagram,
         flowKey: TunnelStack.UDPFlowKey,
         domain: String
     ) -> Bool {
@@ -113,34 +112,34 @@ actor UDPPlane {
         }
     }
 
-    private func handleInboundUDP(_ datagram: UDPPacket.Inbound, awaitedResolution: Bool = false) async {
+    private func handleInboundUDP(_ datagram: InboundDatagram, awaitedResolution: Bool = false) async {
         let payload = datagram.payload
-        let isIPv6 = datagram.isIPv6
+        let dstAddress = datagram.destination.address
+        let dstPort = datagram.destination.port
 
-        if isIPv6, !stack.networkSupportsIPv6 {
+        if dstAddress.isIPv6, !stack.networkSupportsIPv6 {
             stack.sendICMPPortUnreachable(rejecting: datagram)
             return
         }
 
         let udpConfig = stack.udpConfig()
 
-        if datagram.dstPort == 53 {
-            let dstIPString = TunnelStack.ipAddrToString(datagram.dstIP, isIPv6: isIPv6)
+        if dstPort == 53 {
             if let destination = TunnelStack.dnsDestination(
-                for: dstIPString, exempting: udpConfig.interceptExemptDNSServers
+                for: dstAddress.description, exempting: udpConfig.interceptExemptDNSServers
             ) {
                 if await handleDNSQuery(datagram, destination: destination) {
-                    return  // Fake response sent, no flow needed
+                    return
                 }
             }
         }
 
-        if udpConfig.blockUDP && datagram.dstPort != 53 {
+        if udpConfig.blockUDP && dstPort != 53 {
             stack.sendICMPPortUnreachable(rejecting: datagram)
             return
         }
 
-        if datagram.dstPort == 443 && udpConfig.quicPolicy.blocksAllQUIC {
+        if dstPort == 443 && udpConfig.quicPolicy.blocksAllQUIC {
             stack.sendICMPPortUnreachable(rejecting: datagram)
             return
         }
@@ -150,11 +149,7 @@ actor UDPPlane {
             return
         }
 
-        let flowKey = TunnelStack.UDPFlowKey(
-            srcIP: datagram.srcIP, srcPort: datagram.srcPort,
-            dstIP: datagram.dstIP, dstPort: datagram.dstPort,
-            isIPv6: isIPv6
-        )
+        let flowKey = TunnelStack.UDPFlowKey(datagram)
         if let flow = flows[flowKey] {
             if !flow.isClosed {
                 await flow.handleReceivedData(payload, payloadLength: payload.count)
@@ -163,17 +158,13 @@ actor UDPPlane {
             flows.removeValue(forKey: flowKey)
         }
 
-        if stack.connectionRouter.isRejectMarkedDestination(ipBytes: datagram.dstIP, isIPv6: isIPv6) {
+        if stack.isRejectMarked(dstAddress) {
             return
         }
 
         guard let defaultConfiguration = udpConfig.configuration else { return }
-        let dstIPString = TunnelStack.ipAddrToString(datagram.dstIP, isIPv6: isIPv6)
-        let srcHost = TunnelStack.ipAddrToString(datagram.srcIP, isIPv6: isIPv6)
-        let srcIPData = datagram.srcIPData
-        let dstIPData = datagram.dstIPData
 
-        let decision = stack.connectionRouter.decision(forIP: dstIPString, port: datagram.dstPort, proto: "UDP")
+        let decision = stack.connectionRouter.decision(forIP: dstAddress.description, port: dstPort, proto: "UDP")
 
         if !awaitedResolution, decision.ipRuleLookupPending,
            deferUntilResolved(datagram, flowKey: flowKey, domain: decision.host) {
@@ -195,7 +186,7 @@ actor UDPPlane {
                 flowConfiguration = configuration
             }
         case .reject(let matchedRuleSet):
-            stack.requestLog.record(protocol: .udp, host: dstHost, port: datagram.dstPort, routeTarget: .reject, ruleSetName: matchedRuleSet)
+            stack.requestLog.record(protocol: .udp, host: dstHost, port: dstPort, routeTarget: .reject, ruleSetName: matchedRuleSet)
             return
         case .unreachable:
             stack.sendICMPPortUnreachable(rejecting: datagram)
@@ -203,7 +194,7 @@ actor UDPPlane {
         }
 
         let isProxied = routeTarget.resolved(against: udpConfig.defaultRouteTarget).configurationID != nil
-        if datagram.dstPort == 443,
+        if dstPort == 443,
            udpConfig.quicPolicy.blocksResolvedQUIC(
             isProxied: isProxied,
             mitmListed: dstIsDomain && udpConfig.mitmEnabled && stack.mitmPolicy.matches(dstHost)
@@ -215,20 +206,14 @@ actor UDPPlane {
 
         guard makeRoomForNewFlow() else { return }
 
-        stack.requestLog.record(protocol: .udp, host: dstHost, port: datagram.dstPort, routeTarget: routeTarget, ruleSetName: ruleSetName)
+        stack.requestLog.record(protocol: .udp, host: dstHost, port: dstPort, routeTarget: routeTarget, ruleSetName: ruleSetName)
 
         let flow = UDPFlow(
             stack: stack,
             plane: self,
             ledger: bufferLedger,
             flowKey: flowKey,
-            srcHost: srcHost,
-            srcPort: datagram.srcPort,
             dstHost: dstHost,
-            dstPort: datagram.dstPort,
-            srcIPData: srcIPData,
-            dstIPData: dstIPData,
-            isIPv6: isIPv6,
             configuration: flowConfiguration,
             routeTarget: routeTarget,
             ruleSetName: ruleSetName
@@ -354,7 +339,7 @@ actor UDPPlane {
 
     // MARK: - DNS interception (fake-IP)
 
-    private func handleDNSQuery(_ datagram: UDPPacket.Inbound, destination: TunnelStack.DNSDestination) async -> Bool {
+    private func handleDNSQuery(_ datagram: InboundDatagram, destination: TunnelStack.DNSDestination) async -> Bool {
         let payload = datagram.payload
         guard let parsed = payload.withUnsafeBytes({ ptr -> (domain: String, qtype: UInt16)? in
             guard let base = ptr.bindMemory(to: UInt8.self).baseAddress else { return nil }
@@ -420,7 +405,7 @@ actor UDPPlane {
         )
     }
 
-    private func forwardToUpstreamResolver(_ datagram: UDPPacket.Inbound, domain: String, qtype: UInt16) async -> Bool {
+    private func forwardToUpstreamResolver(_ datagram: InboundDatagram, domain: String, qtype: UInt16) async -> Bool {
         let udpConfig = stack.udpConfig()
         guard let defaultConfiguration = udpConfig.configuration else { return false }
 
@@ -428,12 +413,9 @@ actor UDPPlane {
             preferring: AWCore.getFallbackDNSUpstream(), includeIPv6: false
         ).first ?? DNSUpstream.defaultPlainServer
         let payload = datagram.payload
+        let dstPort = datagram.destination.port
 
-        let flowKey = TunnelStack.UDPFlowKey(
-            srcIP: datagram.srcIP, srcPort: datagram.srcPort,
-            dstIP: datagram.dstIP, dstPort: datagram.dstPort,
-            isIPv6: datagram.isIPv6
-        )
+        let flowKey = TunnelStack.UDPFlowKey(datagram)
         if let existing = flows[flowKey] {
             if !existing.isClosed {
                 await existing.handleReceivedData(payload, payloadLength: payload.count)
@@ -442,7 +424,7 @@ actor UDPPlane {
             flows.removeValue(forKey: flowKey)
         }
 
-        let decision = stack.connectionRouter.decision(forIP: upstream, port: datagram.dstPort, proto: "UDP")
+        let decision = stack.connectionRouter.decision(forIP: upstream, port: dstPort, proto: "UDP")
 
         var flowConfiguration = defaultConfiguration
         var routeTarget: RouteTarget = .default
@@ -455,7 +437,7 @@ actor UDPPlane {
             if let ruleConfiguration { flowConfiguration = ruleConfiguration }
         case .reject(let matchedRuleSet):
             stack.requestLog.record(
-                protocol: .udp, host: upstream, port: datagram.dstPort,
+                protocol: .udp, host: upstream, port: dstPort,
                 routeTarget: .reject,
                 ruleSetName: matchedRuleSet
             )
@@ -463,11 +445,11 @@ actor UDPPlane {
         case .unreachable:
             return false
         }
-        
+
         guard makeRoomForNewFlow() else { return true }
 
         stack.requestLog.record(
-            protocol: .udp, host: upstream, port: datagram.dstPort,
+            protocol: .udp, host: upstream, port: dstPort,
             routeTarget: routeTarget, ruleSetName: ruleSetName
         )
 
@@ -476,24 +458,18 @@ actor UDPPlane {
             plane: self,
             ledger: bufferLedger,
             flowKey: flowKey,
-            srcHost: TunnelStack.ipAddrToString(datagram.srcIP, isIPv6: datagram.isIPv6),
-            srcPort: datagram.srcPort,
             dstHost: upstream,
-            dstPort: datagram.dstPort,
-            srcIPData: datagram.srcIPData,
-            dstIPData: datagram.dstIPData,
-            isIPv6: datagram.isIPv6,
             configuration: flowConfiguration,
             routeTarget: routeTarget,
             ruleSetName: ruleSetName
         )
         insert(flow)
-        logger.debug("[DNS] Forwarding qtype \(qtype) for \(domain) → \(upstream):\(datagram.dstPort) via \(flowConfiguration.name)")
+        logger.debug("[DNS] Forwarding qtype \(qtype) for \(domain) → \(upstream):\(dstPort) via \(flowConfiguration.name)")
         await flow.handleReceivedData(payload, payloadLength: payload.count)
         return true
     }
 
-    private func sendNODATA(answering datagram: UDPPacket.Inbound, qtype: UInt16) -> Bool {
+    private func sendNODATA(answering datagram: InboundDatagram, qtype: UInt16) -> Bool {
         guard let responseData = datagram.payload.withUnsafeBytes({ ptr -> Data? in
             guard let base = ptr.bindMemory(to: UInt8.self).baseAddress else { return nil }
             return DNSPacket.generateResponse(
@@ -503,18 +479,13 @@ actor UDPPlane {
             )
         }) else { return false }
 
-        stack.writeOutboundUDP(
-            srcIP: datagram.dstIPData, srcPort: datagram.dstPort,
-            dstIP: datagram.srcIPData, dstPort: datagram.srcPort,
-            isIPv6: datagram.isIPv6,
-            payload: responseData
-        )
+        stack.writeOutboundUDP(responseData, from: datagram.destination, to: datagram.source)
 
         return true
     }
 
     private func sendAddressAnswer(
-        answering datagram: UDPPacket.Inbound,
+        answering datagram: InboundDatagram,
         ip: [UInt8],
         qtype: UInt16,
         ttl: UInt32
@@ -529,12 +500,7 @@ actor UDPPlane {
             )
         }) else { return false }
 
-        stack.writeOutboundUDP(
-            srcIP: datagram.dstIPData, srcPort: datagram.dstPort,
-            dstIP: datagram.srcIPData, dstPort: datagram.srcPort,
-            isIPv6: datagram.isIPv6,
-            payload: responseData
-        )
+        stack.writeOutboundUDP(responseData, from: datagram.destination, to: datagram.source)
 
         return true
     }

@@ -106,29 +106,27 @@ extension TunnelStack {
     private func processInboundBatch(_ packets: [Data], udpPlane: UDPPlane) async {
         let reflector = reflector()
         var ipBatch: [Data] = []
-        var udpBatch: [Data] = []
 
         for packet in packets {
             if reflector.isActive, let reflected = reflector.reflect(packet) {
                 enqueueOutbound(reflected.data, isIPv6: reflected.isIPv6)
                 continue
             }
-            if UDPPacket.ipProtocol(of: packet)?.proto == UDPPacket.ipProtocolUDP {
-                udpBatch.append(packet)
-            } else {
-                ipBatch.append(packet)
+            ipBatch.append(packet)
+        }
+
+        guard dataPlaneUp, let ipStack, !ipBatch.isEmpty else { return }
+        let (datagrams, sink) = AsyncStream.makeStream(of: [InboundDatagram].self)
+        datagramSink.withLock { $0 = sink }
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { [ipBatch] in
+                await ipStack.inputBatch(ipBatch)
+                sink.finish()
+            }
+            group.addTask {
+                for await batch in datagrams { await udpPlane.feed(batch) }
             }
         }
-
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask { [ipBatch] in await self.feedIPStackBatch(ipBatch) }
-            group.addTask { [udpBatch] in await udpPlane.feed(udpBatch) }
-        }
-    }
-
-    func feedIPStackBatch(_ packets: [Data]) async {
-        guard dataPlaneUp, let ipStack, !packets.isEmpty else { return }
-        await ipStack.inputBatch(packets)
     }
 
     // MARK: - Timers

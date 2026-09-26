@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import AnywhereIP
 
 nonisolated private let logger = AnywhereLogger(category: "TunnelStack+UDP")
 
@@ -20,29 +21,13 @@ extension TunnelStack {
         return messageLength & 0x3 == 0 && messageLength + 20 == payload.count
     }
     
-    nonisolated func sendICMPPortUnreachable(rejecting datagram: UDPPacket.Inbound) {
-        guard let packet = ICMPPacket.portUnreachable(
-            srcIP: datagram.srcIPData,
-            srcPort: datagram.srcPort,
-            dstIP: datagram.dstIPData,
-            dstPort: datagram.dstPort,
-            isIPv6: datagram.isIPv6,
-            udpPayloadLength: datagram.payload.count
-        ) else { return }
-        enqueueOutbound(packet, isIPv6: datagram.isIPv6)
+    nonisolated func sendICMPPortUnreachable(rejecting datagram: InboundDatagram) {
+        guard let packet = OutboundPacket(portUnreachable: datagram) else { return }
+        enqueueOutbound(packet.data, isIPv6: packet.isIPv6)
     }
-    
-    nonisolated func writeOutboundUDP(srcIP: Data, srcPort: UInt16,
-                          dstIP: Data, dstPort: UInt16,
-                          isIPv6: Bool, payload: Data) {
-        guard let packet = UDPPacket.build(
-            srcIP: srcIP, srcPort: srcPort,
-            dstIP: dstIP, dstPort: dstPort,
-            isIPv6: isIPv6,
-            payload: payload
-        ) else {
-            return
-        }
-        enqueueOutbound(packet, isIPv6: isIPv6)
+
+    nonisolated func writeOutboundUDP(_ payload: Data, from source: IPEndpoint, to destination: IPEndpoint) {
+        guard let packet = OutboundPacket(datagram: payload, from: source, to: destination) else { return }
+        enqueueOutbound(packet.data, isIPv6: packet.isIPv6)
     }
 }

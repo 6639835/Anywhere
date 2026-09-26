@@ -7,6 +7,7 @@
 
 import Foundation
 import Synchronization
+import AnywhereIP
 
 nonisolated private let logger = AnywhereLogger(category: "UDPFlow")
 
@@ -18,15 +19,9 @@ actor UDPFlow {
     private weak var plane: UDPPlane?
 
     nonisolated let flowKey: TunnelStack.UDPFlowKey
-    nonisolated let srcHost: String
-    nonisolated let srcPort: UInt16
     nonisolated let dstHost: String
-    nonisolated let dstPort: UInt16
-    nonisolated let isIPv6: Bool
+    nonisolated var dstPort: UInt16 { flowKey.destination.port }
     nonisolated let configuration: ProxyConfiguration
-
-    nonisolated let srcIPBytes: Data
-    nonisolated let dstIPBytes: Data
 
     private struct Activity {
         var lastActivity: TimeInterval
@@ -132,10 +127,7 @@ actor UDPFlow {
         plane: UDPPlane,
         ledger: UDPBufferLedger,
         flowKey: TunnelStack.UDPFlowKey,
-        srcHost: String, srcPort: UInt16,
-        dstHost: String, dstPort: UInt16,
-        srcIPData: Data, dstIPData: Data,
-        isIPv6: Bool,
+        dstHost: String,
         configuration: ProxyConfiguration,
         routeTarget: RouteTarget,
         ruleSetName: String?
@@ -144,18 +136,12 @@ actor UDPFlow {
         self.plane = plane
         self.ledger = ledger
         self.flowKey = flowKey
-        self.srcHost = srcHost
-        self.srcPort = srcPort
         self.dstHost = dstHost
-        self.dstPort = dstPort
-        self.srcIPBytes = srcIPData
-        self.dstIPBytes = dstIPData
-        self.isIPv6 = isIPv6
         self.configuration = configuration
         self.routeTarget = routeTarget
         self.activityRecord = stack.udpActivity.open(
             host: dstHost,
-            port: dstPort,
+            port: flowKey.destination.port,
             routeTarget: routeTarget,
             defaultRouteTarget: stack.udpConfig().defaultRouteTarget,
             ruleSetName: ruleSetName
@@ -408,7 +394,7 @@ actor UDPFlow {
         let result: Result<any UDPMultiplexerStream, Error>
         do {
             result = .success(try await pool.acquireUDPStream(
-                host: dstHost, port: dstPort, sourceAddress: "udp:\(srcHost):\(srcPort)"))
+                host: dstHost, port: dstPort, sourceAddress: "udp:\(flowKey.source.address):\(flowKey.source.port)"))
         } catch {
             result = .failure(error)
         }
@@ -564,11 +550,7 @@ actor UDPFlow {
         stack?.addBytesIn(Int64(data.count), target: routeTarget)
         activityRecord.addBytesIn(data.count)
 
-        stack?.writeOutboundUDP(
-            srcIP: dstIPBytes, srcPort: dstPort,
-            dstIP: srcIPBytes, dstPort: srcPort,
-            isIPv6: isIPv6, payload: data
-        )
+        stack?.writeOutboundUDP(data, from: flowKey.destination, to: flowKey.source)
     }
 
     private func receiveClosed(operation: String, error: Error?) async {

@@ -201,15 +201,6 @@ nonisolated final class ConnectionRouter: Sendable {
         return isRejectMarkedIPv4(key)
     }
 
-    func isRejectMarkedDestination(ipBytes: SIMD16<UInt8>, isIPv6: Bool) -> Bool {
-        if isIPv6 {
-            return rejectedIPs.withLock { $0.v6.contains(ipBytes) }
-        }
-        let key = (UInt32(ipBytes[0]) << 24) | (UInt32(ipBytes[1]) << 16)
-                | (UInt32(ipBytes[2]) << 8) | UInt32(ipBytes[3])
-        return isRejectMarkedIPv4(key)
-    }
-
     private func isRejectMarkedIPv4(_ key: UInt32) -> Bool {
         fakeIPPool.isRejectMarked(ipv4: key) || rejectedIPs.withLock { $0.v4.contains(key) }
     }

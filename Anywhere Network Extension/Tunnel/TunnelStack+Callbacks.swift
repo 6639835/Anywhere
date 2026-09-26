@@ -27,6 +27,9 @@ extension TunnelStack {
                 guard let self else { pending.reject(); return }
                 Task { await self.accept(pending, generation: generation) }
             },
+            datagrams: { [weak self] batch in
+                self?.datagramSink.withLock { $0 }?.yield(batch)
+            },
             synFilter: { [weak self] _, destination in
                 guard let self else { return .drop }
                 if destination.address.isIPv6, !self.networkSupportsIPv6 { return .reset }
@@ -38,7 +41,7 @@ extension TunnelStack {
         )
     }
 
-    nonisolated private func isRejectMarked(_ address: IPAddress) -> Bool {
+    nonisolated func isRejectMarked(_ address: IPAddress) -> Bool {
         withUnsafeTemporaryAllocation(byteCount: 16, alignment: 8) { bytes in
             address.write(to: bytes.baseAddress!)
             return connectionRouter.isRejectMarkedDestination(rawIP: bytes.baseAddress!, isIPv6: address.isIPv6)
