@@ -6,8 +6,8 @@
 //
 
 import Foundation
-import Network
 import Synchronization
+import Network
 
 // MARK: - Legacy engine stall
 
@@ -76,7 +76,7 @@ nonisolated final class NetworkConnectionStallLatch: Sendable {
     private let gate = Atomic<Gate>(.pending)
     private let state = Mutex(State())
 
-    func watch<P: NetworkProtocolOptions>(_ connection: NetworkConnection<P>) {
+    func watch<P: NetworkProtocolOptions & SendableMetatype>(_ connection: NetworkConnection<P>) {
         connection.onStateUpdate { [self] _, update in
             switch update {
             case .ready:
