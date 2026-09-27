@@ -204,7 +204,6 @@ actor UDPPlane {
         let decision = stack.connectionRouter.decision(forIP: dstAddress.description, port: dstPort, proto: "UDP")
 
         let dstHost = decision.host
-        let dstIsDomain = decision.hostIsResolvedDomain
 
         var flowConfiguration = defaultConfiguration
         var routeTarget: RouteTarget = .default
@@ -225,7 +224,7 @@ actor UDPPlane {
             return
         }
 
-        if dstPort == 443, blocksQUIC(to: dstHost, hostIsResolvedDomain: dstIsDomain, udpConfig: udpConfig) {
+        if dstPort == 443, blocksQUIC(to: dstHost, udpConfig: udpConfig) {
             stack.sendICMPPortUnreachable(rejecting: datagram)
             return
         }
@@ -250,7 +249,6 @@ actor UDPPlane {
             ledger: bufferLedger,
             flowKey: flowKey,
             dstHost: dstHost,
-            hostIsResolvedDomain: dstIsDomain,
             configuration: flowConfiguration,
             routeTarget: routeTarget,
             ruleSetName: ruleSetName
@@ -261,9 +259,8 @@ actor UDPPlane {
 
     // MARK: - QUIC policy
 
-    private func blocksQUIC(to host: String, hostIsResolvedDomain: Bool, udpConfig: TunnelStack.UDPConfig) -> Bool {
+    private func blocksQUIC(to host: String, udpConfig: TunnelStack.UDPConfig) -> Bool {
         udpConfig.quicPolicy.blocksQUIC(
-            hostIsResolvedDomain: hostIsResolvedDomain,
             mitmListed: udpConfig.mitmEnabled && stack.mitmPolicy.matches(host)
         )
     }
@@ -277,7 +274,7 @@ actor UDPPlane {
     private func revalidateQUIC() {
         let udpConfig = stack.udpConfig()
         for (key, flow) in flows where key.destination.port == 443 {
-            guard blocksQUIC(to: flow.dstHost, hostIsResolvedDomain: flow.hostIsResolvedDomain, udpConfig: udpConfig)
+            guard blocksQUIC(to: flow.dstHost, udpConfig: udpConfig)
                     || blocksQUIC(routedTo: flow.routeTarget, udpConfig: udpConfig) else { continue }
             flows.removeValue(forKey: key)
             Task { await flow.close() }
@@ -521,7 +518,6 @@ actor UDPPlane {
             ledger: bufferLedger,
             flowKey: flowKey,
             dstHost: upstream,
-            hostIsResolvedDomain: false,
             configuration: flowConfiguration,
             routeTarget: routeTarget,
             ruleSetName: ruleSetName
