@@ -203,7 +203,7 @@ nonisolated class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Senda
     // MARK: - Tunnel Settings
 
     private func buildTunnelSettings() -> NEPacketTunnelNetworkSettings {
-        let tunnelAddressIPv4 = TunnelConstants.tunnelAddressIPv4
+        let tunnelAddressIPv4 = TunnelAddress.ipv4
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: tunnelAddressIPv4)
 
         let hideVPNIcon = AWCore.getHideVPNIcon()
@@ -220,7 +220,7 @@ nonisolated class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Senda
         settings.ipv4Settings = ipv4Settings
 
         if !hideVPNIcon {
-            let ipv6Settings = NEIPv6Settings(addresses: [TunnelConstants.tunnelAddressIPv6], networkPrefixLengths: [64])
+            let ipv6Settings = NEIPv6Settings(addresses: [TunnelAddress.ipv6], networkPrefixLengths: [64])
             ipv6Settings.includedRoutes = [NEIPv6Route.default()] + includedRoutes.ipv6
             ipv6Settings.excludedRoutes = excludedRoutes.ipv6
             settings.ipv6Settings = ipv6Settings
@@ -236,62 +236,28 @@ nonisolated class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Senda
         var ipv4Routes: [NEIPv4Route] = []
         var ipv6Routes: [NEIPv6Route] = []
 
-        for string in strings {
-            if string.contains(":") {
-                if let route = parseIPv6Route(string) {
-                    ipv6Routes.append(route)
-                }
-            } else if let route = parseIPv4Route(string) {
-                ipv4Routes.append(route)
+        for route in strings.compactMap({ IPRoute($0) }) {
+            switch route {
+            case .ipv4(let network, let prefixLength):
+                let mask = IPRoute.ipv4Mask(prefixLength: prefixLength)
+                ipv4Routes.append(NEIPv4Route(destinationAddress: dottedQuad(network), subnetMask: dottedQuad(mask)))
+            case .ipv6(let network, let prefixLength):
+                guard let address = ipv6String(network) else { continue }
+                ipv6Routes.append(NEIPv6Route(destinationAddress: address, networkPrefixLength: NSNumber(value: prefixLength)))
             }
         }
 
         return (ipv4: ipv4Routes, ipv6: ipv6Routes)
     }
 
-    private static func parseIPv4Route(_ string: String) -> NEIPv4Route? {
-        let parts = string.split(separator: "/", maxSplits: 1)
-        guard let addressPart = parts.first else { return nil }
-        var address = in_addr()
-        guard inet_pton(AF_INET, String(addressPart), &address) == 1 else { return nil }
-
-        var prefixLength = 32
-        if parts.count == 2 {
-            guard let parsed = Int(parts[1]), (0...32).contains(parsed) else { return nil }
-            prefixLength = parsed
-        }
-
-        let mask: UInt32 = prefixLength == 0 ? 0 : ~UInt32(0) << (32 - prefixLength)
-        let network = UInt32(bigEndian: address.s_addr) & mask
-        return NEIPv4Route(destinationAddress: dottedQuad(network), subnetMask: dottedQuad(mask))
-    }
-
-    private static func parseIPv6Route(_ string: String) -> NEIPv6Route? {
-        let parts = string.split(separator: "/", maxSplits: 1)
-        guard let addressPart = parts.first else { return nil }
+    private static func ipv6String(_ network: SIMD16<UInt8>) -> String? {
         var address = in6_addr()
-        guard inet_pton(AF_INET6, String(addressPart), &address) == 1 else { return nil }
-
-        var prefixLength = 128
-        if parts.count == 2 {
-            guard let parsed = Int(parts[1]), (0...128).contains(parsed) else { return nil }
-            prefixLength = parsed
-        }
-
         withUnsafeMutableBytes(of: &address) { bytes in
-            for byteIndex in bytes.indices {
-                let bitPosition = byteIndex * 8
-                if bitPosition >= prefixLength {
-                    bytes[byteIndex] = 0
-                } else if bitPosition + 8 > prefixLength {
-                    bytes[byteIndex] &= ~UInt8(0) << (8 - (prefixLength - bitPosition))
-                }
-            }
+            for i in 0..<16 { bytes[i] = network[i] }
         }
-
         var buffer = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
         guard inet_ntop(AF_INET6, &address, &buffer, socklen_t(INET6_ADDRSTRLEN)) != nil else { return nil }
-        return NEIPv6Route(destinationAddress: String(nulTerminated: buffer), networkPrefixLength: NSNumber(value: prefixLength))
+        return String(nulTerminated: buffer)
     }
 
     private static func dottedQuad(_ value: UInt32) -> String {

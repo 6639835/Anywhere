@@ -356,7 +356,7 @@ extension TunnelStack {
         if new.preventDNSLeak != old.preventDNSLeak {
             connectionRouter.preventDNSLeak.store(new.preventDNSLeak, ordering: .relaxed)
         }
-        if new.reflectionEnabled != old.reflectionEnabled || new.reflectionAddresses != old.reflectionAddresses {
+        if new.reflectionEnabled != old.reflectionEnabled || new.reflectionRoutes != old.reflectionRoutes {
             publishReflector()
         }
         if new.localIPv6RequestsEnabled != old.localIPv6RequestsEnabled {

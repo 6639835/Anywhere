@@ -38,7 +38,6 @@ nonisolated final class AWCore {
             UserDefaultsKey.proxyDNSPlainServer: DNSUpstream.defaultPlainServer,
             UserDefaultsKey.proxyMode: ProxyMode.rule.rawValue,
             UserDefaultsKey.quicPolicy: QUICPolicy.automatic.rawValue,
-            UserDefaultsKey.reflectionAddresses: ["10.7.0.1"],
             UserDefaultsKey.remnawaveHWID: UUID().uuidString,
             UserDefaultsKey.showVoyagerCard: true,
             UserDefaultsKey.subscriptionDNSDoHURL: DNSUpstream.defaultDoHURL,
@@ -76,6 +75,7 @@ nonisolated final class AWCore {
         static let ipRuleDNSPlainServer = "ipRuleDNSPlainServer"
         static let lastConfigurationData = "lastConfigurationData"
         static let latencyResults = "latencyResults"
+        static let legacyReflectionAddresses = "reflectionAddresses"
         static let localIPv6RequestsEnabled = "localIPv6RequestsEnabled"
         static let mitmEnabled = "mitmEnabled"
         static let onboardingCompleted = "onboardingCompleted"
@@ -86,8 +86,8 @@ nonisolated final class AWCore {
         static let proxyDNSPlainServer = "proxyDNSPlainServer"
         static let proxyMode = "proxyMode"
         static let quicPolicy = "quicPolicy"
-        static let reflectionAddresses = "reflectionAddresses"
         static let reflectionEnabled = "reflectionEnabled"
+        static let reflectionRoutes = "reflectionRoutes"
         static let remnawaveHWID = "remnawaveHWID"
         static let remnawaveHWIDEnabled = "remnawaveHWIDEnabled"
         static let ruleSetAssignments = "ruleSetAssignments"
@@ -434,12 +434,14 @@ nonisolated final class AWCore {
         userDefaults.set(value, forKey: UserDefaultsKey.reflectionEnabled)
     }
 
-    static func getReflectionAddresses() -> [String] {
-        userDefaults.stringArray(forKey: UserDefaultsKey.reflectionAddresses) ?? []
+    static func getReflectionRoutes() -> [String] {
+        userDefaults.stringArray(forKey: UserDefaultsKey.reflectionRoutes)
+            ?? userDefaults.stringArray(forKey: UserDefaultsKey.legacyReflectionAddresses)
+            ?? ["10.7.0.1/32"]
     }
 
-    static func setReflectionAddresses(_ addresses: [String]) {
-        userDefaults.set(addresses, forKey: UserDefaultsKey.reflectionAddresses)
+    static func setReflectionRoutes(_ routes: [String]) {
+        userDefaults.set(routes, forKey: UserDefaultsKey.reflectionRoutes)
     }
 
     static func getSubscriptionDNSMode() -> DNSMode {

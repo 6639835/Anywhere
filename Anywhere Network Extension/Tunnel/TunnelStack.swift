@@ -408,7 +408,7 @@ actor TunnelStack {
 
     func publishReflector() {
         let snapshot = settings.reflectionEnabled
-            ? Reflector(addresses: settings.reflectionAddresses)
+            ? Reflector(routes: settings.reflectionRoutes)
             : .inactive
         _reflector.withLock { $0 = snapshot }
     }

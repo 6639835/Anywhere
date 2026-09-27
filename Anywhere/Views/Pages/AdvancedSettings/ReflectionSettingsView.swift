@@ -7,7 +7,7 @@
 
 import SwiftUI
 
-private struct ReflectionAddressDraft: Identifiable, Equatable {
+private struct ReflectionRouteDraft: Identifiable, Equatable {
     let id = UUID()
     var value: String
 }
@@ -16,7 +16,7 @@ struct ReflectionSettingsView: View {
     @Environment(\.editMode) private var editMode
     @Environment(AppSettings.self) private var settings
 
-    @State private var addressDrafts: [ReflectionAddressDraft] = []
+    @State private var routeDrafts: [ReflectionRouteDraft] = []
 
     private var isEditing: Bool {
         editMode?.wrappedValue.isEditing == true
@@ -28,40 +28,49 @@ struct ReflectionSettingsView: View {
             Section {
                 Toggle("Reflection", isOn: $settings.reflectionEnabled)
             } footer: {
-                Text("Packets sent to a reflection address are returned to their sender instead of being routed or proxied.")
+                Text("Packets sent to a reflection route are returned to their sender instead of being routed or proxied.")
             }
 
             if settings.reflectionEnabled {
                 Section {
-                    if addressDrafts.isEmpty {
+                    if routeDrafts.isEmpty {
                         Text("None")
                             .foregroundStyle(.secondary)
                     } else {
-                        ForEach($addressDrafts) { $draft in
+                        ForEach($routeDrafts) { $draft in
                             if isEditing {
-                                TextField("Address", text: $draft.value)
-                                    .keyboardType(.URL)
+                                TextField(String("10.7.0.1/32"), text: $draft.value)
+                                    .keyboardType(.numbersAndPunctuation)
                                     .autocorrectionDisabled()
                                     .textInputAutocapitalization(.never)
                             } else {
-                                Text(draft.value)
+                                HStack {
+                                    Text(draft.value)
+                                    if IPRoute(reflection: draft.value.trimmingCharacters(in: .whitespacesAndNewlines)) == nil {
+                                        Spacer()
+                                        Image(systemName: "exclamationmark.triangle.fill")
+                                            .foregroundStyle(.orange)
+                                    }
+                                }
                             }
                         }
                         .onDelete { offsets in
-                            addressDrafts.remove(atOffsets: offsets)
+                            routeDrafts.remove(atOffsets: offsets)
                             if editMode?.wrappedValue.isEditing != true {
                                 save()
                             }
                         }
                         .onMove { source, destination in
-                            addressDrafts.move(fromOffsets: source, toOffset: destination)
+                            routeDrafts.move(fromOffsets: source, toOffset: destination)
                             if editMode?.wrappedValue.isEditing != true {
                                 save()
                             }
                         }
                     }
                 } header: {
-                    Text("Reflection Addresses")
+                    Text("Reflection Routes")
+                } footer: {
+                    Text("Each route must be /24 or narrower (/120 for IPv6) and must not contain the tunnel address.")
                 }
             }
         }
@@ -81,7 +90,7 @@ struct ReflectionSettingsView: View {
                 save()
             }
         }
-        .onChange(of: addressDrafts) {
+        .onChange(of: routeDrafts) {
             if isEditing {
                 ensureTrailingBlankDraft()
             }
@@ -89,19 +98,19 @@ struct ReflectionSettingsView: View {
     }
 
     private func loadInitial() {
-        addressDrafts = settings.reflectionAddresses.map { ReflectionAddressDraft(value: $0) }
+        routeDrafts = settings.reflectionRoutes.map { ReflectionRouteDraft(value: $0) }
     }
     
     private func ensureTrailingBlankDraft() {
-        if addressDrafts.last?.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != true {
-            addressDrafts.append(ReflectionAddressDraft(value: ""))
+        if routeDrafts.last?.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != true {
+            routeDrafts.append(ReflectionRouteDraft(value: ""))
         }
     }
     
     private func save() {
-        addressDrafts = addressDrafts
+        routeDrafts = routeDrafts
             .filter { !$0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        settings.reflectionAddresses = addressDrafts
+        settings.reflectionRoutes = routeDrafts
             .map { $0.value.trimmingCharacters(in: .whitespacesAndNewlines) }
     }
 }

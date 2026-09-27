@@ -9,11 +9,6 @@ import Foundation
 
 nonisolated enum TunnelConstants {
 
-    // MARK: - Tunnel Addresses
-    
-    static let tunnelAddressIPv4 = "10.8.0.1"
-    static let tunnelAddressIPv6 = "fd00::1"
-
     // MARK: - Connection Timeouts
     
     static let connectionIdleTimeout: TimeInterval = 300

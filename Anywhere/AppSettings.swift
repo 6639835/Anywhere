@@ -175,17 +175,17 @@ final class AppSettings {
             AWNotificationCenter.notifyTunnelSettingsChanged()
         }
     }
-    
-    var reflectionAddresses: [String] {
-        didSet {
-            AWCore.setReflectionAddresses(reflectionAddresses)
-            AWNotificationCenter.notifyTunnelSettingsChanged()
-        }
-    }
 
     var reflectionEnabled: Bool {
         didSet {
             AWCore.setReflectionEnabled(reflectionEnabled)
+            AWNotificationCenter.notifyTunnelSettingsChanged()
+        }
+    }
+    
+    var reflectionRoutes: [String] {
+        didSet {
+            AWCore.setReflectionRoutes(reflectionRoutes)
             AWNotificationCenter.notifyTunnelSettingsChanged()
         }
     }
@@ -355,8 +355,8 @@ final class AppSettings {
         proxyDNSDoHURL = AWCore.getProxyDNSDoHURL()
         proxyMode = AWCore.getProxyMode()
         quicPolicy = AWCore.getQUICPolicy()
-        reflectionAddresses = AWCore.getReflectionAddresses()
         reflectionEnabled = AWCore.getReflectionEnabled()
+        reflectionRoutes = AWCore.getReflectionRoutes()
         trustedSSIDs = AWCore.getTrustedSSIDs()
         tunnelExcludedRoutes = AWCore.getTunnelExcludedRoutes()
         tunnelIncludedRoutes = AWCore.getTunnelIncludedRoutes()

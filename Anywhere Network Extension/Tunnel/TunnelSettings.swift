@@ -17,7 +17,7 @@ nonisolated struct TunnelSettings: Equatable {
     var blockWebRTC = true
     var preventDNSLeak = false
     var reflectionEnabled = false
-    var reflectionAddresses: [String] = []
+    var reflectionRoutes: [String] = []
     var hideVPNIcon = false
     var localIPv6RequestsEnabled = false
     var tunnelIncludedRoutes: [String] = []
@@ -36,7 +36,7 @@ nonisolated struct TunnelSettings: Equatable {
             blockWebRTC: AWCore.getBlockWebRTC(),
             preventDNSLeak: AWCore.getPreventDNSLeak(),
             reflectionEnabled: AWCore.getReflectionEnabled(),
-            reflectionAddresses: AWCore.getReflectionAddresses(),
+            reflectionRoutes: AWCore.getReflectionRoutes(),
             hideVPNIcon: AWCore.getHideVPNIcon(),
             localIPv6RequestsEnabled: AWCore.getLocalIPv6RequestsEnabled(),
             tunnelIncludedRoutes: AWCore.getTunnelIncludedRoutes(),
