@@ -6,8 +6,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/NodePassProject/AnywhereIP.git",
       "state" : {
-        "revision" : "5b21fbaff1f7f9603eb9c04448ae18b0cd5fbce4",
-        "version" : "3.0.0"
+        "revision" : "7d5ee9839e7b1ac956b6b93266276dd272fe8104",
+        "version" : "3.0.1"
       }
     },
     {
