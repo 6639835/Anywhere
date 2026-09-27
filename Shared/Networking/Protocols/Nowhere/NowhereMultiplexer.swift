@@ -10,7 +10,6 @@ import Synchronization
 
 nonisolated fileprivate enum NowhereMultiplexerInboundEvent: Sendable {
     case data(Data)
-    case fin
 }
 
 nonisolated fileprivate final class NowhereMultiplexerFlowIdentity: Sendable {}
@@ -47,13 +46,9 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
         var pendingReceiveCredit = 0
     }
 
-    private struct RetiredFlow: Sendable {
-        var receiveCredit: Int
-    }
-
     private struct State {
         var flows: [UInt32: FlowState] = [:]
-        var retiredFlows: [UInt32: RetiredFlow] = [:]
+        var pendingResetFlowIDs: Set<UInt32> = []
         var draining = false
         var connectionSendCredit = NowhereMultiplexerConstants.baseConnectionWindowBytes
         var connectionReceiveCredit = NowhereMultiplexerConstants.connectionWindowBytes
@@ -98,6 +93,7 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
     private enum ReceiveAdmission {
         case deliver(NowhereMultiplexerAsyncQueue<NowhereMultiplexerInboundEvent>, NowhereMultiplexerFlowIdentity)
         case discard
+        case reset(NowhereMultiplexerFlowIdentity?)
     }
 
     private let transport: any ByteTransport
@@ -183,12 +179,12 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
                     .protocolViolation(detail: "Multiplexer flow \(flowID) already exists")
                 )
             }
-            guard state.retiredFlows[flowID] == nil else { return nil }
+            guard !state.pendingResetFlowIDs.contains(flowID) else { return nil }
             guard !state.draining else { return nil }
             guard Self.activeFlowCount(state) < maximumActiveFlows else { return nil }
-            guard state.flows.count + state.retiredFlows.count < NowhereMultiplexerConstants.maximumStreams else {
+            guard state.flows.count + state.pendingResetFlowIDs.count < NowhereMultiplexerConstants.maximumStreams else {
                 state.draining = true
-                closeDrainedCarrier = Self.activeFlowCount(state) == 0
+                closeDrainedCarrier = Self.activeFlowCount(state) == 0 && state.pendingResetFlowIDs.isEmpty
                 return nil
             }
             let inbox = NowhereMultiplexerAsyncQueue<NowhereMultiplexerInboundEvent>(
@@ -202,7 +198,7 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
                 termination: termination,
                 onEnd: onEnd
             )
-            if state.flows.count + state.retiredFlows.count
+            if state.flows.count + state.pendingResetFlowIDs.count
                 >= NowhereMultiplexerConstants.maximumStreams {
                 state.draining = true
             }
@@ -297,7 +293,7 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
             let onEnd = flow.onEnd
             flow.onEnd = nil
             state.flows[flowID] = flow
-            if state.flows.count + state.retiredFlows.count
+            if state.flows.count + state.pendingResetFlowIDs.count
                 >= NowhereMultiplexerConstants.maximumStreams {
                 state.draining = true
             }
@@ -360,8 +356,6 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
                     count: Self.creditBytes(for: data.count)
                 )
                 return data
-            case .fin:
-                return nil
             }
         }
         return nil
@@ -372,6 +366,14 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
         identity: NowhereMultiplexerFlowIdentity,
         reset: Bool
     ) async {
+        if reset {
+            do {
+                try resetPeerFlow(flowID: flowID, identity: identity)
+            } catch {
+                terminate(error: error)
+            }
+            return
+        }
         if containsFlow(flowID, identity: identity) {
             do {
                 let header = try NowhereMultiplexerFrameHeader.terminal(flowID: flowID, reset: reset)
@@ -387,15 +389,14 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
                 }
             }
         }
-        finishLocalClose(flowID: flowID, identity: identity, reset: reset)
+        finishLocalClose(flowID: flowID, identity: identity)
     }
 
     // MARK: - Flow state
 
     private func finishLocalClose(
         flowID: UInt32,
-        identity: NowhereMultiplexerFlowIdentity,
-        reset: Bool
+        identity: NowhereMultiplexerFlowIdentity
     ) {
         let closeDrainedCarrier = state.withLock { state -> Bool in
             guard !state.closed,
@@ -408,16 +409,10 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
             state.flows[flowID] = flow
             if flow.peerFinished {
                 state.flows.removeValue(forKey: flowID)
-            } else if reset {
-                state.flows.removeValue(forKey: flowID)
-                state.retiredFlows[flowID] = RetiredFlow(receiveCredit: flow.receiveCredit)
-                if state.retiredFlows.count >= NowhereMultiplexerConstants.maximumStreams {
-                    state.draining = true
-                }
             }
             Self.rebalanceFairCredits(&state)
             state.sendCreditGate.wakeAll()
-            return state.draining && Self.activeFlowCount(state) == 0
+            return state.draining && Self.activeFlowCount(state) == 0 && state.pendingResetFlowIDs.isEmpty
         }
         if closeDrainedCarrier { terminate(error: nil) }
     }
@@ -441,7 +436,7 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
                 }
             }
             state.sendCreditGate.wakeAll()
-            closeDrainedCarrier = state.draining && Self.activeFlowCount(state) == 0
+            closeDrainedCarrier = state.draining && Self.activeFlowCount(state) == 0 && state.pendingResetFlowIDs.isEmpty
             return RemovedFlow(
                 inbox: flow.inbox,
                 termination: flow.termination,
@@ -597,7 +592,7 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
 
     private func receiveWindow(_ header: NowhereMultiplexerFrameHeader) throws {
         let credit = Int(header.value) * 1024
-        try state.withLock { state in
+        let resetIdentity: NowhereMultiplexerFlowIdentity? = try state.withLock { state in
             guard !state.closed else { throw Self.closedError(state.terminalError) }
             if header.flowID == 0 {
                 guard state.connectionSendCredit + credit <= NowhereMultiplexerConstants.connectionWindowBytes else {
@@ -608,20 +603,21 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
                 }
                 state.connectionSendCredit += credit
                 state.sendCreditGate.wakeAll()
-                return
+                return nil
             }
 
-            guard var flow = state.flows[header.flowID] else { return }
+            guard var flow = state.flows[header.flowID] else { return nil }
             guard flow.sendCredit + credit <= NowhereMultiplexerConstants.streamWindowBytes else {
-                throw AnywhereError.proxy(
-                    .nowhere,
-                    .protocolViolation(detail: "Multiplexer stream window overflow")
-                )
+                return flow.identity
             }
             flow.sendCredit += credit
             Self.returnFairCredit(credit, to: &flow)
             state.flows[header.flowID] = flow
             state.sendCreditGate.wakeAll()
+            return nil
+        }
+        if let resetIdentity {
+            try resetPeerFlow(flowID: header.flowID, identity: resetIdentity)
         }
     }
 
@@ -630,40 +626,67 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
     private func admitReceive(flowID: UInt32, count: Int) throws -> ReceiveAdmission {
         try state.withLock { state in
             guard !state.closed else { throw Self.closedError(state.terminalError) }
+            guard state.connectionReceiveCredit >= count else {
+                throw AnywhereError.proxy(
+                    .nowhere,
+                    .protocolViolation(detail: "Peer exceeded Multiplexer connection receive window")
+                )
+            }
+            state.connectionReceiveCredit -= count
             if var flow = state.flows[flowID] {
-                guard !flow.peerFinished else {
-                    throw AnywhereError.proxy(
-                        .nowhere,
-                        .protocolViolation(detail: "STREAM data after Multiplexer FIN for flow \(flowID)")
-                    )
-                }
-                guard flow.receiveCredit >= count, state.connectionReceiveCredit >= count else {
-                    throw AnywhereError.proxy(
-                        .nowhere,
-                        .protocolViolation(detail: "Peer exceeded Multiplexer receive window")
-                    )
+                guard !flow.peerFinished, flow.receiveCredit >= count else {
+                    return .reset(flow.identity)
                 }
                 flow.receiveCredit -= count
-                state.connectionReceiveCredit -= count
                 state.flows[flowID] = flow
                 return flow.acceptsWrites ? .deliver(flow.inbox, flow.identity) : .discard
             }
-            if var retired = state.retiredFlows[flowID] {
-                guard retired.receiveCredit >= count, state.connectionReceiveCredit >= count else {
-                    throw AnywhereError.proxy(
-                        .nowhere,
-                        .protocolViolation(detail: "Peer exceeded Multiplexer receive window")
-                    )
-                }
-                retired.receiveCredit -= count
-                state.connectionReceiveCredit -= count
-                state.retiredFlows[flowID] = retired
+            if state.pendingResetFlowIDs.contains(flowID) {
                 return .discard
             }
-            throw AnywhereError.proxy(
-                .nowhere,
-                .protocolViolation(detail: "STREAM data for unknown Multiplexer flow \(flowID)")
-            )
+            return .reset(nil)
+        }
+    }
+
+    private func resetPeerFlow(
+        flowID: UInt32,
+        identity: NowhereMultiplexerFlowIdentity?
+    ) throws {
+        let preparation: (Bool, RemovedFlow?) = try state.withLock { state in
+            guard !state.closed, !state.pendingResetFlowIDs.contains(flowID) else { return (false, nil) }
+            if let current = state.flows[flowID] {
+                guard let identity, current.identity === identity else { return (false, nil) }
+            } else if identity != nil {
+                return (false, nil)
+            }
+            if state.flows[flowID] == nil,
+               state.flows.count + state.pendingResetFlowIDs.count
+                >= NowhereMultiplexerConstants.maximumStreams {
+                throw AnywhereError.proxy(.nowhere, .protocolViolation(detail: "Multiplexer reset metadata limit reached"))
+            }
+            state.pendingResetFlowIDs.insert(flowID)
+            let flow = state.flows.removeValue(forKey: flowID)
+            Self.rebalanceFairCredits(&state)
+            state.sendCreditGate.wakeAll()
+            let removed = flow.map { RemovedFlow(inbox: $0.inbox, termination: $0.termination, onEnd: $0.onEnd) }
+            return (true, removed)
+        }
+        guard preparation.0 else { return }
+        finishRemovedFlow(preparation.1, error: AnywhereError.proxy(.nowhere, .streamReset(code: flowID)), discardingBuffered: true)
+        Task { [self] in
+            do {
+                let header = try NowhereMultiplexerFrameHeader.terminal(flowID: flowID, reset: true)
+                try await writeFrame(header: header, payload: Data(), validate: { [self] in
+                    state.withLock { $0.pendingResetFlowIDs.contains(flowID) }
+                })
+                let closeDrained = state.withLock { state in
+                    state.pendingResetFlowIDs.remove(flowID)
+                    return state.draining && Self.activeFlowCount(state) == 0 && state.pendingResetFlowIDs.isEmpty
+                }
+                if closeDrained { terminate(error: nil) }
+            } catch {
+                terminate(error: error)
+            }
         }
     }
 
@@ -919,7 +942,7 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
                         ? Data()
                         : buffer.subdata(in: headerEnd..<(headerEnd + payloadLength))
                     consumed = headerEnd + payloadLength
-                    try await receiveFrame(header: header, payload: payload)
+                    try receiveFrame(header: header, payload: payload)
                 }
 
                 if consumed != 0 { buffer.removeSubrange(0..<consumed) }
@@ -933,7 +956,7 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
         }
     }
 
-    private func receiveFrame(header: NowhereMultiplexerFrameHeader, payload: Data) async throws {
+    private func receiveFrame(header: NowhereMultiplexerFrameHeader, payload: Data) throws {
         switch header.kind {
         case .window:
             try receiveWindow(header)
@@ -943,16 +966,6 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
                 .protocolViolation(detail: "Portal initiated an unsupported Multiplexer stream")
             )
         case .reset:
-            let retiredClose = state.withLock { state -> Bool? in
-                guard state.retiredFlows.removeValue(forKey: header.flowID) != nil else {
-                    return nil
-                }
-                return state.draining && Self.activeFlowCount(state) == 0
-            }
-            if let retiredClose {
-                if retiredClose { terminate(error: nil) }
-                return
-            }
             let removed = removeFlow(header.flowID)
             guard let removed else { return }
             let reset = AnywhereError.proxy(.nowhere, .streamReset(code: header.flowID))
@@ -963,20 +976,22 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
             case .discard:
                 releaseConnectionReceiveCredit(count: charged)
             case .deliver(let inbox, let identity):
-                do {
-                    try await inbox.send(.data(payload))
-                } catch {
-                    guard isLocallyFinished(flowID: header.flowID, identity: identity) else { throw error }
+                switch inbox.offer(.data(payload)) {
+                case .accepted:
+                    break
+                case .finished where isLocallyFinished(flowID: header.flowID, identity: identity):
                     releaseConnectionReceiveCredit(count: charged)
+                case .finished, .full:
+                    releaseConnectionReceiveCredit(count: charged)
+                    try resetPeerFlow(flowID: header.flowID, identity: identity)
                 }
+            case .reset(let identity):
+                releaseConnectionReceiveCredit(count: charged)
+                try resetPeerFlow(flowID: header.flowID, identity: identity)
             }
         case .fin:
             var closeDrainedCarrier = false
             let flow: FlowState? = state.withLock { state in
-                if state.retiredFlows.removeValue(forKey: header.flowID) != nil {
-                    closeDrainedCarrier = state.draining && Self.activeFlowCount(state) == 0
-                    return nil
-                }
                 guard var flow = state.flows[header.flowID], !flow.peerFinished else {
                     return nil
                 }
@@ -987,7 +1002,7 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
                     } else {
                         state.flows[header.flowID] = flow
                     }
-                    closeDrainedCarrier = state.draining && Self.activeFlowCount(state) == 0
+                    closeDrainedCarrier = state.draining && Self.activeFlowCount(state) == 0 && state.pendingResetFlowIDs.isEmpty
                     return nil
                 }
                 flow.peerFinished = true
@@ -999,12 +1014,6 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
                 return
             }
             if let flow {
-                do {
-                    try await flow.inbox.send(.fin)
-                } catch {
-                    guard isLocallyFinished(flowID: header.flowID, identity: flow.identity) else { throw error }
-                    return
-                }
                 flow.inbox.finish()
                 flow.termination.fire(nil)
             }
@@ -1033,7 +1042,7 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
             let flows = Array(state.flows.values)
             let onClose = state.closeHandler
             state.flows.removeAll(keepingCapacity: false)
-            state.retiredFlows.removeAll(keepingCapacity: false)
+            state.pendingResetFlowIDs.removeAll(keepingCapacity: false)
             state.closeHandler = nil
             state.sendCreditGate.wakeAll()
             state.outboundGate.wakeAll()
