@@ -183,13 +183,6 @@ final class AppSettings {
         }
     }
     
-    var reflectionRoutes: [String] {
-        didSet {
-            AWCore.setReflectionRoutes(reflectionRoutes)
-            AWNotificationCenter.notifyTunnelSettingsChanged()
-        }
-    }
-
     var ipRuleDNSMode: DNSMode {
         didSet {
             AWCore.setIPRuleDNSMode(ipRuleDNSMode)
@@ -356,7 +349,6 @@ final class AppSettings {
         proxyMode = AWCore.getProxyMode()
         quicPolicy = AWCore.getQUICPolicy()
         reflectionEnabled = AWCore.getReflectionEnabled()
-        reflectionRoutes = AWCore.getReflectionRoutes()
         trustedSSIDs = AWCore.getTrustedSSIDs()
         tunnelExcludedRoutes = AWCore.getTunnelExcludedRoutes()
         tunnelIncludedRoutes = AWCore.getTunnelIncludedRoutes()

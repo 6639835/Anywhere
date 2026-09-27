@@ -33,30 +33,6 @@ nonisolated enum IPRoute: Equatable, Sendable {
         }
     }
 
-    init?(reflection string: String) {
-        guard let route = IPRoute(string) else { return nil }
-        switch route {
-        case .ipv4(_, let prefixLength) where prefixLength < 24: return nil
-        case .ipv6(_, let prefixLength) where prefixLength < 120: return nil
-        default: break
-        }
-        guard !Self.tunnelHosts.contains(where: { route.contains($0) }) else { return nil }
-        self = route
-    }
-
-    private static let tunnelHosts = [TunnelAddress.ipv4, TunnelAddress.ipv6].compactMap { IPRoute($0) }
-
-    func contains(_ other: IPRoute) -> Bool {
-        switch (self, other) {
-        case let (.ipv4(network, prefixLength), .ipv4(otherNetwork, otherPrefixLength)):
-            return otherPrefixLength >= prefixLength && (otherNetwork & Self.ipv4Mask(prefixLength: prefixLength)) == network
-        case let (.ipv6(network, prefixLength), .ipv6(otherNetwork, otherPrefixLength)):
-            return otherPrefixLength >= prefixLength && (otherNetwork & Self.ipv6Mask(prefixLength: prefixLength)) == network
-        default:
-            return false
-        }
-    }
-
     static func ipv4Mask(prefixLength: Int) -> UInt32 {
         ~UInt32(0) << (32 - prefixLength)
     }

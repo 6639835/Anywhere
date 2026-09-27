@@ -207,11 +207,16 @@ nonisolated class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Senda
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: tunnelAddressIPv4)
 
         let hideVPNIcon = AWCore.getHideVPNIcon()
+        let reflectionEnabled = AWCore.getReflectionEnabled()
         let includedRoutes = Self.parseRoutes(AWCore.getTunnelIncludedRoutes())
         let excludedRoutes = Self.parseRoutes(AWCore.getTunnelExcludedRoutes())
 
         let ipv4Settings = NEIPv4Settings(addresses: [tunnelAddressIPv4], subnetMasks: ["255.255.255.0"])
-        ipv4Settings.includedRoutes = [NEIPv4Route.default()] + includedRoutes.ipv4
+        var includedIPv4Routes = [NEIPv4Route.default()] + includedRoutes.ipv4
+        if reflectionEnabled {
+            includedIPv4Routes.append(NEIPv4Route(destinationAddress: TunnelAddress.reflection, subnetMask: "255.255.255.255"))
+        }
+        ipv4Settings.includedRoutes = includedIPv4Routes
         var excludedIPv4Routes = excludedRoutes.ipv4
         if hideVPNIcon {
             excludedIPv4Routes.append(NEIPv4Route(destinationAddress: "0.0.0.0", subnetMask: "255.255.255.254"))
@@ -219,7 +224,7 @@ nonisolated class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Senda
         ipv4Settings.excludedRoutes = excludedIPv4Routes
         settings.ipv4Settings = ipv4Settings
 
-        if !hideVPNIcon {
+        if !hideVPNIcon && !reflectionEnabled {
             let ipv6Settings = NEIPv6Settings(addresses: [TunnelAddress.ipv6], networkPrefixLengths: [64])
             ipv6Settings.includedRoutes = [NEIPv6Route.default()] + includedRoutes.ipv6
             ipv6Settings.excludedRoutes = excludedRoutes.ipv6

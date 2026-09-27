@@ -359,8 +359,8 @@ extension TunnelStack {
         if new.preventDNSLeak != old.preventDNSLeak {
             connectionRouter.preventDNSLeak.store(new.preventDNSLeak, ordering: .relaxed)
         }
-        if new.reflectionEnabled != old.reflectionEnabled || new.reflectionRoutes != old.reflectionRoutes {
-            publishReflector()
+        if new.reflectionEnabled != old.reflectionEnabled {
+            publishReflectionEnabled()
         }
         if new.localIPv6RequestsEnabled != old.localIPv6RequestsEnabled {
             publishIPv6Enabled()
@@ -368,22 +368,17 @@ extension TunnelStack {
         if new.ipRuleDNSUpstream != old.ipRuleDNSUpstream {
             RuleResolver.shared.setUpstream(new.ipRuleDNSUpstream)
         }
-        if new.tunnelIncludedRoutes != old.tunnelIncludedRoutes || new.tunnelExcludedRoutes != old.tunnelExcludedRoutes {
+        let tunnelRoutesChanged = new.tunnelIncludedRoutes != old.tunnelIncludedRoutes
+            || new.tunnelExcludedRoutes != old.tunnelExcludedRoutes
+            || new.hideVPNIcon != old.hideVPNIcon
+            || new.reflectionEnabled != old.reflectionEnabled
+        if tunnelRoutesChanged {
             requestReapplyTunnelSettings()
         }
 
-        let proxyModeChanged = computeEffectiveProxyMode() != proxyMode
-        let hideVPNIconChanged = new.hideVPNIcon != old.hideVPNIcon
-
-        guard proxyModeChanged || hideVPNIconChanged else {
-            return
+        if computeEffectiveProxyMode() != proxyMode {
+            restartStack(configuration: configuration)
         }
-
-        if hideVPNIconChanged {
-            requestReapplyTunnelSettings()
-        }
-
-        restartStack(configuration: configuration)
     }
 
     private func handleRoutingChanged() async {

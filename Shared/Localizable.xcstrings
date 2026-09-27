@@ -6406,58 +6406,6 @@
         }
       }
     },
-    "Each route must be /24 or narrower (/120 for IPv6) and must not contain the tunnel address." : {
-      "localizations" : {
-        "ar" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "يجب ألا يكون أي مسار أوسع من /24 (أو /120 لـ IPv6)، وألا يتضمن عنوان النفق."
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Each route must be /24 or narrower (/120 for IPv6) and must not contain the tunnel address."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Cada ruta debe ser /24 o más específica (/120 para IPv6) y no debe contener la dirección del túnel."
-          }
-        },
-        "fa" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "هر مسیر باید /24 یا کوچک‌تر باشد (برای IPv6، /120) و نباید شامل آدرس تونل باشد."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Каждый маршрут должен быть не шире /24 (/120 для IPv6) и не должен включать адрес туннеля."
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Her rota en fazla /24 genişliğinde olmalı (IPv6 için /120) ve tünel adresini içermemelidir."
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Mỗi tuyến không được rộng hơn /24 (/120 đối với IPv6) và không được chứa địa chỉ đường hầm."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "每条路由不得大于 /24（IPv6 为 /120），且不得包含隧道地址。"
-          }
-        }
-      }
-    },
     "ECH" : {
       "shouldTranslate" : false
     },
@@ -7084,6 +7032,58 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "启用隐藏 VPN 图标可能导致连接不稳定，且 IPv6 流量将绕过 VPN。"
+          }
+        }
+      }
+    },
+    "Enabling Reflection may reduce performance, and IPv6 traffic will bypass the VPN." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "قد يؤدي تفعيل \"الانعكاس\" إلى تقليل الأداء، وستتجاوز حركة IPv6 شبكة VPN."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enabling Reflection may reduce performance, and IPv6 traffic will bypass the VPN."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activar Reflexión puede reducir el rendimiento, y el tráfico IPv6 no pasará por la VPN."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "فعال‌سازی «بازتاب» ممکن است عملکرد را کاهش دهد و ترافیک IPv6 از VPN عبور نخواهد کرد."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Включение «Отражения» может снизить производительность, а трафик IPv6 будет идти в обход VPN."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "\"Yansıma\"yı etkinleştirmek performansı düşürebilir ve IPv6 trafiği VPN'i atlayacaktır."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bật Phản chiếu có thể làm giảm hiệu suất và lưu lượng IPv6 sẽ không đi qua VPN."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启用反射可能降低性能，且 IPv6 流量将绕过 VPN。"
           }
         }
       }
@@ -12797,54 +12797,54 @@
     "Packet Up" : {
       "shouldTranslate" : false
     },
-    "Packets sent to a reflection route are returned to their sender instead of being routed or proxied." : {
+    "Packets sent to %@ are returned to their sender instead of being routed or proxied." : {
       "localizations" : {
         "ar" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "تُعاد الحِزَم المُرسَلة إلى مسار انعكاس إلى مُرسِلها بدلاً من توجيهها أو تمريرها عبر الوكيل."
+            "value" : "تُعاد الحِزَم المُرسَلة إلى %@ إلى مُرسِلها بدلاً من توجيهها أو تمريرها عبر الوكيل."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Packets sent to a reflection route are returned to their sender instead of being routed or proxied."
+            "value" : "Packets sent to %@ are returned to their sender instead of being routed or proxied."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Los paquetes enviados a una ruta de reflexión se devuelven al remitente en lugar de enrutarse o pasar por el proxy."
+            "value" : "Los paquetes enviados a %@ se devuelven al remitente en lugar de enrutarse o pasar por el proxy."
           }
         },
         "fa" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "بسته‌های ارسال‌شده به یک مسیر بازتاب، به‌جای مسیریابی یا عبور از پراکسی، به فرستنده‌شان بازگردانده می‌شوند."
+            "value" : "بسته‌های ارسال‌شده به %@، به‌جای مسیریابی یا عبور از پراکسی، به فرستنده‌شان بازگردانده می‌شوند."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Пакеты, отправленные в маршрут отражения, возвращаются отправителю вместо маршрутизации или проксирования."
+            "value" : "Пакеты, отправленные на %@, возвращаются отправителю вместо маршрутизации или проксирования."
           }
         },
         "tr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Bir yansıma rotasına gönderilen paketler yönlendirilmek veya proxy üzerinden geçirilmek yerine gönderenine geri döndürülür."
+            "value" : "%@ adresine gönderilen paketler yönlendirilmek veya proxy üzerinden geçirilmek yerine gönderenine geri döndürülür."
           }
         },
         "vi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Các gói tin được gửi đến tuyến phản chiếu sẽ được trả lại cho người gửi thay vì được định tuyến hoặc đi qua proxy."
+            "value" : "Các gói tin được gửi đến %@ sẽ được trả lại cho người gửi thay vì được định tuyến hoặc đi qua proxy."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "发送到反射路由的数据包会被退回给发送方，而不会进行路由或代理。"
+            "value" : "发送到 %@ 的数据包会被退回给发送方，而不会进行路由或代理。"
           }
         }
       }
@@ -14371,58 +14371,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "反射"
-          }
-        }
-      }
-    },
-    "Reflection Routes" : {
-      "localizations" : {
-        "ar" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "مسارات الانعكاس"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Reflection Routes"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Rutas de reflexión"
-          }
-        },
-        "fa" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "مسیرهای بازتاب"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Маршруты отражения"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Yansıma Rotaları"
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tuyến phản chiếu"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "反射路由"
           }
         }
       }

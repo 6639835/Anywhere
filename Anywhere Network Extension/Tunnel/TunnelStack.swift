@@ -392,9 +392,8 @@ actor TunnelStack {
         _udpConfig.withLock { $0 = snapshot }
     }
 
-    private let _reflector = Mutex(Reflector.inactive)
-
-    nonisolated func reflector() -> Reflector { _reflector.withLock { $0 } }
+    private let _reflectionEnabled = Atomic<Bool>(false)
+    nonisolated var reflectionEnabled: Bool { _reflectionEnabled.load(ordering: .relaxed) }
 
     func publishOutboundRoutingContext(configuration: ProxyConfiguration?) {
         OutboundConnector.setRoutingContext(OutboundConnector.RoutingContext(
@@ -406,11 +405,8 @@ actor TunnelStack {
         ))
     }
 
-    func publishReflector() {
-        let snapshot = settings.reflectionEnabled
-            ? Reflector(routes: settings.reflectionRoutes)
-            : .inactive
-        _reflector.withLock { $0 = snapshot }
+    func publishReflectionEnabled() {
+        _reflectionEnabled.store(settings.reflectionEnabled, ordering: .relaxed)
     }
 
     struct UDPFlowKey: Hashable, CustomStringConvertible {
@@ -535,7 +531,7 @@ actor TunnelStack {
         ConnectionMetrics.shared.setDefaultServer(configuration.id)
 
         publishUDPConfig()
-        publishReflector()
+        publishReflectionEnabled()
         publishIPv6Enabled()
         publishOutboundRoutingContext(configuration: configuration)
 

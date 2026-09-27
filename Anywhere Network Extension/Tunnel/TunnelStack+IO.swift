@@ -117,14 +117,13 @@ extension TunnelStack {
     }
 
     private nonisolated func processInboundBatch(_ packets: [Data], udpPlane: UDPPlane, datagrams: inout [InboundDatagram]) async {
-        let reflector = reflector()
         var ipBatch = packets
 
-        if reflector.isActive {
+        if reflectionEnabled {
             ipBatch = []
             for packet in packets {
-                if let reflected = reflector.reflect(packet) {
-                    enqueueOutbound(reflected.data, isIPv6: reflected.isIPv6)
+                if let reflected = Reflector.reflect(packet) {
+                    enqueueOutbound(reflected, isIPv6: false)
                     continue
                 }
                 ipBatch.append(packet)
