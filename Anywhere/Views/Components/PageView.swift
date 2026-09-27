@@ -101,7 +101,7 @@ private struct PageIndicator: View {
                     Image(systemName: items[index]?.symbol ?? "circle.fill")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary.opacity(opacity(for: index)))
-                        .frame(minWidth: 40, minHeight: 40)
+                        .frame(width: 40, height: 40)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(items[index]?.label ?? "")

@@ -44,7 +44,7 @@ struct MainControlView: View {
     }
 
     var body: some View {
-        MainControlLayout(maxSpacing: 100, minSpacing: 20) {
+        MainControlLayout(idealSpacingRatio: 0.12, maxSpacing: 100, minSpacing: 20) {
             VStack(spacing: 20) {
                 PowerButton(
                     isConnected: isConnected,
@@ -111,6 +111,7 @@ struct MainControlView: View {
 // MARK: - Layout
 
 private struct MainControlLayout: Layout {
+    let idealSpacingRatio: CGFloat
     let maxSpacing: CGFloat
     let minSpacing: CGFloat
 
@@ -129,7 +130,8 @@ private struct MainControlLayout: Layout {
 
         let centeredTop = bounds.midY - group.height / 2
         let roomBelow = bounds.maxY - (centeredTop + group.height) - capsule.height
-        let spacing = min(max(roomBelow, minSpacing), maxSpacing)
+        let idealSpacing = min(max(bounds.height * idealSpacingRatio, minSpacing), maxSpacing)
+        let spacing = max(min(idealSpacing, roomBelow), minSpacing)
         let top = max(bounds.minY, min(centeredTop, bounds.maxY - capsule.height - spacing - group.height))
 
         subviews[0].place(at: CGPoint(x: bounds.midX, y: top), anchor: .top, proposal: ProposedViewSize(group))

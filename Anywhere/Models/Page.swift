@@ -7,7 +7,7 @@
 
 import Foundation
 
-enum Page: Equatable, Hashable, Identifiable {
+enum Page: Equatable, Hashable, Identifiable, CaseIterable {
     case launchpad
     case toolbox
     case data
