@@ -13,6 +13,7 @@ nonisolated private let logger = AnywhereLogger(category: "UDPPlane")
 
 nonisolated enum UDPPlaneCommand {
     case setMultiplexerPool((any UDPMultiplexerPool)?)
+    case revalidateQUIC
     case reclaim
 }
 
@@ -55,6 +56,8 @@ actor UDPPlane {
         switch command {
         case .setMultiplexerPool(let pool):
             multiplexerPoolStorage = pool
+        case .revalidateQUIC:
+            revalidateQUIC()
         case .reclaim:
             reclaim()
         }
@@ -200,11 +203,6 @@ actor UDPPlane {
 
         let decision = stack.connectionRouter.decision(forIP: dstAddress.description, port: dstPort, proto: "UDP")
 
-        if !awaitedResolution, decision.ipRuleLookupPending,
-           deferUntilResolved(datagram, flowKey: flowKey, domain: decision.host) {
-            return
-        }
-
         let dstHost = decision.host
         let dstIsDomain = decision.hostIsResolvedDomain
 
@@ -227,13 +225,17 @@ actor UDPPlane {
             return
         }
 
-        let isProxied = routeTarget.resolved(against: udpConfig.defaultRouteTarget).configurationID != nil
-        if dstPort == 443,
-           udpConfig.quicPolicy.blocksResolvedQUIC(
-            isProxied: isProxied,
-            mitmListed: dstIsDomain && udpConfig.mitmEnabled && stack.mitmPolicy.matches(dstHost)
-           ) {
-            logger.debug("[UDP] QUIC blocked (automatic): \(dstHost):443 reason=\(isProxied ? "proxied" : "mitm")")
+        if dstPort == 443, blocksQUIC(to: dstHost, hostIsResolvedDomain: dstIsDomain, udpConfig: udpConfig) {
+            stack.sendICMPPortUnreachable(rejecting: datagram)
+            return
+        }
+
+        if !awaitedResolution, decision.ipRuleLookupPending,
+           deferUntilResolved(datagram, flowKey: flowKey, domain: dstHost) {
+            return
+        }
+
+        if dstPort == 443, blocksQUIC(routedTo: routeTarget, udpConfig: udpConfig) {
             stack.sendICMPPortUnreachable(rejecting: datagram)
             return
         }
@@ -248,12 +250,38 @@ actor UDPPlane {
             ledger: bufferLedger,
             flowKey: flowKey,
             dstHost: dstHost,
+            hostIsResolvedDomain: dstIsDomain,
             configuration: flowConfiguration,
             routeTarget: routeTarget,
             ruleSetName: ruleSetName
         )
         insert(flow)
         await flow.handleReceivedData([payload])
+    }
+
+    // MARK: - QUIC policy
+
+    private func blocksQUIC(to host: String, hostIsResolvedDomain: Bool, udpConfig: TunnelStack.UDPConfig) -> Bool {
+        udpConfig.quicPolicy.blocksQUIC(
+            hostIsResolvedDomain: hostIsResolvedDomain,
+            mitmListed: udpConfig.mitmEnabled && stack.mitmPolicy.matches(host)
+        )
+    }
+
+    private func blocksQUIC(routedTo routeTarget: RouteTarget, udpConfig: TunnelStack.UDPConfig) -> Bool {
+        udpConfig.quicPolicy.blocksQUIC(
+            isProxied: routeTarget.resolved(against: udpConfig.defaultRouteTarget).configurationID != nil
+        )
+    }
+
+    private func revalidateQUIC() {
+        let udpConfig = stack.udpConfig()
+        for (key, flow) in flows where key.destination.port == 443 {
+            guard blocksQUIC(to: flow.dstHost, hostIsResolvedDomain: flow.hostIsResolvedDomain, udpConfig: udpConfig)
+                    || blocksQUIC(routedTo: flow.routeTarget, udpConfig: udpConfig) else { continue }
+            flows.removeValue(forKey: key)
+            Task { await flow.close() }
+        }
     }
 
     // MARK: - Flow registry
@@ -493,6 +521,7 @@ actor UDPPlane {
             ledger: bufferLedger,
             flowKey: flowKey,
             dstHost: upstream,
+            hostIsResolvedDomain: false,
             configuration: flowConfiguration,
             routeTarget: routeTarget,
             ruleSetName: ruleSetName

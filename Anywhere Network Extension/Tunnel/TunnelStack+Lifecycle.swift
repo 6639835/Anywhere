@@ -352,7 +352,10 @@ extension TunnelStack {
         settings = new
         
         publishUDPConfig()
-        
+
+        if new.quicPolicy != old.quicPolicy {
+            submitPlaneCommand(.revalidateQUIC)
+        }
         if new.preventDNSLeak != old.preventDNSLeak {
             connectionRouter.preventDNSLeak.store(new.preventDNSLeak, ordering: .relaxed)
         }
@@ -398,5 +401,6 @@ extension TunnelStack {
         logger.info("[VPN] MITM settings changed")
         loadMITMSetting()
         publishUDPConfig()
+        submitPlaneCommand(.revalidateQUIC)
     }
 }

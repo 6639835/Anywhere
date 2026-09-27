@@ -26,9 +26,19 @@ nonisolated enum QUICPolicy: String, CaseIterable {
     /// Decided before routing resolution; only `.blocked` drops this early.
     var blocksAllQUIC: Bool { self == .blocked }
 
-    /// `mitmListed` is an `@autoclosure` so the MITM-trie lookup runs only when it can change the answer.
-    func blocksResolvedQUIC(isProxied: Bool, mitmListed: @autoclosure () -> Bool) -> Bool {
-        guard self == .automatic else { return false }
-        return isProxied || mitmListed()
+    func blocksQUIC(hostIsResolvedDomain: Bool, mitmListed: @autoclosure () -> Bool) -> Bool {
+        switch self {
+        case .blocked: return true
+        case .automatic: return !hostIsResolvedDomain || mitmListed()
+        case .unblocked: return false
+        }
+    }
+
+    func blocksQUIC(isProxied: Bool) -> Bool {
+        switch self {
+        case .blocked: return true
+        case .automatic: return isProxied
+        case .unblocked: return false
+        }
     }
 }
