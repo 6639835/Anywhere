@@ -666,6 +666,10 @@ nonisolated final class NowhereMultiplexer: Multiplexer, Sendable {
             }
             state.pendingResetFlowIDs.insert(flowID)
             let flow = state.flows.removeValue(forKey: flowID)
+            if state.flows.count + state.pendingResetFlowIDs.count
+                >= NowhereMultiplexerConstants.maximumStreams {
+                state.draining = true
+            }
             Self.rebalanceFairCredits(&state)
             state.sendCreditGate.wakeAll()
             let removed = flow.map { RemovedFlow(inbox: $0.inbox, termination: $0.termination, onEnd: $0.onEnd) }
