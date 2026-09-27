@@ -9,12 +9,17 @@ import Foundation
 import Synchronization
 
 nonisolated final class NowhereMultiplexerAsyncQueue<Element: Sendable>: Sendable {
+    enum OfferResult {
+        case accepted
+        case full
+        case finished
+    }
+
     private struct State {
         var elements: [Element] = []
         var headIndex = 0
         var finished = false
         var failure: Error?
-        var producerGate = H2FlowGate()
         var consumerGate = H2FlowGate()
 
         var bufferedCount: Int { elements.count - headIndex }
@@ -47,12 +52,6 @@ nonisolated final class NowhereMultiplexerAsyncQueue<Element: Sendable>: Sendabl
         }
     }
 
-    private enum SendStep {
-        case sent
-        case closed(Error)
-        case wait(AsyncStream<Never>)
-    }
-
     private enum ReceiveStep {
         case element(Element)
         case end
@@ -68,28 +67,13 @@ nonisolated final class NowhereMultiplexerAsyncQueue<Element: Sendable>: Sendabl
         self.capacity = capacity
     }
 
-    func send(_ element: Element) async throws {
-        while true {
-            try Task.checkCancellation()
-            let step: SendStep = state.withLock { state in
-                guard !state.finished else {
-                    return .closed(state.failure ?? AnywhereError.proxy(.nowhere, .streamClosed))
-                }
-                guard state.bufferedCount >= capacity else {
-                    state.elements.append(element)
-                    state.consumerGate.wakeAll()
-                    return .sent
-                }
-                return .wait(state.producerGate.enroll())
-            }
-            switch step {
-            case .sent:
-                return
-            case .closed(let error):
-                throw error
-            case .wait(let gate):
-                for await _ in gate {}
-            }
+    func offer(_ element: Element) -> OfferResult {
+        state.withLock { state in
+            guard !state.finished else { return .finished }
+            guard state.bufferedCount < capacity else { return .full }
+            state.elements.append(element)
+            state.consumerGate.wakeAll()
+            return .accepted
         }
     }
 
@@ -98,7 +82,6 @@ nonisolated final class NowhereMultiplexerAsyncQueue<Element: Sendable>: Sendabl
             try Task.checkCancellation()
             let step: ReceiveStep = state.withLock { state in
                 if let element = state.popFirst() {
-                    state.producerGate.wakeAll()
                     return .element(element)
                 }
                 if let failure = state.failure {
@@ -127,6 +110,8 @@ nonisolated final class NowhereMultiplexerAsyncQueue<Element: Sendable>: Sendabl
             if !state.finished {
                 state.finished = true
                 state.failure = error
+            } else if let error, state.failure == nil, discardingBuffered {
+                state.failure = error
             }
             let discarded: [Element]
             if discardingBuffered {
@@ -134,7 +119,6 @@ nonisolated final class NowhereMultiplexerAsyncQueue<Element: Sendable>: Sendabl
             } else {
                 discarded = []
             }
-            state.producerGate.wakeAll()
             state.consumerGate.wakeAll()
             return discarded
         }
