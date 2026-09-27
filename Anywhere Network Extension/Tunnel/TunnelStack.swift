@@ -273,9 +273,12 @@ actor TunnelStack {
 
     nonisolated let udpCleanupResume = AsyncInbox<Void>(capacity: 1)
 
+    nonisolated let tcpIdleSweepPoke = AsyncInbox<Void>(capacity: 1)
+    nonisolated let tcpIdleSweepArmed = Atomic<TimeInterval>(.infinity)
+
     struct DatagramIntake {
         var plane: UDPPlane?
-        var delivery: Task<Void, Never>?
+        var pending: [InboundDatagram] = []
     }
     nonisolated let datagramIntake = Mutex(DatagramIntake())
 

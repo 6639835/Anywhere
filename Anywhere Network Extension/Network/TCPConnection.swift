@@ -113,10 +113,8 @@ actor TCPConnection: MITMSessionHost {
 
     // MARK: - Idle timer
 
-    private var idleActive = false
-    private var idleTimeoutValue: TimeInterval = 0
+    private nonisolated let idleTimeout = Atomic<TimeInterval>(0)
     private nonisolated let lastActivityTick = Atomic<TimeInterval>(0)
-    private nonisolated let idlePoke = AsyncInbox<Void>(capacity: 1)
 
     // MARK: - Deferred close
 
@@ -195,7 +193,6 @@ actor TCPConnection: MITMSessionHost {
         await withDiscardingTaskGroup { group in
             group.addTask { await self.runInput() }
             group.addTask { await self.runLifecycle() }
-            group.addTask { await self.runIdleWatch() }
             for await job in self.nurseryJobs {
                 switch job {
                 case .dial(let dial):
@@ -841,76 +838,48 @@ actor TCPConnection: MITMSessionHost {
     // MARK: - Idle timer
 
     private func startIdleTimer() {
-        idleTimeoutValue = TunnelConstants.connectionIdleTimeout
         markActivity()
-        idleActive = true
-        idlePoke.yield(())
+        armIdleTimeout(TunnelConstants.connectionIdleTimeout)
     }
 
     private nonisolated func markActivity() {
         lastActivityTick.store(MonotonicClock.now, ordering: .relaxed)
     }
 
+    private func armIdleTimeout(_ timeout: TimeInterval) {
+        idleTimeout.store(timeout, ordering: .sequentiallyConsistent)
+        stack?.scheduleTCPIdleSweep(at: lastActivityTick.load(ordering: .relaxed) + timeout)
+    }
+
     private func setIdleTimeout(_ timeout: TimeInterval) {
-        guard idleActive else { return }
-        if timeout <= 0 {
-            idleActive = false
+        guard idleTimeout.load(ordering: .relaxed) > 0 else { return }
+        let elapsed = MonotonicClock.now - lastActivityTick.load(ordering: .relaxed)
+        if timeout <= 0 || elapsed >= timeout {
+            idleTimeout.store(0, ordering: .relaxed)
             close()
             return
         }
-        idleTimeoutValue = timeout
-        let elapsed = MonotonicClock.now - lastActivityTick.load(ordering: .relaxed)
-        if elapsed >= timeout {
-            idleActive = false
-            close()
-            return
-        }
-        idlePoke.yield(())
+        armIdleTimeout(timeout)
     }
 
-    private enum IdleAction { case stop, waitActivation, sleep(TimeInterval), fire }
-
-    private func idleNextAction() -> IdleAction {
-        if phase == .closed { return .stop }
-        if !idleActive { return .waitActivation }
-        let elapsed = MonotonicClock.now - lastActivityTick.load(ordering: .relaxed)
-        if elapsed >= idleTimeoutValue { return .fire }
-        return .sleep(idleTimeoutValue - elapsed)
+    nonisolated var idleDeadline: TimeInterval? {
+        let timeout = idleTimeout.load(ordering: .sequentiallyConsistent)
+        guard timeout > 0 else { return nil }
+        return lastActivityTick.load(ordering: .relaxed) + timeout
     }
 
-    private func idleFireAndReport() -> Bool {
-        guard phase != .closed, idleActive else { return true }
-        let elapsed = MonotonicClock.now - lastActivityTick.load(ordering: .relaxed)
-        if elapsed >= idleTimeoutValue {
-            idleActive = false
-            close()
-            return true
-        }
-        return false
-    }
-
-    private nonisolated func runIdleWatch() async {
-        while true {
-            switch await idleNextAction() {
-            case .stop:
-                return
-            case .waitActivation:
-                if (try? await idlePoke.next()) == nil { return }
-            case .sleep(let seconds):
-                await idleSleep(seconds)
-            case .fire:
-                if await idleFireAndReport() { return }
-            }
+    nonisolated func expireIdle() {
+        sessionContext.enqueue {
+            self.assumeIsolated { $0.fireIdleTimeout() }
         }
     }
 
-    private nonisolated func idleSleep(_ seconds: TimeInterval) async {
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask { try? await Task.sleep(for: .seconds(seconds)) }
-            group.addTask { _ = try? await self.idlePoke.next() }
-            defer { group.cancelAll() }
-            _ = await group.next()
-        }
+    private func fireIdleTimeout() {
+        let timeout = idleTimeout.load(ordering: .relaxed)
+        guard phase != .closed, timeout > 0,
+              MonotonicClock.now - lastActivityTick.load(ordering: .relaxed) >= timeout else { return }
+        idleTimeout.store(0, ordering: .relaxed)
+        close()
     }
 
     // MARK: - MITM session
@@ -1295,8 +1264,7 @@ actor TCPConnection: MITMSessionHost {
         nurseryJobContinuation.finish()
         establishInbox.finish()
 
-        idleActive = false
-        idlePoke.finish()
+        idleTimeout.store(0, ordering: .relaxed)
 
         let connection = proxyConnection
         let client = proxyClient

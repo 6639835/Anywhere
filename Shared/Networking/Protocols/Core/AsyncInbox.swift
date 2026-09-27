@@ -9,12 +9,11 @@ import Foundation
 import Synchronization
 
 nonisolated final class AsyncInbox<Element: Sendable>: Sendable {
-
     private struct State {
         var buffer: [Element] = []
         var finished = false
         var failure: Error?
-        var waiter: AsyncStream<Void>.Continuation?
+        var waiter: CheckedContinuation<Void, Never>?
     }
 
     private enum Step {
@@ -22,25 +21,19 @@ nonisolated final class AsyncInbox<Element: Sendable>: Sendable {
         case batch([Element])
         case end
         case failure(Error)
-        case wait(AsyncStream<Void>)
+        case wait
     }
 
     private let state = Mutex(State())
-
-    /// When set, a `yield` onto a full buffer drops the incoming element (matching
-    /// `AsyncStream.Continuation.BufferingPolicy.bufferingOldest`). `nil` is unbounded.
+    
     private let capacity: Int?
-
-    /// - Parameter capacity: max buffered elements; further `yield`s drop the newest (keeping the
-    ///   oldest `capacity`). `nil` (default) buffers without bound.
+    
     init(capacity: Int? = nil) {
         self.capacity = capacity
     }
-
-    /// Appends one element for the consumer, waking it if parked. Drops the element when a bounded
-    /// inbox is full. No-op after ``finish(throwing:)``.
+    
     func yield(_ element: Element) {
-        let waiter: AsyncStream<Void>.Continuation? = state.withLock { s in
+        let waiter: CheckedContinuation<Void, Never>? = state.withLock { s in
             guard !s.finished else { return nil }
             if let capacity, s.buffer.count >= capacity { return nil }
             s.buffer.append(element)
@@ -48,23 +41,19 @@ nonisolated final class AsyncInbox<Element: Sendable>: Sendable {
             s.waiter = nil
             return waiter
         }
-        waiter?.finish()
+        waiter?.resume()
     }
-
-    /// Ends the stream cleanly: the consumer drains any buffered elements, then ``next()`` returns
-    /// `nil`. Idempotent — the first `finish` wins.
+    
     func finish() {
         finish(error: nil)
     }
-
-    /// Ends the stream with `error`: the consumer drains any buffered elements, then ``next()`` throws
-    /// `error` once and returns `nil` thereafter. Idempotent — the first `finish` wins.
+    
     func finish(throwing error: Error) {
         finish(error: error)
     }
 
     private func finish(error: Error?) {
-        let waiter: AsyncStream<Void>.Continuation? = state.withLock { s in
+        let waiter: CheckedContinuation<Void, Never>? = state.withLock { s in
             guard !s.finished else { return nil }
             s.finished = true
             s.failure = error
@@ -72,12 +61,9 @@ nonisolated final class AsyncInbox<Element: Sendable>: Sendable {
             s.waiter = nil
             return waiter
         }
-        waiter?.finish()
+        waiter?.resume()
     }
-
-    /// Pulls the next element, or `nil` at clean end-of-stream; throws the terminal error once.
-    /// Buffered elements are always delivered before a terminal error, matching `AsyncThrowingStream`.
-    /// Single-consumer: at most one task may await this at a time. Cancellation-aware.
+    
     func next() async throws -> Element? {
         while true {
             let step: Step = state.withLock { s in
@@ -91,11 +77,7 @@ nonisolated final class AsyncInbox<Element: Sendable>: Sendable {
                 if s.finished {
                     return .end
                 }
-                // Enroll a fresh gate under the lock so a `yield`/`finish` racing in can't be lost:
-                // it either lands in the buffer (seen on the next turn) or finishes this gate.
-                let (gate, continuation) = AsyncStream<Void>.makeStream()
-                s.waiter = continuation
-                return .wait(gate)
+                return .wait
             }
             switch step {
             case .element(let element):
@@ -106,18 +88,13 @@ nonisolated final class AsyncInbox<Element: Sendable>: Sendable {
                 return nil
             case .failure(let error):
                 throw error
-            case .wait(let gate):
-                for await _ in gate { break }
-                // A finished gate loops to re-check; a cancelled consumer must not spin.
+            case .wait:
+                await park()
                 try Task.checkCancellation()
             }
         }
     }
-
-    /// Like ``next()``, but drains *everything* buffered in one call — one consumer wake-up per
-    /// producer burst instead of one per element. Never returns an empty array: waits when the
-    /// buffer is empty, `nil` at clean end-of-stream, throws the terminal error once (buffered
-    /// elements are always delivered first). Single-consumer, cancellation-aware.
+    
     func nextBatch() async throws -> [Element]? {
         while true {
             let step: Step = state.withLock { s in
@@ -127,17 +104,13 @@ nonisolated final class AsyncInbox<Element: Sendable>: Sendable {
                     return .batch(batch)
                 }
                 if let failure = s.failure {
-                    s.failure = nil   // surface once, then behave as a clean end
+                    s.failure = nil
                     return .failure(failure)
                 }
                 if s.finished {
                     return .end
                 }
-                // Enroll a fresh gate under the lock so a `yield`/`finish` racing in can't be lost:
-                // it either lands in the buffer (seen on the next turn) or finishes this gate.
-                let (gate, continuation) = AsyncStream<Void>.makeStream()
-                s.waiter = continuation
-                return .wait(gate)
+                return .wait
             }
             switch step {
             case .element:
@@ -148,11 +121,29 @@ nonisolated final class AsyncInbox<Element: Sendable>: Sendable {
                 return nil
             case .failure(let error):
                 throw error
-            case .wait(let gate):
-                for await _ in gate { break }
-                // A finished gate loops to re-check; a cancelled consumer must not spin.
+            case .wait:
+                await park()
                 try Task.checkCancellation()
             }
+        }
+    }
+    
+    private func park() async {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let ready: Bool = state.withLock { s in
+                    if !s.buffer.isEmpty || s.failure != nil || s.finished || Task.isCancelled { return true }
+                    s.waiter = continuation
+                    return false
+                }
+                if ready { continuation.resume() }
+            }
+        } onCancel: {
+            let waiter: CheckedContinuation<Void, Never>? = state.withLock { s in
+                defer { s.waiter = nil }
+                return s.waiter
+            }
+            waiter?.resume()
         }
     }
 }

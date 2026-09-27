@@ -215,30 +215,38 @@ actor UDPFlow {
 
     // MARK: - Uplink
 
-    func handleReceivedData(_ data: Data, payloadLength: Int) async {
-        guard phase != .closed else { return }
+    func handleReceivedData(_ payloads: [Data]) {
+        guard phase != .closed, !payloads.isEmpty else { return }
         activity.withLock { $0.lastActivity = MonotonicClock.now }
-        trafficMeter.addBytesOut(payloadLength)
-        activityRecord.addBytesOut(payloadLength)
 
-        switch phase {
-        case .idle:
-            bufferPayload(data: data, payloadLength: payloadLength)
-            guard phase != .closed else { return }
-            transition(to: .dialing)
-            rootTask = Task { await self.run() }
-        case .dialing:
-            bufferPayload(data: data, payloadLength: payloadLength)
-        case .established:
-            enqueueSend(data.prefix(payloadLength))
-        case .closed:
-            return
+        var admitted: [Data] = []
+        for payload in payloads {
+            trafficMeter.addBytesOut(payload.count)
+            activityRecord.addBytesOut(payload.count)
+
+            switch phase {
+            case .idle:
+                bufferPayload(data: payload, payloadLength: payload.count)
+                guard phase != .closed else { return }
+                transition(to: .dialing)
+                rootTask = Task { await self.run() }
+            case .dialing:
+                bufferPayload(data: payload, payloadLength: payload.count)
+            case .established:
+                if admit(bytes: payload.count) { admitted.append(payload) }
+            case .closed:
+                return
+            }
         }
+        enqueueSend(admitted)
     }
 
-    private func enqueueSend(_ payload: Data) {
-        guard admit(bytes: payload.count) else { return }
-        jobContinuation.yield(.send(payload))
+    private func enqueueSend(_ payloads: [Data]) {
+        switch payloads.count {
+        case 0: return
+        case 1: jobContinuation.yield(.send(payloads[0]))
+        default: jobContinuation.yield(.drain(payloads))
+        }
     }
 
     private func bufferPayload(data: Data, payloadLength: Int) {

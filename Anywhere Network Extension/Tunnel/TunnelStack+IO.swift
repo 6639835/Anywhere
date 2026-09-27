@@ -17,25 +17,23 @@ extension TunnelStack {
     // MARK: - Output Batching
 
     nonisolated func drainOutputLoop(packetFlow: NEPacketTunnelFlow) async {
+        var packets: [Data] = []
+        var protocols: [NSNumber] = []
         while true {
-            var packets: [Data] = []
-            var protocols: [NSNumber] = []
-
             outputBuffer.withLock { buffer in
-                let pending = buffer.packets.count
-                if pending == 0 {
+                if buffer.packets.isEmpty {
                     buffer.drainInFlight = false
                     return
                 }
-                packets = buffer.packets
-                protocols = buffer.protocols
-                buffer.packets = []
-                buffer.protocols = []
+                swap(&packets, &buffer.packets)
+                swap(&protocols, &buffer.protocols)
             }
 
             if packets.isEmpty { return }
             packetFlow.writePackets(packets, withProtocols: protocols)
-            
+            packets.removeAll(keepingCapacity: true)
+            protocols.removeAll(keepingCapacity: true)
+
             if Task.isCancelled { return }
             await Task.yield()
         }
@@ -105,16 +103,20 @@ extension TunnelStack {
         datagramIntake.withLock { $0.plane = udpPlane }
         defer {
             datagramIntake.withLock { intake in
-                if intake.plane === udpPlane { intake.plane = nil }
+                if intake.plane === udpPlane {
+                    intake.plane = nil
+                    intake.pending.removeAll()
+                }
             }
         }
+        var datagrams: [InboundDatagram] = []
         for await packets in batches {
             demand.yield(())
-            await processInboundBatch(packets)
+            await processInboundBatch(packets, udpPlane: udpPlane, datagrams: &datagrams)
         }
     }
 
-    private nonisolated func processInboundBatch(_ packets: [Data]) async {
+    private nonisolated func processInboundBatch(_ packets: [Data], udpPlane: UDPPlane, datagrams: inout [InboundDatagram]) async {
         let reflector = reflector()
         var ipBatch = packets
 
@@ -131,21 +133,16 @@ extension TunnelStack {
 
         guard !ipBatch.isEmpty, let ipStack = liveIPStack.withLock({ $0 }) else { return }
         await ipStack.inputBatch(ipBatch)
-        let delivery = datagramIntake.withLock { intake in
-            defer { intake.delivery = nil }
-            return intake.delivery
-        }
-        await delivery?.value
+        datagramIntake.withLock { swap(&datagrams, &$0.pending) }
+        guard !datagrams.isEmpty else { return }
+        await udpPlane.feed(datagrams)
+        datagrams.removeAll(keepingCapacity: true)
     }
     
     nonisolated func admitDatagrams(_ batch: [InboundDatagram]) {
         datagramIntake.withLock { intake in
-            guard let plane = intake.plane else { return }
-            let prior = intake.delivery
-            intake.delivery = Task {
-                await prior?.value
-                await plane.feed(batch)
-            }
+            guard intake.plane != nil else { return }
+            intake.pending.append(contentsOf: batch)
         }
     }
 
@@ -154,6 +151,50 @@ extension TunnelStack {
     func startIPStackTick() {
         guard let ipStack else { return }
         ipStackTick = Task { await ipStack.runTimer() }
+    }
+
+    nonisolated func scheduleTCPIdleSweep(at deadline: TimeInterval) {
+        let armed = tcpIdleSweepArmed.load(ordering: .sequentiallyConsistent)
+        if armed < 0 || deadline < armed { tcpIdleSweepPoke.yield(()) }
+    }
+
+    nonisolated func runTCPIdleSweep() async {
+        while !Task.isCancelled {
+            tcpIdleSweepArmed.store(-1, ordering: .sequentiallyConsistent)
+            let now = MonotonicClock.now
+            var next = TimeInterval.infinity
+            for connection in tcpConnections.withLock({ Array($0.connections.values) }) {
+                guard let deadline = connection.idleDeadline else { continue }
+                if deadline <= now {
+                    connection.expireIdle()
+                    next = min(next, now + TunnelConstants.tcpIdleSweepRecheckInterval)
+                } else {
+                    next = min(next, deadline)
+                }
+            }
+            tcpIdleSweepArmed.store(next, ordering: .sequentiallyConsistent)
+            if next.isFinite {
+                await tcpIdleSweepSleep(until: next)
+            } else if (try? await tcpIdleSweepPoke.next()) == nil {
+                return
+            }
+        }
+    }
+
+    nonisolated private func tcpIdleSweepSleep(until deadline: TimeInterval) async {
+        let delay = deadline - MonotonicClock.now
+        guard delay > 0 else { return }
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask {
+                try? await Task.sleep(
+                    for: .seconds(delay),
+                    tolerance: .milliseconds(TunnelConstants.tcpIdleSweepLeewayMs)
+                )
+            }
+            group.addTask { _ = try? await self.tcpIdleSweepPoke.next() }
+            defer { group.cancelAll() }
+            _ = await group.next()
+        }
     }
 
     nonisolated func runUDPCleanupLoop(udpPlane: UDPPlane) async {

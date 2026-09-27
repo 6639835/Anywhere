@@ -62,11 +62,45 @@ actor UDPPlane {
 
     // MARK: - Intake
 
+    private struct FlowBatch {
+        let flow: UDPFlow
+        var payloads: [Data]
+    }
+
     func feed(_ datagrams: [InboundDatagram]) async {
+        let udpConfig = stack.udpConfig()
+        var batches: [FlowBatch] = []
         for datagram in datagrams {
-            guard stack.publishedPhase.load(ordering: .relaxed) == .running else { return }
+            guard stack.publishedPhase.load(ordering: .relaxed) == .running else { break }
+            if let flow = openFlow(for: datagram, udpConfig: udpConfig) {
+                if let index = batches.firstIndex(where: { $0.flow === flow }) {
+                    batches[index].payloads.append(datagram.payload)
+                } else {
+                    batches.append(FlowBatch(flow: flow, payloads: [datagram.payload]))
+                }
+                continue
+            }
+            await deliver(&batches)
             await handleInboundUDP(datagram)
         }
+        await deliver(&batches)
+    }
+
+    private func openFlow(for datagram: InboundDatagram, udpConfig: TunnelStack.UDPConfig) -> UDPFlow? {
+        let destination = datagram.destination
+        if destination.port == 53 || udpConfig.blockUDP { return nil }
+        if destination.address.isIPv6, !stack.ipv6Enabled { return nil }
+        if destination.port == 443 && udpConfig.quicPolicy.blocksAllQUIC { return nil }
+        if udpConfig.blockWebRTC && TunnelStack.isSTUNMessage(datagram.payload) { return nil }
+        guard let flow = flows[TunnelStack.UDPFlowKey(datagram)], !flow.isClosed else { return nil }
+        return flow
+    }
+
+    private func deliver(_ batches: inout [FlowBatch]) async {
+        for batch in batches {
+            await batch.flow.handleReceivedData(batch.payloads)
+        }
+        batches.removeAll(keepingCapacity: true)
     }
 
     private func deferUntilResolved(
@@ -152,7 +186,7 @@ actor UDPPlane {
         let flowKey = TunnelStack.UDPFlowKey(datagram)
         if let flow = flows[flowKey] {
             if !flow.isClosed {
-                await flow.handleReceivedData(payload, payloadLength: payload.count)
+                await flow.handleReceivedData([payload])
                 return
             }
             flows.removeValue(forKey: flowKey)
@@ -219,7 +253,7 @@ actor UDPPlane {
             ruleSetName: ruleSetName
         )
         insert(flow)
-        await flow.handleReceivedData(payload, payloadLength: payload.count)
+        await flow.handleReceivedData([payload])
     }
 
     // MARK: - Flow registry
@@ -418,7 +452,7 @@ actor UDPPlane {
         let flowKey = TunnelStack.UDPFlowKey(datagram)
         if let existing = flows[flowKey] {
             if !existing.isClosed {
-                await existing.handleReceivedData(payload, payloadLength: payload.count)
+                await existing.handleReceivedData([payload])
                 return true
             }
             flows.removeValue(forKey: flowKey)
@@ -465,7 +499,7 @@ actor UDPPlane {
         )
         insert(flow)
         logger.debug("[DNS] Forwarding qtype \(qtype) for \(domain) → \(upstream):\(dstPort) via \(flowConfiguration.name)")
-        await flow.handleReceivedData(payload, payloadLength: payload.count)
+        await flow.handleReceivedData([payload])
         return true
     }
 

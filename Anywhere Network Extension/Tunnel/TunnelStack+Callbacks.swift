@@ -25,7 +25,7 @@ extension TunnelStack {
             },
             accept: { [weak self] pending in
                 guard let self else { pending.reject(); return }
-                Task { await self.accept(pending, generation: generation) }
+                Task { await self.accept(pending, generation: generation)?.start() }
             },
             datagrams: { [weak self] batch in
                 self?.admitDatagrams(batch)
@@ -75,10 +75,10 @@ extension TunnelStack {
         return establishing ?? established
     }
 
-    private func accept(_ pending: PendingConnection, generation: UInt64) {
+    private func accept(_ pending: PendingConnection, generation: UInt64) -> TCPConnection? {
         guard dataPlaneUp, dataPlaneGeneration.load(ordering: .acquiring) == generation, let defaultConfiguration = configuration else {
             logger.debug("[TunnelStack] tcp_accept: guard failed")
-            pending.reject(); return
+            pending.reject(); return nil
         }
         let dstIPString = pending.destination.address.description
         let dstPort = pending.destination.port
@@ -105,10 +105,10 @@ extension TunnelStack {
             )
             let reason = decision.hostIsResolvedDomain ? "fake-IP domain rule" : "IP rule"
             logger.debug("[TCP] Rejected by \(reason) (going dark): \(decision.host):\(dstPort)")
-            pending.reject(reset: false); return
+            pending.reject(reset: false); return nil
         case .unreachable:
             logger.debug("[TCP] Aborted (stale fake-IP): \(dstIPString):\(dstPort)")
-            pending.reject(); return
+            pending.reject(); return nil
         }
 
         let dstHost = decision.host
@@ -118,7 +118,7 @@ extension TunnelStack {
             sniffSNI = true
         }
         
-        guard let nativeConnection = pending.accept() else { return }
+        guard let nativeConnection = pending.accept() else { return nil }
         let delegate = TCPConnection(
             stack: self,
             connection: nativeConnection,
@@ -131,6 +131,6 @@ extension TunnelStack {
             hostIsResolvedDomain: decision.hostIsResolvedDomain
         )
         tcpConnections.withLock { $0.insert(delegate) }
-        Task { await delegate.start() }
+        return delegate
     }
 }

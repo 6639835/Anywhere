@@ -99,6 +99,7 @@ extension TunnelStack {
             group.addTask { await self.runReadLoop(packetFlow: packetFlow, udpPlane: udpPlane) }
             group.addTask { await self.runSettingsObserver() }
             group.addTask { await self.runUDPCleanupLoop(udpPlane: udpPlane) }
+            group.addTask { await self.runTCPIdleSweep() }
             for await job in self.nurseryJobs {
                 switch job {
                 case .deferredRestart(let configuration, let revalidateMode, let delay, let generation):
