@@ -20,17 +20,17 @@ nonisolated enum TunnelConstants {
     // MARK: - TCP Buffer Sizes
     
     static let tcpGlobalBufferBudget = 16 * 1024 * 1024
-    
     static let tcpWindowSize = 64 * 1460
+    static let tcpAcknowledgmentDelay: Duration = .milliseconds(5)
 
     // MARK: - UDP Settings
     
     static let udpGlobalBufferBudget = 16 * 1024 * 1024
-    
     static let udpPendingResolutionMaxBytes = 32 * 1024
     static let udpIdleTimeoutUnreplied: TimeInterval = 30
     static let udpIdleTimeoutStream: TimeInterval = 120
     static let udpStreamMinReplies = 4
+    static let udpIntakeBacklog = 256
 
     // MARK: - Log Buffer
 

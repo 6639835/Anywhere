@@ -18,7 +18,8 @@ extension TunnelStack {
         return IPStack(
             configuration: .init(
                 maximumConnections: TunnelLimits.tcpMaxConnections,
-                pendingSendBytes: TunnelConstants.tcpWindowSize
+                pendingSendBytes: TunnelConstants.tcpWindowSize,
+                acknowledgmentDelay: TunnelConstants.tcpAcknowledgmentDelay
             ),
             output: { [weak self] packets in
                 self?.enqueueTCPOutput(packets, generation: generation)

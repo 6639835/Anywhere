@@ -33,7 +33,7 @@ extension TunnelStack {
             }
             self?.appendLog(message, level: logLevel)
         }
-        self.packetFlow = packetFlow
+        attachPacketFlow(packetFlow)
         self.configuration = configuration
 
         let udpPlane = UDPPlane(stack: self)
@@ -47,7 +47,7 @@ extension TunnelStack {
         guard phase == .starting, epoch == startEpoch else {
             logger.warning("[TunnelStack] Start aborted: phase is \(phase), epoch \(epoch)/\(startEpoch)")
             if epoch == startEpoch {
-                self.packetFlow = nil
+                attachPacketFlow(nil)
                 self.configuration = nil
                 self.udpPlane = nil
             }
@@ -91,11 +91,6 @@ extension TunnelStack {
 
     private func runDutyCycle(packetFlow: NEPacketTunnelFlow, udpPlane: UDPPlane) async {
         await withDiscardingTaskGroup { group in
-            group.addTask { [outputKick] in
-                for await _ in outputKick {
-                    await self.drainOutputLoop(packetFlow: packetFlow)
-                }
-            }
             group.addTask { await self.runReadLoop(packetFlow: packetFlow, udpPlane: udpPlane) }
             group.addTask { await self.runSettingsObserver() }
             group.addTask { await self.runUDPCleanupLoop(udpPlane: udpPlane) }
@@ -121,6 +116,7 @@ extension TunnelStack {
         TransportReclaim.sealAll()
         tearDownDataPlane(tcp: .graceful)
         purgeOutputBuffer()
+        attachPacketFlow(nil)
         OutboundConnector.setRoutingContext(nil)
         fakeIPPool.reset()
         connectionRouter.clearRejectMarks()

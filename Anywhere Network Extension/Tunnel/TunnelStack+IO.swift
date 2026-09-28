@@ -16,133 +16,82 @@ extension TunnelStack {
 
     // MARK: - Output Batching
 
-    nonisolated func drainOutputLoop(packetFlow: NEPacketTunnelFlow) async {
-        var packets: [Data] = []
-        var protocols: [NSNumber] = []
-        while true {
-            outputBuffer.withLock { buffer in
-                if buffer.packets.isEmpty {
-                    buffer.drainInFlight = false
-                    return
-                }
-                swap(&packets, &buffer.packets)
-                swap(&protocols, &buffer.protocols)
-            }
+    nonisolated func claimOutputDrain() -> Bool {
+        outputBuffer.withLock { $0.claimDrain() }
+    }
 
-            if packets.isEmpty { return }
-            packetFlow.writePackets(packets, withProtocols: protocols)
+    nonisolated func drainOutput() {
+        var packets: [OutboundPacket] = []
+        while let writer = outputBuffer.withLock({ $0.take(&packets) }) {
+            writer.write(packets)
             packets.removeAll(keepingCapacity: true)
-            protocols.removeAll(keepingCapacity: true)
-
-            if Task.isCancelled { return }
-            await Task.yield()
         }
     }
-    
-    func flushOutputBuffer() {
-        guard let packetFlow else { return }
-        let (packets, protocols) = outputBuffer.withLock { buffer in
-            defer {
-                buffer.packets.removeAll(keepingCapacity: true)
-                buffer.protocols.removeAll(keepingCapacity: true)
-            }
-            return (buffer.packets, buffer.protocols)
-        }
-        guard !packets.isEmpty else { return }
-        packetFlow.writePackets(packets, withProtocols: protocols)
+
+    nonisolated func flushOutputBuffer() {
+        if claimOutputDrain() { drainOutput() }
     }
 
-    nonisolated func enqueueOutbound(_ packet: Data, isIPv6: Bool) {
-        let proto: NSNumber = isIPv6 ? Self.ipv6Proto : Self.ipv4Proto
-        let needsKick: Bool = outputBuffer.withLock { buffer in
+    nonisolated func enqueueOutbound(_ packet: OutboundPacket) {
+        let drains = outputBuffer.withLock { buffer in
+            guard buffer.writer != nil else { return false }
             buffer.packets.append(packet)
-            buffer.protocols.append(proto)
-            if buffer.drainInFlight { return false }
-            buffer.drainInFlight = true
-            return true
+            return buffer.claimDrain()
         }
-        if needsKick {
-            kickOutputDrain()
-        }
+        if drains { drainOutput() }
     }
 
     nonisolated func enqueueTCPOutput(_ packets: [OutboundPacket], generation: UInt64) {
-        let needsKick = outputBuffer.withLock { buffer in
-            guard buffer.generation == generation, !packets.isEmpty else { return false }
-            for packet in packets {
-                buffer.packets.append(packet.data)
-                buffer.protocols.append(packet.isIPv6 ? Self.ipv6Proto : Self.ipv4Proto)
-            }
-            guard !buffer.drainInFlight else { return false }
-            buffer.drainInFlight = true
-            return true
+        let drains = outputBuffer.withLock { buffer in
+            guard buffer.generation == generation, buffer.writer != nil, !packets.isEmpty else { return false }
+            buffer.packets.append(contentsOf: packets)
+            return buffer.claimDrain()
         }
-        if needsKick { kickOutputDrain() }
+        if drains { drainOutput() }
     }
 
     // MARK: - Packet Reading
 
-    func runReadLoop(packetFlow: NEPacketTunnelFlow, udpPlane: UDPPlane) async {
-        let demand = AsyncInbox<Void>(capacity: 1)
-        demand.yield(())
-        let batches = AsyncStream<[Data]> { continuation in
-            let producer = Task {
-                while (try? await demand.next()) != nil {
-                    let (packets, _) = await packetFlow.readPackets()
-                    continuation.yield(packets)
-                }
-                continuation.finish()
-            }
-            continuation.onTermination = { _ in producer.cancel() }
+    nonisolated func runReadLoop(packetFlow: NEPacketTunnelFlow, udpPlane: UDPPlane) async {
+        let intake = AsyncInbox<[InboundDatagram]>(capacity: TunnelConstants.udpIntakeBacklog)
+        datagramIntake.withLock { $0 = intake }
+        let reader = PacketReader(flow: packetFlow) { [weak self] packets in
+            self?.processInbound(packets)
         }
-        await consumeInbound(batches, demand: demand, udpPlane: udpPlane)
-    }
-
-    @concurrent
-    private nonisolated func consumeInbound(_ batches: AsyncStream<[Data]>, demand: AsyncInbox<Void>, udpPlane: UDPPlane) async {
-        datagramIntake.withLock { $0.plane = udpPlane }
-        defer {
-            datagramIntake.withLock { intake in
-                if intake.plane === udpPlane {
-                    intake.plane = nil
-                    intake.pending.removeAll()
+        await withDiscardingTaskGroup { group in
+            group.addTask {
+                while let batches = try? await intake.nextBatch() {
+                    await udpPlane.feed(batches.count == 1 ? batches[0] : Array(batches.joined()))
                 }
             }
-        }
-        var datagrams: [InboundDatagram] = []
-        for await packets in batches {
-            demand.yield(())
-            await processInboundBatch(packets, udpPlane: udpPlane, datagrams: &datagrams)
+            await reader.run()
+            datagramIntake.withLock { if $0 === intake { $0 = nil } }
+            intake.finish()
         }
     }
 
-    private nonisolated func processInboundBatch(_ packets: [Data], udpPlane: UDPPlane, datagrams: inout [InboundDatagram]) async {
-        var ipBatch = packets
-
+    private nonisolated func processInbound(_ packets: [UnsafeRawBufferPointer]) {
+        let drains = claimOutputDrain()
+        var batch = packets
         if reflectionEnabled {
-            ipBatch = []
+            batch = []
+            batch.reserveCapacity(packets.count)
             for packet in packets {
                 if let reflected = Reflector.reflect(packet) {
-                    enqueueOutbound(reflected, isIPv6: false)
+                    enqueueOutbound(reflected)
                     continue
                 }
-                ipBatch.append(packet)
+                batch.append(packet)
             }
         }
-
-        guard !ipBatch.isEmpty, let ipStack = liveIPStack.withLock({ $0 }) else { return }
-        await ipStack.inputBatch(ipBatch)
-        datagramIntake.withLock { swap(&datagrams, &$0.pending) }
-        guard !datagrams.isEmpty else { return }
-        await udpPlane.feed(datagrams)
-        datagrams.removeAll(keepingCapacity: true)
+        if !batch.isEmpty, let ipStack = liveIPStack.withLock({ $0 }) {
+            ipStack.input(batch)
+        }
+        if drains { drainOutput() }
     }
     
     nonisolated func admitDatagrams(_ batch: [InboundDatagram]) {
-        datagramIntake.withLock { intake in
-            guard intake.plane != nil else { return }
-            intake.pending.append(contentsOf: batch)
-        }
+        datagramIntake.withLock { $0 }?.yield(batch)
     }
 
     // MARK: - Timers

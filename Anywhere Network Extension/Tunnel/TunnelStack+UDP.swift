@@ -23,11 +23,11 @@ extension TunnelStack {
     
     nonisolated func sendICMPPortUnreachable(rejecting datagram: InboundDatagram) {
         guard let packet = OutboundPacket(portUnreachable: datagram) else { return }
-        enqueueOutbound(packet.data, isIPv6: packet.isIPv6)
+        enqueueOutbound(packet)
     }
 
     nonisolated func writeOutboundUDP(_ payload: Data, from source: IPEndpoint, to destination: IPEndpoint) {
         guard let packet = OutboundPacket(datagram: payload, from: source, to: destination) else { return }
-        enqueueOutbound(packet.data, isIPv6: packet.isIPv6)
+        enqueueOutbound(packet)
     }
 }

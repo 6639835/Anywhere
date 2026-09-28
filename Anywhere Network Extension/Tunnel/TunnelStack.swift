@@ -160,9 +160,6 @@ actor TunnelStack {
 
     var udpPlane: UDPPlane!
 
-    private(set) var outputKick: AsyncStream<Void>
-    private nonisolated let outputKickContinuation: Mutex<AsyncStream<Void>.Continuation>
-
     private(set) var planeCommands: AsyncStream<UDPPlaneCommand>
     private var planeCommandContinuation: AsyncStream<UDPPlaneCommand>.Continuation
 
@@ -179,14 +176,26 @@ actor TunnelStack {
 
     var defaultRouteTarget: RouteTarget = .direct
 
-    static let ipv4Proto = NSNumber(value: AF_INET)
-    static let ipv6Proto = NSNumber(value: AF_INET6)
-
     struct OutputBufferState {
         var generation: UInt64 = 0
-        var packets: [Data] = []
-        var protocols: [NSNumber] = []
-        var drainInFlight = false
+        var writer: PacketFlowWriter?
+        var packets: [OutboundPacket] = []
+        var draining = false
+
+        mutating func claimDrain() -> Bool {
+            guard !draining, writer != nil else { return false }
+            draining = true
+            return true
+        }
+
+        mutating func take(_ packets: inout [OutboundPacket]) -> PacketFlowWriter? {
+            guard let writer, !self.packets.isEmpty else {
+                draining = false
+                return nil
+            }
+            swap(&packets, &self.packets)
+            return writer
+        }
     }
     let outputBuffer = Mutex(OutputBufferState())
     
@@ -194,9 +203,13 @@ actor TunnelStack {
         outputBuffer.withLock { buffer in
             buffer.generation = dataPlaneGeneration.load(ordering: .acquiring)
             buffer.packets.removeAll(keepingCapacity: true)
-            buffer.protocols.removeAll(keepingCapacity: true)
-            buffer.drainInFlight = false
         }
+    }
+
+    func attachPacketFlow(_ packetFlow: NEPacketTunnelFlow?) {
+        self.packetFlow = packetFlow
+        let writer = packetFlow.map(PacketFlowWriter.init)
+        outputBuffer.withLock { $0.writer = writer }
     }
 
     var settings = TunnelSettings()
@@ -276,11 +289,7 @@ actor TunnelStack {
     nonisolated let tcpIdleSweepPoke = AsyncInbox<Void>(capacity: 1)
     nonisolated let tcpIdleSweepArmed = Atomic<TimeInterval>(.infinity)
 
-    struct DatagramIntake {
-        var plane: UDPPlane?
-        var pending: [InboundDatagram] = []
-    }
-    nonisolated let datagramIntake = Mutex(DatagramIntake())
+    nonisolated let datagramIntake = Mutex<AsyncInbox<[InboundDatagram]>?>(nil)
 
     nonisolated let trafficLedger = TrafficLedger()
     nonisolated func openTrafficMeter(target: RouteTarget) -> TrafficMeter {
@@ -449,19 +458,12 @@ actor TunnelStack {
         self.fakeIPPool = fakeIPPool
         self.domainRouter = domainRouter
         self.connectionRouter = ConnectionRouter(fakeIPPool: fakeIPPool, domainRouter: domainRouter)
-        let (stream, continuation) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
-        self.outputKick = stream
-        self.outputKickContinuation = Mutex(continuation)
         let (commandStream, commandContinuation) = AsyncStream.makeStream(of: UDPPlaneCommand.self)
         self.planeCommands = commandStream
         self.planeCommandContinuation = commandContinuation
         (self.nurseryJobs, self.nurseryJobContinuation) = AsyncStream.makeStream(of: NurseryJob.self)
         let (reapplyStream, reapplyContinuation) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
         self.reapplySettingsState = Mutex((stream: reapplyStream, continuation: reapplyContinuation))
-    }
-
-    nonisolated func kickOutputDrain() {
-        _ = outputKickContinuation.withLock { $0.yield(()) }
     }
 
     func submitPlaneCommand(_ command: UDPPlaneCommand) {
@@ -477,15 +479,6 @@ actor TunnelStack {
         (planeCommands, planeCommandContinuation) = AsyncStream.makeStream(of: UDPPlaneCommand.self)
         nurseryJobContinuation.finish()
         (nurseryJobs, nurseryJobContinuation) = AsyncStream.makeStream(of: NurseryJob.self)
-
-        let (kickStream, kickContinuation) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
-        outputKick = kickStream
-        let staleKick: AsyncStream<Void>.Continuation = outputKickContinuation.withLock { current in
-            let stale = current
-            current = kickContinuation
-            return stale
-        }
-        staleKick.finish()
 
         let (reapplyStream, reapplyContinuation) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
         let staleReapply: AsyncStream<Void>.Continuation = reapplySettingsState.withLock { current in
