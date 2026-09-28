@@ -148,6 +148,9 @@ private struct MainControlLayout: Layout {
 // MARK: - Power Button
 
 private struct PowerButton: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(AppSettings.self) private var settings
+    
     private static let circleDiameter: CGFloat = 140
 
     let isConnected: Bool
@@ -178,9 +181,8 @@ private struct PowerButton: View {
                         .glassEffect(.clear, in: .circle)
                 } else {
                     Circle()
-                        .fill(.white.opacity(0.2))
+                        .fill(background)
                         .frame(width: Self.circleDiameter, height: Self.circleDiameter)
-                        .shadow(color: isConnected ? .cyan.opacity(0.4) : .black.opacity(0.08), radius: isConnected ? 24 : 8)
                 }
                 ZStack {
                     Image(systemName: "power")
@@ -200,6 +202,13 @@ private struct PowerButton: View {
         .buttonStyle(.plain)
         .disabled(isDisabled)
         .animation(animatesChanges ? Animation.easeInOut(duration: 0.6) : nil, value: isConnected)
+    }
+    
+    private var background: Color {
+        let data = colorScheme == .light
+            ? settings.statCardBackgroundLightData
+            : settings.statCardBackgroundDarkData
+        return data.flatMap(Color.init(archivedData:)) ?? .statCardBackground
     }
 }
 
@@ -281,6 +290,9 @@ private struct ConfigurationCapsule: View {
 }
 
 private struct ProminentCapsule<Content: View>: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(AppSettings.self) private var settings
+    
     private let content: Content
 
     init(@ViewBuilder content: () -> Content) {
@@ -304,13 +316,23 @@ private struct ProminentCapsule<Content: View>: View {
                 .contentShape(Capsule())
                 .background(
                     Capsule()
-                        .fill(.white.opacity(0.2))
+                        .fill(background)
                 )
         }
+    }
+    
+    private var background: Color {
+        let data = colorScheme == .light
+            ? settings.statCardBackgroundLightData
+            : settings.statCardBackgroundDarkData
+        return data.flatMap(Color.init(archivedData:)) ?? .statCardBackground
     }
 }
 
 private struct ProminentCircle<Content: View>: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(AppSettings.self) private var settings
+    
     private let content: Content
 
     init(@ViewBuilder content: () -> Content) {
@@ -337,6 +359,13 @@ private struct ProminentCircle<Content: View>: View {
                         .fill(.white.opacity(0.2))
                 )
         }
+    }
+    
+    private var background: Color {
+        let data = colorScheme == .light
+            ? settings.statCardBackgroundLightData
+            : settings.statCardBackgroundDarkData
+        return data.flatMap(Color.init(archivedData:)) ?? .statCardBackground
     }
 }
 
