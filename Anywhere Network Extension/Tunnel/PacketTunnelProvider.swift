@@ -51,21 +51,6 @@ nonisolated class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Senda
     }
     private let providerState = Mutex(ProviderState())
 
-    private let lifecycleEventChain = Mutex<Task<Void, Never>?>(nil)
-
-    @discardableResult
-    private func enqueueLifecycleEvent(_ operation: @escaping @Sendable () async -> Void) -> Task<Void, Never> {
-        lifecycleEventChain.withLock { chain in
-            let previous = chain
-            let task = Task {
-                await previous?.value
-                await operation()
-            }
-            chain = task
-            return task
-        }
-    }
-
     // MARK: - Tunnel Lifecycle
 
     override func startTunnel(options: [String : NSObject]? = nil) async throws {
@@ -370,16 +355,11 @@ nonisolated class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Senda
 
     override func sleep() async {
         statsRecorder.noteSleep()
-        await enqueueLifecycleEvent { [tunnelStack] in
-            await tunnelStack.suspend()
-        }.value
+        await tunnelStack.sleep()
     }
 
     override func wake() {
         statsRecorder.noteWake()
-        enqueueLifecycleEvent { [tunnelStack] in
-            await tunnelStack.wake()
-        }
     }
 
     // MARK: - Provider task tree

@@ -275,7 +275,6 @@ actor TunnelStack {
     var deferredRestartGeneration = 0
     var deferredRestartScheduled = false
     var pendingConfigurationSwitch: ProxyConfiguration?
-    var pendingSuspend = false
     var stopWaiters: [CheckedContinuation<Void, Never>] = []
 
     var ipStackTick: Task<Void, Never>?

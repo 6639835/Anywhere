@@ -21,7 +21,6 @@ extension TunnelStack {
         let epoch = claimStartEpoch()
         TransportReclaim.unsealAll()
         pendingConfigurationSwitch = nil
-        pendingSuspend = false
         makeFreshDutyCycleStreams()
         purgeOutputBuffer()
         AnywhereLogger.installLogSink { [weak self] message, level in
@@ -65,10 +64,6 @@ extension TunnelStack {
         if let pending = pendingConfigurationSwitch {
             pendingConfigurationSwitch = nil
             switchConfiguration(pending)
-        }
-        if pendingSuspend {
-            pendingSuspend = false
-            suspend()
         }
         return true
     }
@@ -132,7 +127,7 @@ extension TunnelStack {
         case .stopping:
             await withCheckedContinuation { stopWaiters.append($0) }
             return
-        case .starting, .running, .suspended:
+        case .starting, .running:
             break
         }
         transition(to: .stopping)
@@ -152,7 +147,7 @@ extension TunnelStack {
             pendingConfigurationSwitch = newConfiguration
             return
         }
-        guard phase.isActive else {
+        guard phase == .running else {
             logger.warning("[VPN] Configuration switch ignored: phase is \(phase)")
             return
         }
@@ -160,30 +155,11 @@ extension TunnelStack {
         restartStack(configuration: newConfiguration)
     }
 
-    // MARK: - Sleep / Wake
-    
-    func suspend() {
-        switch phase {
-        case .running:
-            logger.info("[VPN] Device sleep")
-            transition(to: .suspended)
-            tearDownDataPlane(tcp: .abortive)
-            flushOutputBuffer()
-        case .starting:
-            logger.info("[VPN] Device sleep during start")
-            pendingSuspend = true
-        case .suspended, .idle, .stopping, .stopped:
-            return
-        }
-    }
-    
-    func wake() {
-        pendingSuspend = false
-        guard phase == .suspended, let configuration else { return }
-        logger.info("[VPN] Device wake")
-        transition(to: .running)
+    func sleep() {
+        guard phase == .running, let configuration else { return }
+        logger.info("[VPN] Device sleep")
+        tearDownDataPlane(tcp: .silent)
         bringUpDataPlane(configuration: configuration)
-        udpCleanupResume.yield(())
     }
 
     func updateNetworkContext(_ context: NetworkContext) {
@@ -191,7 +167,7 @@ extension TunnelStack {
         networkContext = context
         publishIPv6Enabled()
         
-        guard phase.isActive, let configuration else { return }
+        guard phase == .running, let configuration else { return }
         let newEffective = computeEffectiveProxyMode()
         guard newEffective != proxyMode else { return }
         restartStack(configuration: configuration, revalidateMode: true)
@@ -201,7 +177,7 @@ extension TunnelStack {
 
     private enum TCPTeardown {
         case graceful
-        case abortive
+        case silent
     }
     
     private func bringUpDataPlane(configuration: ProxyConfiguration) {
@@ -226,14 +202,17 @@ extension TunnelStack {
         ipStackTick?.cancel()
         ipStackTick = nil
 
-        purgeOutputBuffer()
-
         ipStackAbortContext.store(.teardown, ordering: .relaxed)
         switch tcp {
-        case .graceful: closeAllActiveTCP()
-        case .abortive: abortAllActiveTCP()
+        case .graceful:
+            purgeOutputBuffer()
+            closeAllActiveTCP()
+            dataPlaneGeneration.wrappingAdd(1, ordering: .acquiringAndReleasing)
+        case .silent:
+            dataPlaneGeneration.wrappingAdd(1, ordering: .acquiringAndReleasing)
+            purgeOutputBuffer()
+            discardAllActiveTCP()
         }
-        dataPlaneGeneration.wrappingAdd(1, ordering: .acquiringAndReleasing)
 
         reclaimAllOutboundPools()
         submitPlaneCommand(.reclaim)
@@ -249,8 +228,8 @@ extension TunnelStack {
         for connection in ipStack?.connections() ?? [] { connection.close() }
     }
 
-    private func abortAllActiveTCP() {
-        ipStack?.abortAllConnections()
+    private func discardAllActiveTCP() {
+        for connection in ipStack?.connections() ?? [] { connection.discard() }
     }
 
     private func reclaimAllOutboundPools() {
@@ -290,13 +269,13 @@ extension TunnelStack {
         try? await Task.sleep(for: .seconds(delay))
         guard generation == deferredRestartGeneration else { return }
         deferredRestartScheduled = false
-        guard !Task.isCancelled, phase.isActive else { return }
+        guard !Task.isCancelled, phase == .running else { return }
         if revalidateMode, computeEffectiveProxyMode() == proxyMode { return }
         restartStackNow(configuration: configuration)
     }
 
     private func restartStackNow(configuration: ProxyConfiguration) {
-        guard phase.isActive else {
+        guard phase == .running else {
             logger.warning("[TunnelStack] Restart ignored: phase is \(phase)")
             return
         }
@@ -310,10 +289,6 @@ extension TunnelStack {
 
         self.configuration = configuration
         configureRuntime(for: configuration)
-        guard phase == .running else {
-            logger.debug("[TunnelStack] Reconfigured while suspended; data plane returns on wake")
-            return
-        }
         bringUpDataPlane(configuration: configuration)
         logger.debug("[TunnelStack] Restarted")
     }
@@ -339,7 +314,7 @@ extension TunnelStack {
     }
 
     private func handleSettingsChanged() {
-        guard phase.isActive, let configuration else { return }
+        guard phase == .running, let configuration else { return }
 
         let old = settings
         let new = TunnelSettings.load()
@@ -378,17 +353,17 @@ extension TunnelStack {
     }
 
     private func handleRoutingChanged() async {
-        guard phase.isActive else { return }
+        guard phase == .running else { return }
         guard proxyMode == .rule else { return }
         logger.info("[VPN] Routing changed")
         let compiled = await domainRouter.compileRoutingConfiguration()
-        guard phase.isActive, proxyMode == .rule else { return }
+        guard phase == .running, proxyMode == .rule else { return }
         domainRouter.install(compiled)
         connectionRouter.clearRejectMarks()
     }
 
     private func handleMITMChanged() {
-        guard phase.isActive else { return }
+        guard phase == .running else { return }
         logger.info("[VPN] MITM settings changed")
         loadMITMSetting()
         publishUDPConfig()

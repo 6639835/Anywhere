@@ -11,7 +11,6 @@ nonisolated enum TunnelPhase: UInt8, AtomicRepresentable, CustomStringConvertibl
     case idle
     case starting
     case running
-    case suspended
     case stopping
     case stopped
 
@@ -20,11 +19,8 @@ nonisolated enum TunnelPhase: UInt8, AtomicRepresentable, CustomStringConvertibl
         case (.idle, .starting),
              (.stopped, .starting),
              (.starting, .running),
-             (.running, .suspended),
-             (.suspended, .running),
              (.starting, .stopping),
              (.running, .stopping),
-             (.suspended, .stopping),
              (.stopping, .stopped):
             return true
         default:
@@ -32,14 +28,11 @@ nonisolated enum TunnelPhase: UInt8, AtomicRepresentable, CustomStringConvertibl
         }
     }
 
-    var isActive: Bool { self == .running || self == .suspended }
-
     var description: String {
         switch self {
         case .idle: "idle"
         case .starting: "starting"
         case .running: "running"
-        case .suspended: "suspended"
         case .stopping: "stopping"
         case .stopped: "stopped"
         }
