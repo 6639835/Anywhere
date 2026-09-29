@@ -42,17 +42,17 @@ Most iOS proxy clients wrap sing-box or Xray-core in a Go/C++ bridge. Anywhere t
 
 ### Protocols
 
-| Protocol | Runs over | Highlights |
-| --- | --- | --- |
-| **Nowhere** | TCP · UDP | Independent upload and download carriers over TLS or QUIC, paired per flow · Morph masking applied beneath TLS · credit-scheduled multiplexing over TLS · early data on flow open · UDP over QUIC DATAGRAM |
-| **VLESS** | TCP · UDP | Post-quantum `mlkem768x25519plus` encryption with 0-RTT · XTLS-RPRX-Vision · Reality with browser fingerprints · WebSocket, HTTPUpgrade, gRPC, and XHTTP transports · XHTTP over HTTP/1.1, HTTP/2, and HTTP/3 with upload/download detach and XMUX pooling · XUDP |
-| **Hysteria2** | UDP | Brutal congestion control with server-negotiated bandwidth, or BBR · Salamander and Gecko obfuscation, the latter splitting handshake packets · UDP over QUIC DATAGRAM with fragmentation |
-| **Sudoku** | TCP | Payload encoded as Sudoku-grid hints with per-direction ASCII or entropy layouts and randomly selected custom tables · KIP X25519 handshake with session rekeying · HTTP masquerade in legacy, stream, poll, and WebSocket modes · pure-downlink mode · native multiplexing |
-| **Trojan** | TCP | Authentication header carried in the first payload without an additional round trip · UDP relayed over the same TLS stream |
-| **AnyTLS** | TCP | Server-driven padding scheme with ranges, checkpoints, and runtime updates · warm pool of idle TLS sessions shared across connections · heartbeat keepalive · UDP-over-TCP |
-| **Shadowsocks** | TCP · UDP | Shadowsocks 2022 with BLAKE3 key derivation, replay protection, and multi-user identity headers, alongside classic AEAD ciphers · native UDP with shared multi-flow sessions |
-| **SOCKS5** | TCP · UDP | Full UDP ASSOCIATE with a native datagram relay that follows the proxy chain · username / password authentication |
-| **RFC** | TCP | `CONNECT` over HTTP/1.1 or HTTP/2, selected by ALPN · HTTP/2 multiplexes tunnels on a single TLS session with flow control and pooling · Basic authentication · plaintext or TLS |
+| Protocol | Highlights |
+| --- | --- |
+| **[Nowhere](https://github.com/NodePassProject/Nowhere)** | Independent upload and download carriers over TLS or QUIC · Morph masking · credit-scheduled multiplexing over TLS · early data on flow open · UDP over QUIC DATAGRAM |
+| **VLESS** | VLESS Encryption · XTLS-RPRX-Vision · Reality with browser fingerprints · WebSocket, HTTPUpgrade, gRPC, and XHTTP transports · XHTTP over HTTP/1.1, HTTP/2, and HTTP/3 with upload/download detach and XMUX · XUDP |
+| **Hysteria2** | Brutal congestion control · Salamander and Gecko obfuscation · UDP over QUIC DATAGRAM |
+| **Sudoku** | Payload encoded as Sudoku-grid hints with per-direction ASCII or entropy layouts and randomly selected custom tables · KIP X25519 handshake with session rekeying · HTTP masquerade in legacy, stream, poll, and WebSocket modes · pure-downlink mode · native multiplexing |
+| **Trojan** | Kept for subscription compatibility |
+| **AnyTLS** | Kept for subscription compatibility|
+| **Shadowsocks** | Shadowsocks · Shadowsocks 2022 |
+| **SOCKS5** | Standard SOCKS5 Proxy · UDP ASSOCIATE |
+| **RFC** | Standard `CONNECT` Proxy · HTTP/1.1 or HTTP/2 |
 
 ### Architecture
 
